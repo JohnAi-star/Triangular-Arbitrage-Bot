@@ -34,7 +34,7 @@ class Config:
     ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'true').lower() == 'true'
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
-    PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'true').lower() == 'true'
+    PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'false').lower() == 'true'
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'true'
     
     # WebSocket Configuration

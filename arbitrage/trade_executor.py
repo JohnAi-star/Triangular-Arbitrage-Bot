@@ -32,14 +32,19 @@ class TradeExecutor:
         print(f"Estimated Fees: {opportunity.estimated_fees:.6f} {opportunity.base_currency}")
         print(f"Estimated Slippage: {opportunity.estimated_slippage:.6f} {opportunity.base_currency}")
         print(f"Net Profit: {opportunity.net_profit:.6f} {opportunity.base_currency}")
-        print(f"Trading Mode: {'Paper' if self.paper_trading else 'Live'}")
+        print(f"Trading Mode: {'🟡 PAPER TRADING (SIMULATION)' if self.paper_trading else '🔴 LIVE TRADING (REAL MONEY)'}")
         print("\nTrade Steps:")
         for i, step in enumerate(opportunity.steps, 1):
             print(f"  {i}. {step.side.upper()} {step.quantity:.6f} {step.symbol} at {step.price:.8f}")
         print("="*80)
         
+        if not self.paper_trading:
+            print("⚠️  WARNING: This will execute REAL trades with REAL money!")
+            print("⚠️  Make sure you understand the risks before proceeding!")
+        
         while True:
-            response = input("Execute this trade? (y/n/q): ").lower().strip()
+            prompt = "Execute this trade? (y/n/q): " if self.paper_trading else "Execute REAL trade with REAL money? (y/n/q): "
+            response = input(prompt).lower().strip()
             if response == 'y':
                 return True
             elif response == 'n':

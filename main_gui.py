@@ -78,6 +78,22 @@ def main():
         app.run()
         return 0
         
+        if not self.paper_trading_var.get():
+            # Switching to live trading
+            result = messagebox.askyesno(
+                "⚠️ LIVE TRADING WARNING",
+                "You are about to enable LIVE TRADING mode!\n\n"
+                "This will execute REAL trades with REAL money on the exchanges.\n"
+                "Make sure you:\n"
+                "• Have tested thoroughly in paper trading mode\n"
+                "• Understand the risks involved\n"
+                "• Have set appropriate trade limits\n\n"
+                "Are you sure you want to enable live trading?"
+            )
+            if not result:
+                self.paper_trading_var.set(True)
+                return
+        
     except KeyboardInterrupt:
         print("\nApplication interrupted by user")
         return 0

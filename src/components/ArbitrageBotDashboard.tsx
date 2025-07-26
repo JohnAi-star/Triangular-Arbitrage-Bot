@@ -209,8 +209,20 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     onChange={(e) => setPaperTrading(e.target.checked)}
                                     className="rounded border-gray-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
                                 />
-                                Paper Trading
+                                Paper Trading (Simulation)
                             </label>
+
+                            {!paperTrading && (
+                                <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 mt-2">
+                                    <div className="flex items-center gap-2 text-red-400 text-sm font-medium">
+                                        <AlertTriangle className="w-4 h-4" />
+                                        LIVE TRADING MODE
+                                    </div>
+                                    <div className="text-red-300 text-xs mt-1">
+                                        Real trades will be executed with real money!
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
 

@@ -144,6 +144,8 @@ class UnifiedExchange(BaseExchange):
             ticker = await self.get_ticker(symbol)
             price = ticker.get('ask' if side == 'buy' else 'bid', 0)
             
+            self.logger.info(f"PAPER TRADE: {side} {quantity} {symbol} at {price} (simulated)")
+            
             return {
                 'id': f"paper_{self.exchange_id}_{symbol}_{side}_{quantity}",
                 'symbol': symbol,
@@ -157,8 +159,9 @@ class UnifiedExchange(BaseExchange):
             }
         
         try:
+            self.logger.info(f"LIVE TRADE: Placing {side} order for {quantity} {symbol}")
             order = await self.exchange.create_market_order(symbol, side, quantity)
-            self.logger.info(f"Market order placed on {self.exchange_id}: {side} {quantity} {symbol}")
+            self.logger.info(f"LIVE TRADE EXECUTED: {order}")
             return order
         except Exception as e:
             self.logger.error(f"Error placing market order on {self.exchange_id}: {e}")
