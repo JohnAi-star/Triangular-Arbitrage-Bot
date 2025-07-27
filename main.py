@@ -25,9 +25,12 @@ class TriangularArbitrageBot:
         try:
             # Validate configuration
             if not Config.validate():
-                self.logger.error("Invalid configuration. Please check your environment variables.")
+                self.logger.error("❌ CRITICAL: Invalid configuration!")
+                self.logger.error("The bot requires REAL API credentials to fetch market data.")
+                self.logger.error("Please configure your .env file with valid exchange credentials.")
                 return False
             
+            self.logger.info("✅ Configuration validated - real exchange credentials found")
             self.logger.info("Initializing Triangular Arbitrage Bot...")
             self.logger.info(f"Configuration: {Config.to_dict()}")
             

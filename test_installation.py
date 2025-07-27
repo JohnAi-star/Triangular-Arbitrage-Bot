@@ -73,8 +73,10 @@ async def test_exchange_connection():
         from config.config import Config
         
         if not Config.BINANCE_API_KEY or not Config.BINANCE_API_SECRET:
-            print("⚠️  Skipping connection test - no API credentials")
-            return True, "Skipped (no credentials)"
+            print("❌ CRITICAL: No API credentials found!")
+            print("   The bot requires real API credentials to function.")
+            print("   Please set BINANCE_API_KEY and BINANCE_API_SECRET in .env")
+            return False, "No API credentials - bot cannot function"
         
         exchange_config = {
             'api_key': Config.BINANCE_API_KEY,
@@ -92,11 +94,19 @@ async def test_exchange_connection():
             pairs = await exchange.get_trading_pairs()
             print(f"✅ Retrieved {len(pairs)} trading pairs")
             
+            # Test real ticker data
+            ticker = await exchange.get_ticker('BTC/USDT')
+            if ticker and ticker.get('bid') and ticker.get('ask'):
+                print(f"✅ Real market data verified: BTC/USDT = ${ticker['last']}")
+            else:
+                print("❌ Could not verify real market data")
+                return False, "No real market data available"
+            
             balance = await exchange.get_account_balance()
             if balance:
                 print(f"✅ Account balance retrieved ({len(balance)} currencies)")
             else:
-                print("⚠️  No account balance (empty account or API restrictions)")
+                print("⚠️  Empty account balance (this is normal for new accounts)")
             
             await exchange.disconnect()
             return True, "Exchange connection successful"

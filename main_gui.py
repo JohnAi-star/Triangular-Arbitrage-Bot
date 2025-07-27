@@ -16,6 +16,13 @@ from config.config import Config
 from gui.main_window import ArbitrageBotGUI
 from utils.logger import setup_logger
 
+# Import and start web server for React frontend
+try:
+    from api.web_server import start_web_server_background
+    WEB_SERVER_AVAILABLE = True
+except ImportError:
+    WEB_SERVER_AVAILABLE = False
+
 def check_dependencies():
     """Check if all required dependencies are installed."""
     try:
@@ -36,13 +43,18 @@ def check_dependencies():
 
 def check_configuration():
     """Check if configuration is valid."""
-    if not Config.validate() and not Config.PAPER_TRADING:
+    if not Config.validate():
         messagebox.showwarning(
-            "Configuration Warning",
-            "No exchange credentials configured.\n\n"
-            "The bot will run in paper trading mode only.\n"
-            "To enable live trading, configure your API credentials in the .env file."
+            "Configuration Error",
+            "❌ CRITICAL: No valid exchange credentials found!\n\n"
+            "The bot requires REAL API credentials to fetch market data,\n"
+            "even in paper trading mode.\n\n"
+            "Please configure your API credentials in the .env file:\n"
+            "- BINANCE_API_KEY=your_api_key\n"
+            "- BINANCE_API_SECRET=your_api_secret\n\n"
+            "The bot cannot run without real exchange connections."
         )
+        return False
     return True
 
 def main():
@@ -75,6 +87,18 @@ def main():
     try:
         # Create and run GUI application
         app = ArbitrageBotGUI()
+        
+        # Start web server for React frontend integration
+        if WEB_SERVER_AVAILABLE:
+            try:
+                start_web_server_background()
+                print("✅ Web server started for React frontend integration")
+                print("🌐 React frontend can connect at: http://localhost:5173")
+                print("📡 API server running at: http://localhost:8000")
+            except Exception as e:
+                print(f"⚠️  Web server failed to start: {e}")
+                print("   React frontend integration will not be available")
+        
         app.run()
         return 0
         

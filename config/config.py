@@ -53,16 +53,27 @@ class Config:
     @classmethod
     def validate(cls) -> bool:
         """Validate configuration parameters."""
-        # Check if at least one exchange has valid credentials
+        # ALWAYS require at least one exchange with valid credentials
         has_valid_exchange = any(
             cred['enabled'] for cred in cls.EXCHANGE_CREDENTIALS.values()
         )
-        if not has_valid_exchange and not cls.PAPER_TRADING:
+        
+        # Even in paper trading, we need credentials to fetch real market data
+        if not has_valid_exchange:
+            print("❌ ERROR: No valid exchange credentials found!")
+            print("   The bot requires real API credentials to fetch market data.")
+            print("   Even in paper trading mode, real market data is needed.")
+            print("   Please configure your API credentials in the .env file.")
             return False
+            
         if cls.MIN_PROFIT_PERCENTAGE <= 0:
+            print("❌ ERROR: MIN_PROFIT_PERCENTAGE must be greater than 0")
             return False
+            
         if cls.MAX_TRADE_AMOUNT <= 0:
+            print("❌ ERROR: MAX_TRADE_AMOUNT must be greater than 0")
             return False
+            
         return True
     
     @classmethod

@@ -20,6 +20,9 @@ from arbitrage.trade_executor import TradeExecutor
 from models.arbitrage_opportunity import ArbitrageOpportunity
 from utils.logger import setup_logger
 
+# Start the web server automatically when imported
+import threading
+import time
 # Pydantic models for API
 class BotConfig(BaseModel):
     minProfitPercentage: float
@@ -76,6 +79,11 @@ class ArbitrageWebServer:
     
     def setup_routes(self):
         """Setup API routes."""
+        
+        @self.app.get("/api/health")
+        async def health_check():
+            """Health check endpoint."""
+            return {"status": "healthy", "timestamp": datetime.now().isoformat()}
         
         @self.app.post("/api/bot/start")
         async def start_bot(config: BotConfig):
@@ -256,7 +264,32 @@ class ArbitrageWebServer:
     def run(self, host: str = "localhost", port: int = 8000):
         """Run the web server."""
         self.logger.info(f"Starting web server on {host}:{port}")
-        uvicorn.run(self.app, host=host, port=port)
+        uvicorn.run(self.app, host=host, port=port, log_level="info")
+
+# Global server instance
+_server_instance = None
+_server_thread = None
+
+def start_web_server_background():
+    """Start the web server in a background thread."""
+    global _server_instance, _server_thread
+    
+    if _server_instance is None:
+        _server_instance = ArbitrageWebServer()
+        
+        def run_server():
+            try:
+                _server_instance.run(host="0.0.0.0", port=8000)
+            except Exception as e:
+                print(f"Web server error: {e}")
+        
+        _server_thread = threading.Thread(target=run_server, daemon=True)
+        _server_thread.start()
+        
+        # Give server time to start
+        time.sleep(2)
+        print("🌐 Web server started on http://localhost:8000")
+        print("🔗 Frontend can now connect to backend API")
 
 def main():
     """Main entry point for the web server."""
