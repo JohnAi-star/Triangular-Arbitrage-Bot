@@ -2,6 +2,23 @@
 Multi-exchange manager and triangle detector for arbitrage opportunities.
 """
 
+# --- Prevent fatal 'HEAD' Git errors ---
+import subprocess, os
+GIT_COMMIT = "unknown"
+
+try:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    commit = subprocess.check_output(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        stderr=subprocess.DEVNULL
+    ).decode().strip()
+    GIT_COMMIT = commit[:7]
+except Exception:
+    GIT_COMMIT = "unknown"
+
+print(f"Multi-Exchange Manager (Commit: {GIT_COMMIT})")
+# -----------------------------------------------
+
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple
 from exchanges.base_exchange import BaseExchange

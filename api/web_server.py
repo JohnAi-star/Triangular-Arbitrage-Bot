@@ -234,36 +234,63 @@ class ArbitrageWebServer:
                     # Convert opportunities to dict format
                     opportunity_dicts = []
                     for opp in opportunities:
-                        opp_dict = {
-                            'id': f"opp_{int(datetime.now().timestamp() * 1000)}",
-                            'exchange': getattr(opp, 'exchange', 'Unknown'),
-                            'trianglePath': opp.triangle_path,
-                            'profitPercentage': opp.profit_percentage,
-                            'profitAmount': opp.profit_amount,
-                            'volume': opp.initial_amount,
-                            'status': 'detected',
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        opportunity_dicts.append(opp_dict)
+                        # Validate opportunity data before sending to frontend
+                        try:
+                            profit_percentage = float(opp.profit_percentage)
+                            profit_amount = float(opp.profit_amount)
+                            volume = float(opp.initial_amount)
+                            
+                            # Skip opportunities with invalid data (NaN, extreme values)
+                            if (not all(x == x for x in [profit_percentage, profit_amount, volume]) or  # NaN check
+                                abs(profit_percentage) > 100 or  # Extreme percentage check
+                                volume <= 0):  # Invalid volume check
+                                continue
+                            
+                            opp_dict = {
+                                'id': f"opp_{int(datetime.now().timestamp() * 1000)}_{len(opportunity_dicts)}",
+                                'exchange': getattr(opp, 'exchange', 'Unknown'),
+                                'trianglePath': opp.triangle_path,
+                                'profitPercentage': profit_percentage,
+                                'profitAmount': profit_amount,
+                                'volume': volume,
+                                'status': 'detected',
+                                'timestamp': datetime.now().isoformat()
+                            }
+                            opportunity_dicts.append(opp_dict)
+                            
+                        except (ValueError, TypeError, AttributeError) as e:
+                            # Skip invalid opportunities but log the error
+                            self.logger.warning(f"Skipping invalid opportunity: {e}")
+                            continue
                     
-                    # Update opportunities list
-                    self.opportunities = opportunity_dicts[:50]  # Keep latest 50
+                    # Update opportunities list (keep up to 200)
+                    self.opportunities = opportunity_dicts[:200]
                     self.stats['opportunitiesFound'] += len(opportunities)
                     
                     self.logger.info(f"Broadcasting {len(opportunity_dicts)} opportunities to {len(self.websocket_connections)} clients")
                     
-                    # Broadcast to WebSocket clients
+                    # Always broadcast to WebSocket clients (even if empty)
                     await self._broadcast_update({
                         'type': 'opportunities_update',
                         'data': opportunity_dicts
                     })
                 else:
                     self.logger.warning("Detector not initialized")
+                    # Still broadcast empty array to keep WebSocket alive
+                    await self._broadcast_update({
+                        'type': 'opportunities_update',
+                        'data': []
+                    })
                 
                 await asyncio.sleep(2)  # Scan every 2 seconds
                 
             except Exception as e:
                 self.logger.error(f"Error in scanning loop: {e}")
+                # Broadcast empty array on error to keep WebSocket alive
+                await self._broadcast_update({
+                    'type': 'opportunities_update',
+                    'data': []
+                })
                 await asyncio.sleep(5)
     
     async def _broadcast_update(self, message: Dict[str, Any]):

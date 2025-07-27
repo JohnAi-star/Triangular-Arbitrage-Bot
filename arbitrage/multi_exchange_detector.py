@@ -128,22 +128,15 @@ class MultiExchangeDetector:
         
         self.logger.info(f"Total opportunities found across all exchanges: {len(all_opportunities)}")
         
-        # Sort by profitability and filter
-        profitable_opportunities = [
-            opp for opp in all_opportunities 
-            if opp.is_profitable and opp.profit_percentage >= self.config.get('min_profit_percentage', 0.1)
-        ]
-        
-        self.logger.info(f"Profitable opportunities after filtering: {len(profitable_opportunities)}")
-        
-        # Sort by profit percentage (descending)
-        profitable_opportunities.sort(key=lambda x: x.profit_percentage, reverse=True)
+        # Sort by profit percentage (descending) but don't filter by profitability
+        all_opportunities.sort(key=lambda x: x.profit_percentage, reverse=True)
         
         # Apply zero-fee prioritization
         if self.config.get('prioritize_zero_fee', True):
-            profitable_opportunities = self._prioritize_zero_fee_opportunities(profitable_opportunities)
+            all_opportunities = self._prioritize_zero_fee_opportunities(all_opportunities)
         
-        final_opportunities = profitable_opportunities[:50]  # Limit to top 50 opportunities
+        # Cap at 200 opportunities to prevent frontend flooding
+        final_opportunities = all_opportunities[:200]
         self.logger.info(f"Returning {len(final_opportunities)} final opportunities")
         
         return final_opportunities
@@ -167,19 +160,26 @@ class MultiExchangeDetector:
                     exchange_id, base, intermediate, quote, initial_amount
                 )
                 
-                if opportunity and opportunity.is_profitable:
-                    # Check liquidity requirements
-                    if await self._check_liquidity(exchange_id, opportunity):
-                        opportunity.exchange = exchange_id
-                        opportunities.append(opportunity)
-                        self.logger.info(f"Found profitable opportunity: {opportunity.triangle_path} - {opportunity.profit_percentage:.4f}%")
+                if opportunity:
+                    opportunity.exchange = exchange_id
+                    opportunities.append(opportunity)
+                    
+                    # Detailed logging for each triangle
+                    self.logger.info(
+                        f"Triangle {base}-{intermediate}-{quote} on {exchange_id}: "
+                        f"Profit: {opportunity.profit_percentage:.4f}% "
+                        f"({opportunity.profit_amount:.6f} {base}), "
+                        f"Initial: {opportunity.initial_amount:.6f}, "
+                        f"Final: {opportunity.final_amount:.6f}, "
+                        f"Net: {opportunity.net_profit:.6f}"
+                    )
                         
             except Exception as e:
                 if i < 5:  # Only log first 5 errors to avoid spam
                     self.logger.error(f"Error calculating triangle {base}-{intermediate}-{quote} on {exchange_id}: {e}")
                 continue
         
-        self.logger.info(f"Found {len(opportunities)} profitable opportunities on {exchange_id}")
+        self.logger.info(f"Found {len(opportunities)} total opportunities on {exchange_id}")
         return opportunities
     
     async def _calculate_triangle_profit(
@@ -219,37 +219,69 @@ class MultiExchangeDetector:
             except Exception:
                 return None
         
+        # Guard against invalid prices - prevent division by zero and negative prices
+        try:
+            bid1 = float(price1.get('bid', 0))
+            bid2 = float(price2.get('bid', 0))
+            ask3 = float(price3.get('ask', 0))
+            
+            if bid1 <= 0 or bid2 <= 0 or ask3 <= 0:
+                return None
+        except (ValueError, TypeError):
+            return None
+        
+        # Convert initial amount to float for safety
+        try:
+            initial_amount = float(initial_amount)
+            if initial_amount <= 0:
+                return None
+        except (ValueError, TypeError):
+            return None
+        
         # Calculate the arbitrage path: BASE -> INTERMEDIATE -> QUOTE -> BASE
         
         # Step 1: Sell BASE for INTERMEDIATE
-        amount_after_step1 = initial_amount * price1['bid']
+        amount_after_step1 = initial_amount * bid1
         step1 = TradeStep(
             symbol=pair1,
             side='sell',
             quantity=initial_amount,
-            price=price1['bid'],
+            price=bid1,
             expected_amount=amount_after_step1
         )
         
         # Step 2: Sell INTERMEDIATE for QUOTE
-        amount_after_step2 = amount_after_step1 * price2['bid']
+        amount_after_step2 = amount_after_step1 * bid2
         step2 = TradeStep(
             symbol=pair2,
             side='sell',
             quantity=amount_after_step1,
-            price=price2['bid'],
+            price=bid2,
             expected_amount=amount_after_step2
         )
         
         # Step 3: Buy BASE with QUOTE
-        final_amount = amount_after_step2 / price3['ask']
+        final_amount = amount_after_step2 / ask3
+        
+        # Sanity clamp - prevent unrealistic final amounts
+        if final_amount <= 0 or final_amount > initial_amount * 10:  # 10x cap
+            return None
+        
         step3 = TradeStep(
             symbol=pair3,
             side='buy',
             quantity=amount_after_step2,
-            price=price3['ask'],
+            price=ask3,
             expected_amount=final_amount
         )
+        
+        # Calculate normalized profit with validation
+        profit_amount = final_amount - initial_amount
+        profit_percentage = (profit_amount / initial_amount) * 100
+        
+        # Discard unrealistic profit spikes
+        if abs(profit_percentage) > 100:  # discard unrealistic spikes
+            return None
         
         # Calculate fees
         exchange = self.exchange_manager.get_exchange(exchange_id)
@@ -284,6 +316,10 @@ class MultiExchangeDetector:
             estimated_fees=estimated_fees,
             estimated_slippage=estimated_slippage
         )
+        
+        # Set normalized profit values
+        opportunity.profit_amount = profit_amount
+        opportunity.profit_percentage = profit_percentage
         
         return opportunity
     
