@@ -70,8 +70,11 @@ export const ArbitrageBotDashboard: React.FC = () => {
     ]);
 
     useEffect(() => {
+        console.log('Setting up WebSocket connection...');
         backendAPI.connectWebSocket((data: any) => {
+            console.log('WebSocket message received:', data);
             if (data.type === 'opportunities_update') {
+                console.log('Updating opportunities:', data.data);
                 setOpportunities(data.data);
             } else if (data.type === 'opportunity_executed') {
                 const executed = data.data as ArbitrageOpportunity;

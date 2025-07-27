@@ -105,15 +105,18 @@ class BackendAPI {
 
   connectWebSocket(onMessage: (data: any) => void): void {
     try {
+      console.log('Connecting to WebSocket...');
       this.ws = new WebSocket(`ws://localhost:8000/ws`);
-      
+
       this.ws.onopen = () => {
         console.log('WebSocket connected');
       };
 
       this.ws.onmessage = (event) => {
         try {
+          console.log('Raw WebSocket message:', event.data);
           const data = JSON.parse(event.data);
+          console.log('Parsed WebSocket data:', data);
           onMessage(data);
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);

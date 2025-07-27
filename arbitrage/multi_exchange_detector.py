@@ -114,20 +114,27 @@ class MultiExchangeDetector:
     
     async def scan_all_opportunities(self) -> List[ArbitrageOpportunity]:
         """Scan for triangular arbitrage opportunities across all exchanges."""
+        self.logger.info("Starting scan for all opportunities...")
         all_opportunities = []
         
         for exchange_id in self.exchange_manager.get_connected_exchanges():
             try:
+                self.logger.info(f"Scanning opportunities for {exchange_id}")
                 opportunities = await self.scan_exchange_opportunities(exchange_id)
+                self.logger.info(f"Found {len(opportunities)} opportunities on {exchange_id}")
                 all_opportunities.extend(opportunities)
             except Exception as e:
                 self.logger.error(f"Error scanning {exchange_id}: {e}")
+        
+        self.logger.info(f"Total opportunities found across all exchanges: {len(all_opportunities)}")
         
         # Sort by profitability and filter
         profitable_opportunities = [
             opp for opp in all_opportunities 
             if opp.is_profitable and opp.profit_percentage >= self.config.get('min_profit_percentage', 0.1)
         ]
+        
+        self.logger.info(f"Profitable opportunities after filtering: {len(profitable_opportunities)}")
         
         # Sort by profit percentage (descending)
         profitable_opportunities.sort(key=lambda x: x.profit_percentage, reverse=True)
@@ -136,7 +143,10 @@ class MultiExchangeDetector:
         if self.config.get('prioritize_zero_fee', True):
             profitable_opportunities = self._prioritize_zero_fee_opportunities(profitable_opportunities)
         
-        return profitable_opportunities[:50]  # Limit to top 50 opportunities
+        final_opportunities = profitable_opportunities[:50]  # Limit to top 50 opportunities
+        self.logger.info(f"Returning {len(final_opportunities)} final opportunities")
+        
+        return final_opportunities
     
     async def scan_exchange_opportunities(self, exchange_id: str) -> List[ArbitrageOpportunity]:
         """Scan for opportunities on a specific exchange."""
@@ -144,11 +154,14 @@ class MultiExchangeDetector:
         exchange = self.exchange_manager.get_exchange(exchange_id)
         
         if not exchange or exchange_id not in self.triangles:
+            self.logger.warning(f"Exchange {exchange_id} not available or no triangles found")
             return opportunities
         
         initial_amount = self.config.get('max_trade_amount', 100)
+        triangles_to_check = self.triangles[exchange_id][:100]  # Limit triangles
+        self.logger.info(f"Checking {len(triangles_to_check)} triangles for {exchange_id}")
         
-        for base, intermediate, quote in self.triangles[exchange_id][:100]:  # Limit triangles
+        for i, (base, intermediate, quote) in enumerate(triangles_to_check):
             try:
                 opportunity = await self._calculate_triangle_profit(
                     exchange_id, base, intermediate, quote, initial_amount
@@ -159,11 +172,14 @@ class MultiExchangeDetector:
                     if await self._check_liquidity(exchange_id, opportunity):
                         opportunity.exchange = exchange_id
                         opportunities.append(opportunity)
+                        self.logger.info(f"Found profitable opportunity: {opportunity.triangle_path} - {opportunity.profit_percentage:.4f}%")
                         
             except Exception as e:
-                self.logger.error(f"Error calculating triangle {base}-{intermediate}-{quote} on {exchange_id}: {e}")
+                if i < 5:  # Only log first 5 errors to avoid spam
+                    self.logger.error(f"Error calculating triangle {base}-{intermediate}-{quote} on {exchange_id}: {e}")
                 continue
         
+        self.logger.info(f"Found {len(opportunities)} profitable opportunities on {exchange_id}")
         return opportunities
     
     async def _calculate_triangle_profit(

@@ -4,6 +4,23 @@ FastAPI web server for the triangular arbitrage bot.
 Provides REST API and WebSocket endpoints for the web interface.
 """
 
+# --- Prevent fatal 'HEAD' Git errors ---
+import subprocess, os
+GIT_COMMIT = "unknown"
+
+try:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    commit = subprocess.check_output(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        stderr=subprocess.DEVNULL
+    ).decode().strip()
+    GIT_COMMIT = commit[:7]
+except Exception:
+    GIT_COMMIT = "unknown"
+
+print(f"Starting Web Server (Commit: {GIT_COMMIT})")
+# -----------------------------------------------
+
 import asyncio
 import json
 from typing import Dict, List, Any, Optional
@@ -206,10 +223,13 @@ class ArbitrageWebServer:
     
     async def _scanning_loop(self):
         """Main scanning loop for opportunities."""
+        self.logger.info("Starting opportunity scanning loop...")
         while self.running:
             try:
                 if self.detector:
+                    self.logger.info("Scanning for opportunities...")
                     opportunities = await self.detector.scan_all_opportunities()
+                    self.logger.info(f"Found {len(opportunities)} opportunities")
                     
                     # Convert opportunities to dict format
                     opportunity_dicts = []
@@ -230,12 +250,15 @@ class ArbitrageWebServer:
                     self.opportunities = opportunity_dicts[:50]  # Keep latest 50
                     self.stats['opportunitiesFound'] += len(opportunities)
                     
+                    self.logger.info(f"Broadcasting {len(opportunity_dicts)} opportunities to {len(self.websocket_connections)} clients")
+                    
                     # Broadcast to WebSocket clients
-                    if opportunity_dicts:
-                        await self._broadcast_update({
-                            'type': 'opportunities_update',
-                            'data': opportunity_dicts
-                        })
+                    await self._broadcast_update({
+                        'type': 'opportunities_update',
+                        'data': opportunity_dicts
+                    })
+                else:
+                    self.logger.warning("Detector not initialized")
                 
                 await asyncio.sleep(2)  # Scan every 2 seconds
                 
