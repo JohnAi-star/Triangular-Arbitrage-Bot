@@ -107,11 +107,34 @@ class MultiExchangeDetector:
         pairs = ex.trading_pairs
         self.logger.info(f"Scanning {len(triangles[:100])} triangles for {ex.name} with {len(ticker)} tickers")
 
+        # Debug: Show first few available tickers
+        ticker_symbols = list(ticker.keys())[:10]
+        self.logger.info(f"Sample ticker symbols: {ticker_symbols}")
+        
+        # Debug: Show first few trading pairs
+        pair_symbols = list(pairs.keys())[:10]
+        self.logger.info(f"Sample trading pairs: {pair_symbols}")
+        
+        triangles_checked = 0
+        triangles_with_valid_pairs = 0
+        triangles_with_valid_prices = 0
+        
         for path in triangles[:100]:
+            triangles_checked += 1
             a, b, c, _ = path
             p1, p2, p3 = f"{a}/{b}", f"{b}/{c}", f"{c}/{a}"
+            
+            # Debug first few triangles
+            if triangles_checked <= 3:
+                self.logger.info(f"Triangle {triangles_checked}: {a}-{b}-{c} -> pairs: {p1}, {p2}, {p3}")
+                self.logger.info(f"  Pair checks: {p1} in pairs: {p1 in pairs}, {p2} in pairs: {p2 in pairs}, {p3} in pairs: {p3 in pairs}")
+            
             if not (p1 in pairs and p2 in pairs and p3 in pairs):
+                if triangles_checked <= 3:
+                    self.logger.info(f"  Skipping triangle {triangles_checked}: missing pairs")
                 continue
+                
+            triangles_with_valid_pairs += 1
 
             try:
                 bid1, ask1 = self._get_prices(ticker, p1)
@@ -119,15 +142,19 @@ class MultiExchangeDetector:
                 bid3, ask3 = self._get_prices(ticker, p3)
                 
                 # Debug logging for first few triangles
-                if len(results) < 3:
-                    self.logger.info(f"Triangle {a}-{b}-{c}: prices {bid1}/{ask1}, {bid2}/{ask2}, {bid3}/{ask3}")
+                if triangles_checked <= 3:
+                    self.logger.info(f"  Triangle {triangles_checked} prices: {p1}={bid1}/{ask1}, {p2}={bid2}/{ask2}, {p3}={bid3}/{ask3}")
             except Exception:
+                if triangles_checked <= 3:
+                    self.logger.info(f"  Triangle {triangles_checked}: price fetch failed")
                 continue
 
             if any(x <= 0 for x in [bid1, ask1, bid2, ask2, bid3, ask3]):
-                if len(results) < 3:
-                    self.logger.info(f"Skipping triangle {a}-{b}-{c}: invalid prices")
+                if triangles_checked <= 3:
+                    self.logger.info(f"  Triangle {triangles_checked}: invalid prices (some <= 0)")
                 continue
+                
+            triangles_with_valid_prices += 1
 
             amount = self.max_trade_amount
             # Leg 1: A -> B
@@ -140,8 +167,8 @@ class MultiExchangeDetector:
             profit_pct = ((amount - self.max_trade_amount) / self.max_trade_amount) * 100
             
             # Debug logging for first few calculations
-            if len(results) < 3:
-                self.logger.info(f"Triangle {a}-{b}-{c}: final_amount={amount:.6f}, profit={profit_pct:.4f}%")
+            if triangles_checked <= 3:
+                self.logger.info(f"  Triangle {triangles_checked} calculation: initial={self.max_trade_amount}, final={amount:.6f}, profit={profit_pct:.4f}%")
             
             # Remove profit filtering - include ALL triangles
             # if profit_pct < self.min_profit_pct:
@@ -157,7 +184,11 @@ class MultiExchangeDetector:
                 )
             )
         
-        self.logger.info(f"Found {len(results)} total opportunities for {ex.name}")
+        self.logger.info(f"Triangle analysis for {ex.name}:")
+        self.logger.info(f"  - Triangles checked: {triangles_checked}")
+        self.logger.info(f"  - With valid pairs: {triangles_with_valid_pairs}")
+        self.logger.info(f"  - With valid prices: {triangles_with_valid_prices}")
+        self.logger.info(f"  - Final opportunities: {len(results)}")
 
         return results
 
@@ -171,19 +202,19 @@ class MultiExchangeDetector:
             self.logger.info(f"Successfully fetched {len(tickers)} tickers from {ex.name}")
             return tickers
         except Exception as e:
-            self.logger.error(f"Failed to fetch tickers from {ex.name}: {e}")
-            # Fallback to cached tickers if available
-            cached = self._last_tickers.get(ex.name)
-            if cached:
-                self.logger.info(f"Using cached tickers for {ex.name}")
-                return cached
-            else:
-                self.logger.warning(f"No cached tickers available for {ex.name}")
-                return {}
+            self.logger.error(f"Error fetching tickers from {ex.name}: {e}")
+            # Use cached tickers as fallback
+            if ex.name in self._last_tickers:
+                self.logger.info(f"Using cached tickers for {ex.name} ({len(self._last_tickers[ex.name])} tickers)")
+                return self._last_tickers[ex.name]
+            return {}
 
     def _get_prices(self, ticker, symbol):
+        """Extract bid/ask prices from ticker data."""
         t = ticker.get(symbol, {})
-        return float(t.get("bid") or 0), float(t.get("ask") or 0)
+        bid = float(t.get("bid") or 0)
+        ask = float(t.get("ask") or 0)
+        return bid, ask
 
 
 class ArbitrageResult:
