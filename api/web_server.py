@@ -7,7 +7,6 @@ Provides REST API and WebSocket endpoints for the web interface.
 # --- Prevent fatal 'HEAD' Git errors ---
 import subprocess, os
 GIT_COMMIT = "unknown"
-
 try:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     commit = subprocess.check_output(
@@ -17,30 +16,27 @@ try:
     GIT_COMMIT = commit[:7]
 except Exception:
     GIT_COMMIT = "unknown"
-
 print(f"Starting Web Server (Commit: {GIT_COMMIT})")
 # -----------------------------------------------
 
 import asyncio
 import json
-from typing import Dict, List, Any, Optional
+import threading
+import time
+from typing import Dict, List, Any
 from datetime import datetime
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-from config.config import Config
 from exchanges.multi_exchange_manager import MultiExchangeManager
 from arbitrage.multi_exchange_detector import MultiExchangeDetector
 from arbitrage.trade_executor import TradeExecutor
-from models.arbitrage_opportunity import ArbitrageOpportunity
 from utils.logger import setup_logger
 
-# Start the web server automatically when imported
-import threading
-import time
-# Pydantic models for API
+# ------------------ API Models ------------------ #
 class BotConfig(BaseModel):
     minProfitPercentage: float
     maxTradeAmount: float
@@ -55,29 +51,30 @@ class BotStats(BaseModel):
     successRate: float
     activeExchanges: int
 
+# ------------------ Web Server ------------------ #
 class ArbitrageWebServer:
     """Web server for the arbitrage bot."""
-    
+
     def __init__(self):
         self.logger = setup_logger('WebServer')
         self.app = FastAPI(title="Triangular Arbitrage Bot API")
-        
-        # Add CORS middleware
+
+        # Allow frontend origins (Vite/React)
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:5173", "http://localhost:3000"],
+            allow_origins=["*", "http://localhost:5173", "http://localhost:3000"],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        
-        # Bot components
+
+        # Core components
         self.exchange_manager = MultiExchangeManager()
-        self.detector = None
-        self.executor = None
+        self.detector: MultiExchangeDetector = None
+        self.executor: TradeExecutor = None
         self.running = False
-        
-        # Statistics
+
+        # Stats
         self.stats = {
             'opportunitiesFound': 0,
             'tradesExecuted': 0,
@@ -85,264 +82,181 @@ class ArbitrageWebServer:
             'successRate': 0.0,
             'activeExchanges': 0
         }
-        
-        # WebSocket connections
+
+        # Active WebSocket clients
         self.websocket_connections: List[WebSocket] = []
-        
-        # Current opportunities
+
+        # Cached opportunities (max 200)
         self.opportunities: List[Dict[str, Any]] = []
-        
-        self.setup_routes()
-    
-    def setup_routes(self):
-        """Setup API routes."""
-        
+
+        self._setup_routes()
+
+    # ------------------ Routes ------------------ #
+    def _setup_routes(self):
         @self.app.get("/api/health")
         async def health_check():
-            """Health check endpoint."""
-            return {"status": "healthy", "timestamp": datetime.now().isoformat()}
-        
+            return {"status": "healthy", "commit": GIT_COMMIT, "timestamp": datetime.now().isoformat()}
+
         @self.app.post("/api/bot/start")
         async def start_bot(config: BotConfig):
-            """Start the arbitrage bot."""
             try:
                 self.logger.info(f"Starting bot with config: {config}")
-                
-                # Initialize exchanges
-                success = await self.exchange_manager.initialize_exchanges(
-                    config.selectedExchanges
-                )
-                
+                success = await self.exchange_manager.initialize_exchanges(config.selectedExchanges)
                 if not success:
                     raise HTTPException(status_code=400, detail="Failed to connect to exchanges")
-                
+
                 # Initialize detector
                 detector_config = {
                     'min_profit_percentage': config.minProfitPercentage,
                     'max_trade_amount': config.maxTradeAmount,
                     'prioritize_zero_fee': True
                 }
-                
                 self.detector = MultiExchangeDetector(self.exchange_manager, detector_config)
                 await self.detector.initialize()
-                
-                # Initialize executor
+
+                # Initialize trade executor
                 executor_config = {
                     'auto_trading': config.autoTradingMode,
                     'paper_trading': config.paperTrading,
                     'enable_manual_confirmation': not config.autoTradingMode
                 }
-                
                 self.executor = TradeExecutor(self.exchange_manager, executor_config)
-                
-                # Start scanning
+
+                # Start background scanning loop
                 self.running = True
                 asyncio.create_task(self._scanning_loop())
-                
+
                 self.stats['activeExchanges'] = len(config.selectedExchanges)
-                
                 return {"status": "success", "message": "Bot started successfully"}
-                
             except Exception as e:
                 self.logger.error(f"Error starting bot: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
+
         @self.app.post("/api/bot/stop")
         async def stop_bot():
-            """Stop the arbitrage bot."""
             try:
                 self.running = False
                 await self.exchange_manager.disconnect_all()
                 self.stats['activeExchanges'] = 0
-                
                 return {"status": "success", "message": "Bot stopped successfully"}
-                
             except Exception as e:
                 self.logger.error(f"Error stopping bot: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
+
         @self.app.get("/api/opportunities")
         async def get_opportunities():
-            """Get current arbitrage opportunities."""
             return self.opportunities
-        
+
         @self.app.post("/api/opportunities/{opportunity_id}/execute")
         async def execute_opportunity(opportunity_id: str):
-            """Execute a specific arbitrage opportunity."""
             try:
-                # Find the opportunity
-                opportunity_data = None
-                for opp in self.opportunities:
-                    if opp['id'] == opportunity_id:
-                        opportunity_data = opp
-                        break
-                
+                opportunity_data = next((opp for opp in self.opportunities if opp['id'] == opportunity_id), None)
                 if not opportunity_data:
                     raise HTTPException(status_code=404, detail="Opportunity not found")
-                
-                # Convert to ArbitrageOpportunity object (simplified)
-                # In production, you'd properly reconstruct the object
-                success = True  # Simulate execution
-                
-                if success:
-                    self.stats['tradesExecuted'] += 1
-                    self.stats['totalProfit'] += opportunity_data.get('profitAmount', 0)
-                    
-                    # Update opportunity status
-                    opportunity_data['status'] = 'completed'
-                    
-                    # Broadcast update
-                    await self._broadcast_update({
-                        'type': 'opportunity_executed',
-                        'data': opportunity_data
-                    })
-                
-                return {"status": "success", "executed": success}
-                
+
+                # Simulate trade execution (integrate TradeExecutor if needed)
+                self.stats['tradesExecuted'] += 1
+                self.stats['totalProfit'] += opportunity_data.get('profitAmount', 0)
+                opportunity_data['status'] = 'completed'
+
+                await self._broadcast_update({'type': 'opportunity_executed', 'data': opportunity_data})
+                return {"status": "success", "executed": True}
             except Exception as e:
                 self.logger.error(f"Error executing opportunity: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
-        
+
         @self.app.get("/api/stats")
         async def get_stats():
-            """Get bot statistics."""
             return self.stats
-        
+
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
-            """WebSocket endpoint for real-time updates."""
             await websocket.accept()
             self.websocket_connections.append(websocket)
-            
             try:
                 while True:
-                    # Keep connection alive
                     await websocket.receive_text()
             except WebSocketDisconnect:
                 self.websocket_connections.remove(websocket)
-    
+
+    # ------------------ Background Loop ------------------ #
     async def _scanning_loop(self):
-        """Main scanning loop for opportunities."""
         self.logger.info("Starting opportunity scanning loop...")
         while self.running:
             try:
                 if self.detector:
-                    self.logger.info("Scanning for opportunities...")
                     opportunities = await self.detector.scan_all_opportunities()
-                    self.logger.info(f"Found {len(opportunities)} opportunities")
-                    
-                    # Convert opportunities to dict format
-                    opportunity_dicts = []
+
+                    # Filter valid + profitable opportunities
+                    valid_opps = []
                     for opp in opportunities:
-                        # Validate opportunity data before sending to frontend
                         try:
-                            profit_percentage = float(opp.profit_percentage)
-                            profit_amount = float(opp.profit_amount)
+                            p_pct = float(opp.profit_percentage)
+                            p_amt = float(opp.profit_amount)
                             volume = float(opp.initial_amount)
-                            
-                            # Skip opportunities with invalid data (NaN, extreme values)
-                            if (not all(x == x for x in [profit_percentage, profit_amount, volume]) or  # NaN check
-                                abs(profit_percentage) > 100 or  # Extreme percentage check
-                                volume <= 0):  # Invalid volume check
+                            if any(map(lambda x: x != x, [p_pct, p_amt])) or p_pct < 0 or abs(p_pct) > 100:
                                 continue
-                            
-                            opp_dict = {
-                                'id': f"opp_{int(datetime.now().timestamp() * 1000)}_{len(opportunity_dicts)}",
+                            valid_opps.append({
+                                'id': f"opp_{int(datetime.now().timestamp() * 1000)}_{len(valid_opps)}",
                                 'exchange': getattr(opp, 'exchange', 'Unknown'),
-                                'trianglePath': opp.triangle_path,
-                                'profitPercentage': profit_percentage,
-                                'profitAmount': profit_amount,
-                                'volume': volume,
+                                'trianglePath': f"{opp.base_currency} → {opp.intermediate_currency} → {opp.quote_currency} → {opp.base_currency}",
+                                'profitPercentage': round(p_pct, 4),
+                                'profitAmount': round(p_amt, 4),
+                                'volume': round(volume, 4),
                                 'status': 'detected',
                                 'timestamp': datetime.now().isoformat()
-                            }
-                            opportunity_dicts.append(opp_dict)
-                            
-                        except (ValueError, TypeError, AttributeError) as e:
-                            # Skip invalid opportunities but log the error
+                            })
+                        except Exception as e:
                             self.logger.warning(f"Skipping invalid opportunity: {e}")
                             continue
-                    
-                    # Update opportunities list (keep up to 200)
-                    self.opportunities = opportunity_dicts[:200]
-                    self.stats['opportunitiesFound'] += len(opportunities)
-                    
-                    self.logger.info(f"Broadcasting {len(opportunity_dicts)} opportunities to {len(self.websocket_connections)} clients")
-                    
-                    # Always broadcast to WebSocket clients (even if empty)
-                    await self._broadcast_update({
-                        'type': 'opportunities_update',
-                        'data': opportunity_dicts
-                    })
+
+                    self.opportunities = valid_opps[:200]
+                    self.stats['opportunitiesFound'] += len(valid_opps)
+                    await self._broadcast_update({'type': 'opportunities_update', 'data': self.opportunities})
                 else:
-                    self.logger.warning("Detector not initialized")
-                    # Still broadcast empty array to keep WebSocket alive
-                    await self._broadcast_update({
-                        'type': 'opportunities_update',
-                        'data': []
-                    })
-                
-                await asyncio.sleep(2)  # Scan every 2 seconds
-                
+                    await self._broadcast_update({'type': 'opportunities_update', 'data': []})
+                await asyncio.sleep(3)
             except Exception as e:
                 self.logger.error(f"Error in scanning loop: {e}")
-                # Broadcast empty array on error to keep WebSocket alive
-                await self._broadcast_update({
-                    'type': 'opportunities_update',
-                    'data': []
-                })
+                await self._broadcast_update({'type': 'opportunities_update', 'data': []})
                 await asyncio.sleep(5)
-    
+
     async def _broadcast_update(self, message: Dict[str, Any]):
-        """Broadcast update to all WebSocket connections."""
         if not self.websocket_connections:
             return
-        
-        message_str = json.dumps(message)
+        data = json.dumps(message)
         disconnected = []
-        
-        for websocket in self.websocket_connections:
+        for ws in self.websocket_connections:
             try:
-                await websocket.send_text(message_str)
+                await ws.send_text(data)
             except Exception:
-                disconnected.append(websocket)
-        
-        # Remove disconnected clients
+                disconnected.append(ws)
         for ws in disconnected:
             self.websocket_connections.remove(ws)
-    
-    def run(self, host: str = "localhost", port: int = 8000):
-        """Run the web server."""
+
+    def run(self, host: str = "0.0.0.0", port: int = 8000):
         self.logger.info(f"Starting web server on {host}:{port}")
         uvicorn.run(self.app, host=host, port=port, log_level="info")
 
-# Global server instance
+# ------------------ CLI Helpers ------------------ #
 _server_instance = None
 _server_thread = None
 
 def start_web_server_background():
-    """Start the web server in a background thread."""
     global _server_instance, _server_thread
-    
     if _server_instance is None:
         _server_instance = ArbitrageWebServer()
-        
         def run_server():
             try:
-                _server_instance.run(host="0.0.0.0", port=8000)
+                _server_instance.run()
             except Exception as e:
                 print(f"Web server error: {e}")
-        
         _server_thread = threading.Thread(target=run_server, daemon=True)
         _server_thread.start()
-        
-        # Give server time to start
         time.sleep(2)
         print("🌐 Web server started on http://localhost:8000")
-        print("🔗 Frontend can now connect to backend API")
 
 def main():
-    """Main entry point for the web server."""
     server = ArbitrageWebServer()
     server.run()
 

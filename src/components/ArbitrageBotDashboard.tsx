@@ -64,10 +64,19 @@ export const ArbitrageBotDashboard: React.FC = () => {
     });
 
     const [exchanges, setExchanges] = useState<ExchangeConfig[]>([
-        { id: 'binance', name: 'Binance', enabled: true, connected: false, feeToken: 'BNB', zeroFeePairs: 0 },
-        { id: 'bybit', name: 'Bybit', enabled: false, connected: false, feeToken: 'BIT', zeroFeePairs: 0 },
-        { id: 'kucoin', name: 'KuCoin', enabled: false, connected: false, feeToken: 'KCS', zeroFeePairs: 2 },
-    ]);
+    { id: 'binance', name: 'Binance', enabled: true, connected: false, feeToken: 'BNB', zeroFeePairs: 0 },
+    { id: 'bybit', name: 'Bybit', enabled: false, connected: false, feeToken: 'BIT', zeroFeePairs: 0 },
+    { id: 'kucoin', name: 'KuCoin', enabled: false, connected: false, feeToken: 'KCS', zeroFeePairs: 2 },
+    { id: 'coinbasepro', name: 'Coinbase Pro', enabled: false, connected: false, feeToken: 'USDC', zeroFeePairs: 0 },
+    { id: 'kraken', name: 'Kraken', enabled: false, connected: false, feeToken: 'USD', zeroFeePairs: 0 },
+    { id: 'gateio', name: 'Gate.io', enabled: false, connected: false, feeToken: 'GT', zeroFeePairs: 0 },
+    { id: 'coinex', name: 'CoinEx', enabled: false, connected: false, feeToken: 'CET', zeroFeePairs: 0 },
+    { id: 'htx', name: 'HTX', enabled: false, connected: false, feeToken: 'HT', zeroFeePairs: 0 },
+    { id: 'mexc', name: 'MEXC', enabled: false, connected: false, feeToken: 'MX', zeroFeePairs: 0 },
+    { id: 'poloniex', name: 'Poloniex', enabled: false, connected: false, feeToken: 'TRX', zeroFeePairs: 0 },
+    { id: 'probit', name: 'ProBit Global', enabled: false, connected: false, feeToken: 'PROB', zeroFeePairs: 0 },
+    { id: 'hitbtc', name: 'HitBTC', enabled: false, connected: false, feeToken: 'HIT', zeroFeePairs: 0 },
+]);
 
     useEffect(() => {
         console.log('Setting up WebSocket connection...');

@@ -16,6 +16,7 @@ class UnifiedExchange(BaseExchange):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.exchange_id = config['exchange_id']
+        self.name = self.exchange_id  # For compatibility with MultiExchangeDetector
         self.logger = setup_logger(f'Exchange_{self.exchange_id.title()}')
         self.exchange: Optional[ccxt.Exchange] = None
         self.paper_trading = config.get('paper_trading', True)
@@ -24,16 +25,15 @@ class UnifiedExchange(BaseExchange):
         self.zero_fee_pairs = config.get('zero_fee_pairs', [])
         self.maker_fee = config.get('maker_fee', 0.001)
         self.taker_fee = config.get('taker_fee', 0.001)
+        self.trading_pairs: Dict[str, Any] = {}
 
     async def connect(self) -> bool:
-        """Connect to the exchange."""
         try:
             if not await self._check_internet_connectivity():
                 self.logger.error(f"No internet connection for {self.exchange_id}")
                 return False
 
             exchange_class = getattr(ccxt, self.exchange_id)
-
             exchange_config = {
                 'enableRateLimit': True,
                 'options': {'defaultType': 'spot'},
@@ -41,7 +41,6 @@ class UnifiedExchange(BaseExchange):
                 'rateLimit': 1200
             }
 
-            # Paper trading allowed without API keys
             if not self.config.get('api_key') or not self.config.get('api_secret'):
                 if not self.paper_trading:
                     self.logger.error(f"No API credentials for {self.exchange_id}")
@@ -58,10 +57,14 @@ class UnifiedExchange(BaseExchange):
             await self.exchange.load_markets()
             await self._verify_real_connection()
 
+            self.trading_pairs = {
+                s: m for s, m in self.exchange.markets.items() if m.get("active", False)
+            }
+
             self.is_connected = True
             self.logger.info(f"Connected to {self.exchange_id} ({'paper' if self.paper_trading else 'live'})")
+            self.logger.info(f"{self.exchange_id}: {len(self.trading_pairs)} trading pairs")
             return True
-
         except Exception as e:
             self.logger.error(f"Failed to connect to {self.exchange_id}: {e}")
             return False
@@ -99,22 +102,20 @@ class UnifiedExchange(BaseExchange):
             self.logger.error(f"Error disconnecting from {self.exchange_id}: {e}")
 
     async def get_trading_pairs(self) -> List[str]:
+        return list(self.trading_pairs.keys())
+
+    async def fetch_tickers(self) -> Dict[str, Any]:
         try:
-            markets = await self.exchange.load_markets()
-            return [symbol for symbol, market in markets.items() if market.get('active')]
+            return await self.exchange.fetch_tickers()
         except Exception as e:
-            self.logger.error(f"Error fetching pairs from {self.exchange_id}: {e}")
-            return []
+            self.logger.error(f"Error fetching tickers from {self.exchange_id}: {e}")
+            return {}
 
     def normalize_symbol(self, symbol: str) -> Optional[str]:
-        """Normalize a symbol to match ccxt market formats (avoids USDT/BTC errors)."""
         if not self.exchange or not hasattr(self.exchange, "markets"):
             return None
-
         if symbol in self.exchange.markets:
             return symbol
-
-        # Flip base/quote if reversed exists
         try:
             base, quote = symbol.split('/')
             flipped = f"{quote}/{base}"
@@ -127,7 +128,6 @@ class UnifiedExchange(BaseExchange):
             norm_symbol = self.normalize_symbol(symbol)
             if not norm_symbol:
                 return {}
-
             ticker = await self.exchange.fetch_ticker(norm_symbol)
             return {
                 'exchange': self.exchange_id,
@@ -147,7 +147,6 @@ class UnifiedExchange(BaseExchange):
             norm_symbol = self.normalize_symbol(symbol)
             if not norm_symbol:
                 return {}
-
             orderbook = await self.exchange.fetch_order_book(norm_symbol, limit=depth)
             return {
                 'bids': orderbook.get('bids', []),
@@ -162,7 +161,6 @@ class UnifiedExchange(BaseExchange):
         if not self.is_connected:
             self.logger.error(f"Cannot start WebSocket on {self.exchange_id} (not connected)")
             return
-
         while self.is_connected:
             try:
                 if not await self._check_internet_connectivity():
