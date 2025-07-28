@@ -36,6 +36,36 @@ from arbitrage.multi_exchange_detector import MultiExchangeDetector
 from arbitrage.trade_executor import TradeExecutor
 from utils.logger import setup_logger
 
+
+# ------------------ WebSocket Manager ------------------ #
+class WebSocketManager:
+    """Tracks active WebSocket clients and broadcasts messages."""
+    def __init__(self):
+        self.connections: List[WebSocket] = []
+
+    async def register(self, websocket: WebSocket):
+        self.connections.append(websocket)
+
+    async def unregister(self, websocket: WebSocket):
+        if websocket in self.connections:
+            self.connections.remove(websocket)
+
+    async def broadcast(self, event: str, data: Any):
+        """Broadcast a JSON payload to all connected clients."""
+        if not self.connections:
+            return
+        message = json.dumps({"type": event, "data": data})
+        disconnected = []
+        for ws in self.connections:
+            try:
+                await ws.send_text(message)
+            except Exception:
+                disconnected.append(ws)
+        for ws in disconnected:
+            if ws in self.connections:
+                self.connections.remove(ws)
+
+
 # ------------------ API Models ------------------ #
 class BotConfig(BaseModel):
     minProfitPercentage: float
@@ -44,12 +74,6 @@ class BotConfig(BaseModel):
     paperTrading: bool
     selectedExchanges: List[str]
 
-class BotStats(BaseModel):
-    opportunitiesFound: int
-    tradesExecuted: int
-    totalProfit: float
-    successRate: float
-    activeExchanges: int
 
 # ------------------ Web Server ------------------ #
 class ArbitrageWebServer:
@@ -59,7 +83,7 @@ class ArbitrageWebServer:
         self.logger = setup_logger('WebServer')
         self.app = FastAPI(title="Triangular Arbitrage Bot API")
 
-        # Allow frontend origins (Vite/React)
+        # Allow frontend origins (React/Vite)
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*", "http://localhost:5173", "http://localhost:3000"],
@@ -70,6 +94,7 @@ class ArbitrageWebServer:
 
         # Core components
         self.exchange_manager = MultiExchangeManager()
+        self.websocket_manager = WebSocketManager()  # <--- FIXED
         self.detector: MultiExchangeDetector = None
         self.executor: TradeExecutor = None
         self.running = False
@@ -82,9 +107,6 @@ class ArbitrageWebServer:
             'successRate': 0.0,
             'activeExchanges': 0
         }
-
-        # Active WebSocket clients
-        self.websocket_connections: List[WebSocket] = []
 
         # Cached opportunities (max 200)
         self.opportunities: List[Dict[str, Any]] = []
@@ -105,13 +127,13 @@ class ArbitrageWebServer:
                 if not success:
                     raise HTTPException(status_code=400, detail="Failed to connect to exchanges")
 
-                # Initialize detector
+                # Initialize detector (now needs websocket_manager)
                 detector_config = {
                     'min_profit_percentage': config.minProfitPercentage,
                     'max_trade_amount': config.maxTradeAmount,
                     'prioritize_zero_fee': True
                 }
-                self.detector = MultiExchangeDetector(self.exchange_manager, detector_config)
+                self.detector = MultiExchangeDetector(self.exchange_manager, self.websocket_manager, detector_config)
                 await self.detector.initialize()
 
                 # Initialize trade executor
@@ -122,7 +144,7 @@ class ArbitrageWebServer:
                 }
                 self.executor = TradeExecutor(self.exchange_manager, executor_config)
 
-                # Start background scanning loop
+                # Start scanning loop
                 self.running = True
                 asyncio.create_task(self._scanning_loop())
 
@@ -136,6 +158,12 @@ class ArbitrageWebServer:
         async def stop_bot():
             try:
                 self.running = False
+                # Close all exchange clients cleanly
+                for ex in self.exchange_manager.exchanges.values():
+                    try:
+                        await ex.close()
+                    except Exception:
+                        pass
                 await self.exchange_manager.disconnect_all()
                 self.stats['activeExchanges'] = 0
                 return {"status": "success", "message": "Bot stopped successfully"}
@@ -147,37 +175,15 @@ class ArbitrageWebServer:
         async def get_opportunities():
             return self.opportunities
 
-        @self.app.post("/api/opportunities/{opportunity_id}/execute")
-        async def execute_opportunity(opportunity_id: str):
-            try:
-                opportunity_data = next((opp for opp in self.opportunities if opp['id'] == opportunity_id), None)
-                if not opportunity_data:
-                    raise HTTPException(status_code=404, detail="Opportunity not found")
-
-                # Simulate trade execution (integrate TradeExecutor if needed)
-                self.stats['tradesExecuted'] += 1
-                self.stats['totalProfit'] += opportunity_data.get('profitAmount', 0)
-                opportunity_data['status'] = 'completed'
-
-                await self._broadcast_update({'type': 'opportunity_executed', 'data': opportunity_data})
-                return {"status": "success", "executed": True}
-            except Exception as e:
-                self.logger.error(f"Error executing opportunity: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/api/stats")
-        async def get_stats():
-            return self.stats
-
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
-            self.websocket_connections.append(websocket)
+            await self.websocket_manager.register(websocket)
             try:
                 while True:
-                    await websocket.receive_text()
+                    await websocket.receive_text()  # Keep-alive
             except WebSocketDisconnect:
-                self.websocket_connections.remove(websocket)
+                await self.websocket_manager.unregister(websocket)
 
     # ------------------ Background Loop ------------------ #
     async def _scanning_loop(self):
@@ -187,56 +193,41 @@ class ArbitrageWebServer:
                 if self.detector:
                     opportunities = await self.detector.scan_all_opportunities()
 
-                    # Filter valid + profitable opportunities
+                    # Convert to frontend-friendly dicts
                     valid_opps = []
                     for opp in opportunities:
                         try:
                             p_pct = float(opp.profit_percentage)
                             p_amt = float(opp.profit_amount)
                             volume = float(opp.initial_amount)
-                            if any(map(lambda x: x != x, [p_pct, p_amt])) or p_pct < 0 or abs(p_pct) > 100:
-                                continue
                             valid_opps.append({
                                 'id': f"opp_{int(datetime.now().timestamp() * 1000)}_{len(valid_opps)}",
                                 'exchange': getattr(opp, 'exchange', 'Unknown'),
-                                'trianglePath': f"{opp.base_currency} → {opp.intermediate_currency} → {opp.quote_currency} → {opp.base_currency}",
+                                'trianglePath': " → ".join(opp.triangle_path),
                                 'profitPercentage': round(p_pct, 4),
                                 'profitAmount': round(p_amt, 4),
                                 'volume': round(volume, 4),
                                 'status': 'detected',
                                 'timestamp': datetime.now().isoformat()
                             })
-                        except Exception as e:
-                            self.logger.warning(f"Skipping invalid opportunity: {e}")
+                        except Exception:
                             continue
 
                     self.opportunities = valid_opps[:200]
                     self.stats['opportunitiesFound'] += len(valid_opps)
-                    await self._broadcast_update({'type': 'opportunities_update', 'data': self.opportunities})
+                    await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
                 else:
-                    await self._broadcast_update({'type': 'opportunities_update', 'data': []})
-                await asyncio.sleep(3)
+                    await self.websocket_manager.broadcast("opportunities_update", [])
+                await asyncio.sleep(3)  # Reduced from 5 to maintain regular updates
             except Exception as e:
                 self.logger.error(f"Error in scanning loop: {e}")
-                await self._broadcast_update({'type': 'opportunities_update', 'data': []})
+                await self.websocket_manager.broadcast("opportunities_update", [])
                 await asyncio.sleep(5)
-
-    async def _broadcast_update(self, message: Dict[str, Any]):
-        if not self.websocket_connections:
-            return
-        data = json.dumps(message)
-        disconnected = []
-        for ws in self.websocket_connections:
-            try:
-                await ws.send_text(data)
-            except Exception:
-                disconnected.append(ws)
-        for ws in disconnected:
-            self.websocket_connections.remove(ws)
 
     def run(self, host: str = "0.0.0.0", port: int = 8000):
         self.logger.info(f"Starting web server on {host}:{port}")
         uvicorn.run(self.app, host=host, port=port, log_level="info")
+
 
 # ------------------ CLI Helpers ------------------ #
 _server_instance = None

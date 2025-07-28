@@ -3,6 +3,20 @@ Unified exchange wrapper for consistent interface across all exchanges.
 Handles ccxt integration, normalization, and fallback for paper/live modes.
 """
 
+# --- Prevent fatal 'HEAD' Git errors ---
+import subprocess, os
+GIT_COMMIT = "unknown"
+try:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    commit = subprocess.check_output(
+        ["git", "-C", repo_root, "rev-parse", "HEAD"],
+        stderr=subprocess.DEVNULL
+    ).decode().strip()
+    GIT_COMMIT = commit[:7]
+except Exception:
+    GIT_COMMIT = "unknown"
+# -----------------------------------------------
+
 import ccxt.async_support as ccxt
 import asyncio
 from typing import Dict, List, Any, Optional, Tuple, Callable
