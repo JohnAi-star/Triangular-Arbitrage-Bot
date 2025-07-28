@@ -64,19 +64,19 @@ export const ArbitrageBotDashboard: React.FC = () => {
     });
 
     const [exchanges, setExchanges] = useState<ExchangeConfig[]>([
-    { id: 'binance', name: 'Binance', enabled: true, connected: false, feeToken: 'BNB', zeroFeePairs: 0 },
-    { id: 'bybit', name: 'Bybit', enabled: false, connected: false, feeToken: 'BIT', zeroFeePairs: 0 },
-    { id: 'kucoin', name: 'KuCoin', enabled: false, connected: false, feeToken: 'KCS', zeroFeePairs: 2 },
-    { id: 'coinbasepro', name: 'Coinbase Pro', enabled: false, connected: false, feeToken: 'USDC', zeroFeePairs: 0 },
-    { id: 'kraken', name: 'Kraken', enabled: false, connected: false, feeToken: 'USD', zeroFeePairs: 0 },
-    { id: 'gateio', name: 'Gate.io', enabled: false, connected: false, feeToken: 'GT', zeroFeePairs: 0 },
-    { id: 'coinex', name: 'CoinEx', enabled: false, connected: false, feeToken: 'CET', zeroFeePairs: 0 },
-    { id: 'htx', name: 'HTX', enabled: false, connected: false, feeToken: 'HT', zeroFeePairs: 0 },
-    { id: 'mexc', name: 'MEXC', enabled: false, connected: false, feeToken: 'MX', zeroFeePairs: 0 },
-    { id: 'poloniex', name: 'Poloniex', enabled: false, connected: false, feeToken: 'TRX', zeroFeePairs: 0 },
-    { id: 'probit', name: 'ProBit Global', enabled: false, connected: false, feeToken: 'PROB', zeroFeePairs: 0 },
-    { id: 'hitbtc', name: 'HitBTC', enabled: false, connected: false, feeToken: 'HIT', zeroFeePairs: 0 },
-]);
+        { id: 'binance', name: 'Binance', enabled: true, connected: false, feeToken: 'BNB', zeroFeePairs: 0 },
+        { id: 'bybit', name: 'Bybit', enabled: false, connected: false, feeToken: 'BIT', zeroFeePairs: 0 },
+        { id: 'kucoin', name: 'KuCoin', enabled: false, connected: false, feeToken: 'KCS', zeroFeePairs: 2 },
+        { id: 'coinbasepro', name: 'Coinbase Pro', enabled: false, connected: false, feeToken: 'USDC', zeroFeePairs: 0 },
+        { id: 'kraken', name: 'Kraken', enabled: false, connected: false, feeToken: 'USD', zeroFeePairs: 0 },
+        { id: 'gateio', name: 'Gate.io', enabled: false, connected: false, feeToken: 'GT', zeroFeePairs: 0 },
+        { id: 'coinex', name: 'CoinEx', enabled: false, connected: false, feeToken: 'CET', zeroFeePairs: 0 },
+        { id: 'htx', name: 'HTX', enabled: false, connected: false, feeToken: 'HT', zeroFeePairs: 0 },
+        { id: 'mexc', name: 'MEXC', enabled: false, connected: false, feeToken: 'MX', zeroFeePairs: 0 },
+        { id: 'poloniex', name: 'Poloniex', enabled: false, connected: false, feeToken: 'TRX', zeroFeePairs: 0 },
+        { id: 'probit', name: 'ProBit Global', enabled: false, connected: false, feeToken: 'PROB', zeroFeePairs: 0 },
+        { id: 'hitbtc', name: 'HitBTC', enabled: false, connected: false, feeToken: 'HIT', zeroFeePairs: 0 },
+    ]);
 
     useEffect(() => {
         console.log('Setting up WebSocket connection...');
@@ -278,12 +278,12 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                 <tbody className="divide-y divide-slate-700">
                                     {opportunities.map(o => (
                                         <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className="hover:bg-slate-700/30">
-                                            <td>{getStatusIcon(o.status)}</td>
-                                            <td>{o.exchange}</td>
-                                            <td>{o.trianglePath}</td>
-                                            <td className="text-green-400">{o.profitPercentage.toFixed(4)}%</td>
-                                            <td className="text-green-400">${o.profitAmount.toFixed(2)}</td>
-                                            <td>${o.volume.toFixed(0)}</td>
+                                            <td className="p-2">{getStatusIcon(o.status)}</td>
+                                            <td className="p-2">{o.exchange}</td>
+                                            <td className="p-2 text-sm">{o.trianglePath}</td>
+                                            <td className="p-2 text-green-400">{o.profitPercentage.toFixed(4)}%</td>
+                                            <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
+                                            <td className="p-2">${o.volume.toFixed(0)}</td>
                                             <td>
                                                 {o.status === 'detected' && (
                                                     <button onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }} className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg">Execute</button>
@@ -293,6 +293,9 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     ))}
                                 </tbody>
                             </table>
+                            {opportunities.length === 0 && (
+                                <div className="text-center text-gray-400 py-8"></div>
+                            )}
                         </div>
                     </div>
                 </div>
