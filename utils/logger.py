@@ -2,6 +2,7 @@ import logging
 import colorlog
 from logging.handlers import RotatingFileHandler
 import os
+import sys
 from datetime import datetime
 
 def setup_logger(name: str, log_level: str = 'INFO') -> logging.Logger:
@@ -18,26 +19,52 @@ def setup_logger(name: str, log_level: str = 'INFO') -> logging.Logger:
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
     
+    # Force UTF-8 encoding for Windows compatibility
+    if sys.platform.startswith('win'):
+        # Set console encoding to UTF-8 on Windows
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+            sys.stderr.reconfigure(encoding='utf-8')
+        except AttributeError:
+            # Python < 3.7 fallback
+            pass
+    
     # Console handler with colors
-    console_handler = colorlog.StreamHandler()
-    console_formatter = colorlog.ColoredFormatter(
-        '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
-        log_colors={
-            'DEBUG': 'cyan',
-            'INFO': 'green',
-            'WARNING': 'yellow',
-            'ERROR': 'red',
-            'CRITICAL': 'red,bg_white',
-        }
-    )
+    console_handler = colorlog.StreamHandler(sys.stdout)
+    if sys.platform.startswith('win'):
+        # Use plain text format on Windows to avoid Unicode issues
+        console_formatter = colorlog.ColoredFormatter(
+            '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'red,bg_white',
+            }
+        )
+    else:
+        # Use Unicode format on Unix systems
+        console_formatter = colorlog.ColoredFormatter(
+            '%(log_color)s%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'red,bg_white',
+            }
+        )
     console_handler.setFormatter(console_formatter)
     
     # File handler with rotation
     file_handler = RotatingFileHandler(
         f'logs/{name.lower()}.log',
         maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
+        backupCount=5,
+        encoding='utf-8'  # Force UTF-8 encoding for file logs
     )
     file_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
@@ -66,7 +93,8 @@ def setup_trade_logger() -> logging.Logger:
     trade_handler = RotatingFileHandler(
         'logs/trades.log',
         maxBytes=50*1024*1024,  # 50MB
-        backupCount=10
+        backupCount=10,
+        encoding='utf-8'  # Force UTF-8 encoding for trade logs
     )
     trade_formatter = logging.Formatter(
         '%(asctime)s - %(message)s',

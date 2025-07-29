@@ -1,12 +1,31 @@
+import sys
 import asyncio
 import signal
-import sys
 from typing import Dict, Any
 from config.config import Config
 from exchanges.binance_exchange import BinanceExchange
 from arbitrage.triangle_detector import TriangleDetector
 from arbitrage.trade_executor import TradeExecutor
 from utils.logger import setup_logger
+
+def safe_unicode_text(text: str) -> str:
+    """Convert Unicode symbols to Windows-safe equivalents."""
+    if sys.platform.startswith('win'):
+        replacements = {
+            '→': '->',
+            '✅': '[OK]',
+            '❌': '[FAIL]',
+            '🔁': '[RETRY]',
+            '💰': '$',
+            '📊': '[STATS]',
+            '🎯': '[TARGET]',
+            '⚠️': '[WARN]',
+            '🚀': '[START]',
+            '🔺': '[BOT]'
+        }
+        for unicode_char, ascii_equiv in replacements.items():
+            text = text.replace(unicode_char, ascii_equiv)
+    return text
 
 class TriangularArbitrageBot:
     """Main triangular arbitrage bot."""
@@ -25,13 +44,18 @@ class TriangularArbitrageBot:
         try:
             # Validate configuration
             if not Config.validate():
-                self.logger.error("❌ CRITICAL: Invalid configuration!")
+                self.logger.error(safe_unicode_text("❌ CRITICAL: Invalid configuration!"))
                 self.logger.error("The bot requires REAL API credentials to fetch market data.")
                 self.logger.error("Please configure your .env file with valid exchange credentials.")
                 return False
             
-            self.logger.info("✅ Configuration validated - real exchange credentials found")
+            self.logger.info(safe_unicode_text("✅ Configuration validated - real exchange credentials found"))
             self.logger.info("Initializing Triangular Arbitrage Bot...")
+            
+            # Log trading mode clearly
+            trading_mode = "PAPER TRADING (SIMULATION)" if Config.PAPER_TRADING else "LIVE TRADING (REAL MONEY)"
+            self.logger.info(f"Trading Mode: {trading_mode}")
+            
             self.logger.info(f"Configuration: {Config.to_dict()}")
             
             # Initialize exchange
@@ -81,7 +105,11 @@ class TriangularArbitrageBot:
             return
         
         self.running = True
-        self.logger.info("🚀 Starting Triangular Arbitrage Bot...")
+        self.logger.info(safe_unicode_text("🚀 Starting Triangular Arbitrage Bot..."))
+        
+        # Log current trading mode
+        mode = "PAPER TRADING" if Config.PAPER_TRADING else "LIVE TRADING"
+        self.logger.info(f"Bot starting in {mode} mode")
         
         try:
             # Get all trading pairs for WebSocket
@@ -129,14 +157,14 @@ class TriangularArbitrageBot:
                 
                 for opportunity in opportunities:
                     self.opportunities_found += 1
-                    self.logger.info(f"🎯 Opportunity #{self.opportunities_found}: {opportunity}")
+                    self.logger.info(safe_unicode_text(f"🎯 Opportunity #{self.opportunities_found}: {opportunity}"))
                     
                     # Execute if profitable
                     if await self.executor.execute_arbitrage(opportunity):
                         self.trades_executed += 1
-                        self.logger.info(f"✅ Trade #{self.trades_executed} completed successfully")
+                        self.logger.info(safe_unicode_text(f"✅ Trade #{self.trades_executed} completed successfully"))
                     else:
-                        self.logger.info("❌ Trade execution failed or declined")
+                        self.logger.info(safe_unicode_text("❌ Trade execution failed or declined"))
                 
                 # Wait before next scan
                 await asyncio.sleep(1)  # Adjust scan frequency as needed
@@ -154,8 +182,9 @@ class TriangularArbitrageBot:
                 
                 # Report status every 5 minutes
                 self.logger.info(
-                    f"📊 Status - Opportunities found: {self.opportunities_found}, "
+                    safe_unicode_text(f"📊 Status - Opportunities found: {self.opportunities_found}, "
                     f"Trades executed: {self.trades_executed}"
+                    )
                 )
                 
                 if balance:
@@ -166,7 +195,7 @@ class TriangularArbitrageBot:
                     )[:5]
                     
                     balance_str = ", ".join([f"{k}: {v:.6f}" for k, v in top_balances])
-                    self.logger.info(f"💰 Top balances - {balance_str}")
+                    self.logger.info(safe_unicode_text(f"💰 Top balances - {balance_str}"))
                 
                 await asyncio.sleep(300)  # 5 minutes
                 
@@ -207,15 +236,23 @@ async def main():
         await bot.cleanup()
 
 if __name__ == "__main__":
-    print("""
-    🔺 Triangular Arbitrage Bot
+    startup_text = safe_unicode_text("""
+    [BOT] Triangular Arbitrage Bot
     ==========================
     Production-ready bot for detecting and executing triangular arbitrage opportunities.
     
-    Press Ctrl+C to stop the bot gracefully.
-    """)
+    Press Ctrl+C to stop the bot gracefully.""")
+    
+    print(startup_text)
+    
+    # Show current trading mode prominently
+    mode = "PAPER TRADING (SIMULATION)" if Config.PAPER_TRADING else "LIVE TRADING (REAL MONEY)"
+    print(f"\n    Current Mode: {mode}")
+    if not Config.PAPER_TRADING:
+        print("    WARNING: This will execute REAL trades with REAL money!")
+    print()
     
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nGoodbye! 👋")
+        print(safe_unicode_text("\nGoodbye! [WAVE]"))

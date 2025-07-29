@@ -1,7 +1,28 @@
+import sys
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
+
+def safe_unicode_text(text: str) -> str:
+    """Convert Unicode symbols to Windows-safe equivalents."""
+    if sys.platform.startswith('win'):
+        # Replace Unicode symbols with ASCII equivalents for Windows
+        replacements = {
+            '→': '->',
+            '✅': '[OK]',
+            '❌': '[FAIL]',
+            '🔁': '[RETRY]',
+            '💰': '$',
+            '📊': '[STATS]',
+            '🎯': '[TARGET]',
+            '⚠️': '[WARN]',
+            '🚀': '[START]',
+            '🔺': '[BOT]'
+        }
+        for unicode_char, ascii_equiv in replacements.items():
+            text = text.replace(unicode_char, ascii_equiv)
+    return text
 
 class TradeStatus(Enum):
     SUCCESS = "success"
@@ -95,11 +116,11 @@ class TradeLog:
     def success_rate_display(self) -> str:
         """Display success rate as emoji."""
         if self.status == TradeStatus.SUCCESS:
-            return "✅"
+            return safe_unicode_text("✅")
         elif self.status == TradeStatus.FAILED:
-            return "❌"
+            return safe_unicode_text("❌")
         else:
-            return "🔁"
+            return safe_unicode_text("🔁")
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -142,11 +163,12 @@ class TradeLog:
         """Convert to formatted log string."""
         status_emoji = self.success_rate_display
         profit_sign = "+" if self.net_pnl >= 0 else ""
+        arrow = safe_unicode_text("→")
         
         return (
             f"{status_emoji} TRADE {self.trade_id} | "
             f"{self.exchange} | "
-            f"{' → '.join(self.triangle_path)} | "
+            f"{f' {arrow} '.join(self.triangle_path)} | "
             f"IN: {self.initial_amount:.6f} {self.base_currency} | "
             f"OUT: {self.final_amount:.6f} {self.base_currency} | "
             f"PnL: {profit_sign}{self.net_pnl:.6f} {self.base_currency} "

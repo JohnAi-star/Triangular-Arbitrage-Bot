@@ -1,7 +1,28 @@
+import sys
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 from datetime import datetime
 from enum import Enum
+
+def safe_unicode_text(text: str) -> str:
+    """Convert Unicode symbols to Windows-safe equivalents."""
+    if sys.platform.startswith('win'):
+        # Replace Unicode symbols with ASCII equivalents for Windows
+        replacements = {
+            '→': '->',
+            '✅': '[OK]',
+            '❌': '[FAIL]',
+            '🔁': '[RETRY]',
+            '💰': '$',
+            '📊': '[STATS]',
+            '🎯': '[TARGET]',
+            '⚠️': '[WARN]',
+            '🚀': '[START]',
+            '🔺': '[BOT]'
+        }
+        for unicode_char, ascii_equiv in replacements.items():
+            text = text.replace(unicode_char, ascii_equiv)
+    return text
 
 class OpportunityStatus(Enum):
     DETECTED = "detected"
@@ -75,7 +96,8 @@ class ArbitrageOpportunity:
     @property
     def triangle_path(self) -> str:
         """Return the triangle path as a string."""
-        return f"{self.base_currency} → {self.intermediate_currency} → {self.quote_currency} → {self.base_currency}"
+        arrow = safe_unicode_text("→")
+        return f"{self.base_currency} {arrow} {self.intermediate_currency} {arrow} {self.quote_currency} {arrow} {self.base_currency}"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert opportunity to dictionary for logging/serialization."""

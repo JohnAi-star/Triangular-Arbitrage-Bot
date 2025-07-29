@@ -34,9 +34,16 @@ class Config:
     ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'true').lower() == 'true'
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
-    PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'false').lower() == 'true'
+    PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'true').lower() == 'true'  # Default to true for safety
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'true'
     
+    @classmethod
+    def update_auto_trading(cls, enabled: bool) -> None:
+        """Update auto-trading setting and persist to environment."""
+        cls.AUTO_TRADING_MODE = enabled
+        # In a production environment, you might want to update the .env file
+        # For now, we'll just update the runtime value
+        
     # WebSocket Configuration
     WEBSOCKET_RECONNECT_ATTEMPTS: int = 5
     WEBSOCKET_RECONNECT_DELAY: int = 5
@@ -88,6 +95,7 @@ class Config:
             'auto_trading_mode': cls.AUTO_TRADING_MODE,
             'paper_trading': cls.PAPER_TRADING,
             'backtesting_mode': cls.BACKTESTING_MODE,
+            'live_trading': not cls.PAPER_TRADING,
             'enabled_exchanges': [
                 ex_id for ex_id, cred in cls.EXCHANGE_CREDENTIALS.items() 
                 if cred['enabled']

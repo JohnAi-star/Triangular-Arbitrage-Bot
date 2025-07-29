@@ -192,10 +192,14 @@ class UnifiedExchange(BaseExchange):
                 await asyncio.sleep(5)
 
     async def place_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
-        if self.paper_trading:
+        # Check both instance paper_trading and global config
+        from config.config import Config
+        is_paper_trading = self.paper_trading or Config.PAPER_TRADING
+        
+        if is_paper_trading:
             ticker = await self.get_ticker(symbol)
             price = ticker.get('ask' if side == 'buy' else 'bid', 0)
-            self.logger.info(f"PAPER TRADE: {side} {qty} {symbol} at {price}")
+            self.logger.info(f"PAPER TRADE: {side.upper()} {qty:.6f} {symbol} at {price:.8f}")
             return {
                 'id': f"paper_{symbol}_{side}",
                 'symbol': symbol,
@@ -205,15 +209,37 @@ class UnifiedExchange(BaseExchange):
                 'status': 'closed',
                 'filled': qty,
                 'average': price,
-                'timestamp': asyncio.get_event_loop().time() * 1000
+                'timestamp': asyncio.get_event_loop().time() * 1000,
+                'fee': {'cost': qty * price * 0.001, 'currency': symbol.split('/')[1] if '/' in symbol else 'USDT'},
+                'info': {'paper_trade': True}
             }
+        
+        # LIVE TRADING - Execute real order
         try:
+            self.logger.info(f"LIVE TRADE: Placing {side.upper()} order for {qty:.6f} {symbol}")
             order = await self.exchange.create_market_order(symbol, side, qty)
-            self.logger.info(f"LIVE TRADE EXECUTED: {order}")
+            
+            # Log detailed execution info
+            filled_qty = float(order.get('filled', 0))
+            avg_price = float(order.get('average', 0))
+            fee_cost = order.get('fee', {}).get('cost', 0)
+            
+            self.logger.info(
+                f"LIVE TRADE EXECUTED: {side.upper()} {filled_qty:.6f} {symbol} "
+                f"at {avg_price:.8f} | Fee: {fee_cost:.6f} | Status: {order.get('status')}"
+            )
+            
             return order
         except Exception as e:
-            self.logger.error(f"Error placing order on {self.exchange_id}: {e}")
-            return {}
+            self.logger.error(f"LIVE TRADE FAILED on {self.exchange_id}: {e}")
+            # Return error structure that TradeExecutor can handle
+            return {
+                'status': 'failed',
+                'error': str(e),
+                'symbol': symbol,
+                'side': side,
+                'amount': qty
+            }
 
     async def get_account_balance(self) -> Dict[str, float]:
         if not self.is_connected:

@@ -212,6 +212,18 @@ export const ArbitrageBotDashboard: React.FC = () => {
         }
     };
 
+    function toggleAutoTrading(checked: boolean): void {
+        if (pausedAutoTrading && checked) {
+            // Prevent enabling auto-trading if paused due to consecutive fails
+            return;
+        }
+        setAutoTrading(checked);
+        if (!checked) {
+            setConsecutiveFails(0);
+            setPausedAutoTrading(false);
+        }
+    }
+
     return (
         <div className="min-h-screen p-6">
             <div className="max-w-7xl mx-auto">
@@ -238,7 +250,12 @@ export const ArbitrageBotDashboard: React.FC = () => {
                             {isRunning ? 'Stop Bot' : 'Start Bot'}
                         </button>
                         <label className="flex items-center gap-3 text-sm text-gray-300 mb-3">
-                            <input type="checkbox" checked={autoTrading} onChange={(e) => setAutoTrading(e.target.checked)} />
+                            <input
+                                type="checkbox"
+                                checked={autoTrading}
+                                onChange={(e) => toggleAutoTrading(e.target.checked)}
+                                disabled={!isRunning}
+                            />
                             Auto Trading Mode
                         </label>
                         <label className="flex items-center gap-3 text-sm text-gray-300 mb-3">
@@ -312,8 +329,8 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                 <button
                                     onClick={() => setActiveTab('opportunities')}
                                     className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'opportunities'
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
                                         }`}
                                 >
                                     Opportunities
@@ -321,8 +338,8 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                 <button
                                     onClick={() => setActiveTab('trades')}
                                     className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'trades'
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
                                         }`}
                                 >
                                     Trades ({detailedTrades.length})

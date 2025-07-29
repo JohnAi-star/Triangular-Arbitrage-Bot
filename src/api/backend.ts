@@ -166,6 +166,19 @@ class BackendAPI {
     }
   }
 
+  async toggleAutoTrading(autoTrading: boolean): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/bot/toggle-auto-trading`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoTrading })
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('Failed to toggle auto-trading:', error);
+      return false;
+    }
+  }
   async getStats(): Promise<BotStats | null> {
     try {
       const response = await fetch(`${this.baseUrl}/api/stats`);
@@ -199,6 +212,10 @@ class BackendAPI {
             console.log('Received opportunities update:', data.data);
           } else if (data.type === 'trade_executed') {
             console.log('Received trade execution:', data.data);
+          } else if (data.type === 'opportunity_executed') {
+            console.log('Received opportunity execution:', data.data);
+          } else if (data.type === 'auto_trading_changed') {
+            console.log('Auto-trading mode changed:', data.data);
           }
           
           onMessage(data);
