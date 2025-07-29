@@ -82,9 +82,25 @@ export const ArbitrageBotDashboard: React.FC = () => {
         console.log('Setting up WebSocket connection...');
         backendAPI.connectWebSocket((data: any) => {
             console.log('WebSocket message received:', data);
-            if (data.type === 'opportunities_update') {
+            if (data.type === 'opportunities_update' || data.type === 'opportunities') {
                 console.log('Updating opportunities:', data.data);
-                setOpportunities(data.data);
+                const formattedOpportunities = data.data.map((opp: any) => ({
+                    id: opp.id,
+                    exchange: opp.exchange,
+                    trianglePath: opp.trianglePath || opp.path,
+                    profitPercentage: opp.profitPercentage || opp.profit_pct,
+                    profitAmount: opp.profitAmount || opp.profit_amount,
+                    volume: opp.volume,
+                    status: opp.status || 'detected',
+                    timestamp: opp.timestamp
+                }));
+                setOpportunities(formattedOpportunities);
+
+                // Update stats
+                setStats(prev => ({
+                    ...prev,
+                    opportunitiesFound: formattedOpportunities.length
+                }));
             } else if (data.type === 'opportunity_executed') {
                 const executed = data.data as ArbitrageOpportunity;
                 if (executed.status === 'completed' || executed.status === 'failed') {

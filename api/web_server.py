@@ -205,23 +205,30 @@ class ArbitrageWebServer:
                         {
                             "id": f"opp_{int(time.time()*1000)}_{i}",
                             "exchange": opp.exchange,
-                            "path": " → ".join(opp.triangle_path[:3]),
-                            "profit_pct": round(opp.profit_percentage, 4),
-                            "profit_amount": round(opp.profit_amount, 4),
+                            "trianglePath": " → ".join(opp.triangle_path[:3]),
+                            "profitPercentage": round(opp.profit_percentage, 4),
+                            "profitAmount": round(opp.profit_amount, 4),
                             "volume": opp.initial_amount,
+                            "status": "detected",
                             "timestamp": datetime.now().isoformat()
                         }
                         for i, opp in enumerate(opportunities)
-                        if opp.profit_percentage >= self.detector.min_profit_pct
+                        if abs(opp.profit_percentage) >= 0.05  # Show opportunities >= 0.05%
                     ][:200]  # Keep only latest 200 opportunities
                     
                     self.stats['opportunitiesFound'] = len(self.opportunities)
-                    await self.websocket_manager.broadcast("opportunities", self.opportunities)
+                    
+                    # Broadcast opportunities update
+                    await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
+                    
+                    # Also log for debugging
+                    if self.opportunities:
+                        self.logger.info(f"Found {len(self.opportunities)} opportunities, broadcasting to {len(self.websocket_manager.connections)} clients")
                 
-                await asyncio.sleep(15)  # Scan every 15 seconds
+                await asyncio.sleep(10)  # Scan every 10 seconds
             except Exception as e:
                 self.logger.error(f"Error in scanning loop: {str(e)}", exc_info=True)
-                await asyncio.sleep(30)  # Longer delay on error
+                await asyncio.sleep(15)  # Shorter delay on error
 
     def run(self, host: str = "0.0.0.0", port: int = 8000):
         self.logger.info(f"Starting web server on {host}:{port}")

@@ -117,6 +117,12 @@ class BackendAPI {
           console.log('Raw WebSocket message:', event.data);
           const data = JSON.parse(event.data);
           console.log('Parsed WebSocket data:', data);
+          
+          // Handle different message types
+          if (data.type === 'opportunities_update') {
+            console.log('Received opportunities update:', data.data);
+          }
+          
           onMessage(data);
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);
