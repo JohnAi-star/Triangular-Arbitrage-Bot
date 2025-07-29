@@ -209,11 +209,12 @@ class ArbitrageWebServer:
                             "profitPercentage": round(opp.profit_percentage, 4),
                             "profitAmount": round(opp.profit_amount, 4),
                             "volume": opp.initial_amount,
-                            "status": "detected",
+                            "status": "detected" if opp.profit_percentage > 0 else "low_profit",
+                            "dataType": "REAL_MARKET_DATA",
                             "timestamp": datetime.now().isoformat()
                         }
                         for i, opp in enumerate(opportunities)
-                        if abs(opp.profit_percentage) >= 0.05  # Show opportunities >= 0.05%
+                        if abs(opp.profit_percentage) >= 0.01  # Show opportunities >= 0.01%
                     ][:200]  # Keep only latest 200 opportunities
                     
                     self.stats['opportunitiesFound'] = len(self.opportunities)

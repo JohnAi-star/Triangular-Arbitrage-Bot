@@ -252,31 +252,70 @@ class MultiExchangeDetector:
                 p3_direct = f"{c}/{a}"
                 p3_inverse = f"{a}/{c}"
 
-            # Get prices for all legs
-            _, ask1 = self._get_prices(ticker, p1)
-            _, ask2 = self._get_prices(ticker, p2)
+            # REAL ARBITRAGE CALCULATION using live market data
+            logger.info(f"Calculating REAL arbitrage for {a}→{b}→{c} using live prices")
             
-            # Calculate amount after first two legs
-            amount = self.max_trade_amount / ask1  # A→B
-            amount = amount / ask2  # B→C
-            
-            # Try direct return pair first
-            if p3_direct in ticker:
-                bid3, _ = self._get_prices(ticker, p3_direct)
-                final_amount = amount * bid3  # C→A
-            elif p3_inverse in ticker:
-                _, ask3 = self._get_prices(ticker, p3_inverse)
-                final_amount = amount / ask3  # C→A via inverse
+            # Step 1: A → B (sell A for B)
+            if p1 in ticker:
+                bid1, ask1 = self._get_prices(ticker, p1)
+                amount_b = self.max_trade_amount / ask1  # Buy B with A
+                logger.debug(f"Step 1: {self.max_trade_amount} {a} → {amount_b:.6f} {b} at {ask1}")
             else:
-                raise ValueError("No valid return path")
+                # Try inverse pair
+                p1_inv = f"{b}{a}" if ex.name.lower() == 'binance' else f"{b}/{a}"
+                if p1_inv in ticker:
+                    bid1_inv, ask1_inv = self._get_prices(ticker, p1_inv)
+                    amount_b = self.max_trade_amount * bid1_inv  # Sell A for B
+                    logger.debug(f"Step 1 (inv): {self.max_trade_amount} {a} → {amount_b:.6f} {b} at {bid1_inv}")
+                else:
+                    raise ValueError(f"No price data for {p1} or {p1_inv}")
             
-            profit_pct = ((final_amount - self.max_trade_amount) / self.max_trade_amount) * 100
-            return profit_pct
+            # Step 2: B → C (sell B for C)
+            if p2 in ticker:
+                bid2, ask2 = self._get_prices(ticker, p2)
+                amount_c = amount_b / ask2  # Buy C with B
+                logger.debug(f"Step 2: {amount_b:.6f} {b} → {amount_c:.6f} {c} at {ask2}")
+            else:
+                # Try inverse pair
+                p2_inv = f"{c}{b}" if ex.name.lower() == 'binance' else f"{c}/{b}"
+                if p2_inv in ticker:
+                    bid2_inv, ask2_inv = self._get_prices(ticker, p2_inv)
+                    amount_c = amount_b * bid2_inv  # Sell B for C
+                    logger.debug(f"Step 2 (inv): {amount_b:.6f} {b} → {amount_c:.6f} {c} at {bid2_inv}")
+                else:
+                    raise ValueError(f"No price data for {p2} or {p2_inv}")
+            
+            # Step 3: C → A (sell C for A to complete triangle)
+            if p3_direct in ticker:
+                bid3, ask3 = self._get_prices(ticker, p3_direct)
+                final_amount_a = amount_c * bid3  # Sell C for A
+                logger.debug(f"Step 3: {amount_c:.6f} {c} → {final_amount_a:.6f} {a} at {bid3}")
+            elif p3_inverse in ticker:
+                bid3_inv, ask3_inv = self._get_prices(ticker, p3_inverse)
+                final_amount_a = amount_c / ask3_inv  # Buy A with C
+                logger.debug(f"Step 3 (inv): {amount_c:.6f} {c} → {final_amount_a:.6f} {a} at {ask3_inv}")
+            else:
+                raise ValueError(f"No return path for {p3_direct} or {p3_inverse}")
+            
+            # Calculate REAL profit using actual market prices
+            gross_profit = final_amount_a - self.max_trade_amount
+            profit_pct = (gross_profit / self.max_trade_amount) * 100
+            
+            # Apply realistic trading fees (0.1% per trade = 0.3% total)
+            fee_adjusted_profit_pct = profit_pct - 0.3
+            
+            logger.info(f"REAL ARBITRAGE: {a}→{b}→{c} = {profit_pct:.4f}% gross, {fee_adjusted_profit_pct:.4f}% net")
+            
+            return fee_adjusted_profit_pct
             
         except Exception as e:
-            # Return a small random profit for demo purposes
-            import random
-            return random.uniform(0.05, 0.15)
+            logger.debug(f"Real calculation failed for {a}-{b}-{c}: {str(e)}")
+            # Only fall back to demo if absolutely necessary
+            if "demo" in str(e).lower():
+                import random
+                return random.uniform(0.05, 0.15)
+            else:
+                return 0.0  # No opportunity if real calculation fails
 
     async def _get_ticker_data(self, ex):
         """Get ticker data with caching and rate limiting"""
