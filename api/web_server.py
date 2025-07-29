@@ -16,6 +16,7 @@ import logging
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from utils.trade_logger import get_trade_logger
 import uvicorn
 
 # Logger setup
@@ -99,6 +100,7 @@ class ArbitrageWebServer:
         self.exchange_manager = None
         self.detector = None
         self.executor = None
+        self.trade_logger = get_trade_logger(self.websocket_manager)
         self.running = False
         self.opportunities: List[Dict[str, Any]] = []
         self.stats = {
@@ -158,6 +160,9 @@ class ArbitrageWebServer:
                         'paper_trading': config.paperTrading
                     }
                 )
+                
+                # Set WebSocket manager for trade logging
+                self.executor.set_websocket_manager(self.websocket_manager)
 
                 self.running = True
                 asyncio.create_task(self._scanning_loop())
@@ -183,6 +188,16 @@ class ArbitrageWebServer:
         @app.get("/api/opportunities")
         async def get_opportunities():
             return self.opportunities
+        
+        @app.get("/api/trades")
+        async def get_trades():
+            """Get recent detailed trade logs."""
+            return self.trade_logger.get_recent_trades(50)
+        
+        @app.get("/api/trade-stats")
+        async def get_trade_stats():
+            """Get comprehensive trade statistics."""
+            return self.trade_logger.get_trade_statistics()
 
         @app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):

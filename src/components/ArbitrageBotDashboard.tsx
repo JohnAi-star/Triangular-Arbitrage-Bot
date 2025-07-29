@@ -12,9 +12,12 @@ import {
     AlertTriangle,
     CheckCircle,
     XCircle,
-    RotateCcw
+    RotateCcw,
+    BarChart3,
+    Clock,
+    TrendingDown
 } from 'lucide-react';
-import { backendAPI, ArbitrageOpportunity, BotStats } from '../api/backend';
+import { backendAPI, ArbitrageOpportunity, BotStats, DetailedTradeLog, TradeStatistics } from '../api/backend';
 
 interface AutoTradeLog {
     id: string;
@@ -47,7 +50,10 @@ export const ArbitrageBotDashboard: React.FC = () => {
 
     const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>([]);
     const [autoTradeLogs, setAutoTradeLogs] = useState<AutoTradeLog[]>([]);
+    const [detailedTrades, setDetailedTrades] = useState<DetailedTradeLog[]>([]);
+    const [tradeStats, setTradeStats] = useState<TradeStatistics | null>(null);
     const [selectedOpportunity, setSelectedOpportunity] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<'opportunities' | 'trades'>('opportunities');
 
     const [stats, setStats] = useState<BotStats>({
         opportunitiesFound: 0,
@@ -136,10 +142,29 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         setConsecutiveFails(0);
                     }
                 }
+            } else if (data.type === 'trade_executed') {
+                // Refresh detailed trades when a new trade is executed
+                fetchDetailedTrades();
+                fetchTradeStats();
             }
         });
+
+        // Initial data fetch
+        fetchDetailedTrades();
+        fetchTradeStats();
+
         return () => backendAPI.disconnectWebSocket();
     }, [maxConsecutiveFails]);
+
+    const fetchDetailedTrades = async () => {
+        const trades = await backendAPI.getTrades();
+        setDetailedTrades(trades);
+    };
+
+    const fetchTradeStats = async () => {
+        const stats = await backendAPI.getTradeStats();
+        setTradeStats(stats);
+    };
 
     const toggleBot = async () => {
         if (!isRunning) {
@@ -282,37 +307,167 @@ export const ArbitrageBotDashboard: React.FC = () => {
                     {/* Opportunities Table */}
                     <div className="lg:col-span-3 bg-slate-800/50 p-6 rounded-xl border border-slate-700">
                         <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                            <DollarSign className="w-5 h-5" /> Arbitrage Opportunities
+                            <DollarSign className="w-5 h-5" />
+                            <div className="flex gap-4">
+                                <button
+                                    onClick={() => setActiveTab('opportunities')}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'opportunities'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                                        }`}
+                                >
+                                    Opportunities
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab('trades')}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === 'trades'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-slate-700 text-gray-300 hover:bg-slate-600'
+                                        }`}
+                                >
+                                    Trades ({detailedTrades.length})
+                                </button>
+                            </div>
                         </h3>
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
-                                <thead>
-                                    <tr className="border-b border-slate-700 text-gray-300 text-sm">
-                                        <th>Status</th><th>Exchange</th><th>Triangle Path</th><th>Profit %</th><th>Profit $</th><th>Volume</th><th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-700">
-                                    {opportunities.map(o => (
-                                        <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className="hover:bg-slate-700/30">
-                                            <td className="p-2">{getStatusIcon(o.status)}</td>
-                                            <td className="p-2">{o.exchange}</td>
-                                            <td className="p-2 text-sm">{o.trianglePath}</td>
-                                            <td className="p-2 text-green-400">{o.profitPercentage.toFixed(4)}%</td>
-                                            <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
-                                            <td className="p-2">${o.volume.toFixed(0)}</td>
-                                            <td>
-                                                {o.status === 'detected' && (
-                                                    <button onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }} className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg">Execute</button>
-                                                )}
-                                            </td>
+
+                        {activeTab === 'opportunities' && (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead>
+                                        <tr className="border-b border-slate-700 text-gray-300 text-sm">
+                                            <th className="text-left p-2">Status</th>
+                                            <th className="text-left p-2">Exchange</th>
+                                            <th className="text-left p-2">Triangle Path</th>
+                                            <th className="text-left p-2">Profit %</th>
+                                            <th className="text-left p-2">Profit $</th>
+                                            <th className="text-left p-2">Volume</th>
+                                            <th className="text-left p-2">Action</th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            {opportunities.length === 0 && (
-                                <div className="text-center text-gray-400 py-8"></div>
-                            )}
-                        </div>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-700">
+                                        {opportunities.map(o => (
+                                            <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className="hover:bg-slate-700/30 cursor-pointer">
+                                                <td className="p-2">{getStatusIcon(o.status)}</td>
+                                                <td className="p-2 text-white">{o.exchange}</td>
+                                                <td className="p-2 text-sm text-gray-300">{o.trianglePath}</td>
+                                                <td className="p-2 text-green-400">{o.profitPercentage.toFixed(4)}%</td>
+                                                <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
+                                                <td className="p-2 text-gray-300">${o.volume.toFixed(0)}</td>
+                                                <td className="p-2">
+                                                    {o.status === 'detected' && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
+                                                            className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded-lg"
+                                                        >
+                                                            Execute
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                                {opportunities.length === 0 && (
+                                    <div className="text-center text-gray-400 py-8">No opportunities detected</div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'trades' && (
+                            <div>
+                                {/* Trade Statistics */}
+                                {tradeStats && (
+                                    <div className="grid grid-cols-4 gap-4 mb-6 p-4 bg-slate-700/30 rounded-lg">
+                                        <div className="text-center">
+                                            <div className="text-2xl font-bold text-white">{tradeStats.total_trades}</div>
+                                            <div className="text-xs text-gray-400">Total Trades</div>
+                                        </div>
+                                        <div className="text-center">
+                                            <div className="text-2xl font-bold text-green-400">{tradeStats.success_rate.toFixed(1)}%</div>
+                                            <div className="text-xs text-gray-400">Success Rate</div>
+                                        </div>
+                                        <div className="text-center">
+                                            <div className={`text-2xl font-bold ${tradeStats.total_profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                ${tradeStats.total_profit.toFixed(4)}
+                                            </div>
+                                            <div className="text-xs text-gray-400">Net P&L</div>
+                                        </div>
+                                        <div className="text-center">
+                                            <div className="text-2xl font-bold text-yellow-400">${tradeStats.total_fees.toFixed(4)}</div>
+                                            <div className="text-xs text-gray-400">Total Fees</div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Detailed Trades Table */}
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead>
+                                            <tr className="border-b border-slate-700 text-gray-300 text-xs">
+                                                <th className="text-left p-2">Status</th>
+                                                <th className="text-left p-2">Time</th>
+                                                <th className="text-left p-2">Exchange</th>
+                                                <th className="text-left p-2">Triangle</th>
+                                                <th className="text-left p-2">IN</th>
+                                                <th className="text-left p-2">OUT</th>
+                                                <th className="text-left p-2">Net P&L</th>
+                                                <th className="text-left p-2">Fees</th>
+                                                <th className="text-left p-2">Duration</th>
+                                                <th className="text-left p-2">Steps</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-700">
+                                            {detailedTrades.map(trade => (
+                                                <tr key={trade.trade_id} className="hover:bg-slate-700/30">
+                                                    <td className="p-2">
+                                                        <span className="text-lg">{trade.status_emoji}</span>
+                                                    </td>
+                                                    <td className="p-2 text-gray-300">
+                                                        {new Date(trade.timestamp).toLocaleTimeString()}
+                                                    </td>
+                                                    <td className="p-2 text-white">{trade.exchange}</td>
+                                                    <td className="p-2 text-gray-300 text-xs">
+                                                        {trade.triangle_path.join(' → ')}
+                                                    </td>
+                                                    <td className="p-2 text-blue-400">
+                                                        {trade.initial_amount.toFixed(4)} {trade.base_currency}
+                                                    </td>
+                                                    <td className="p-2 text-blue-400">
+                                                        {trade.final_amount.toFixed(4)} {trade.base_currency}
+                                                    </td>
+                                                    <td className={`p-2 font-medium ${trade.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                        {trade.net_pnl >= 0 ? '+' : ''}{trade.net_pnl.toFixed(6)}
+                                                        <div className="text-xs text-gray-400">
+                                                            ({trade.actual_profit_percentage.toFixed(4)}%)
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-2 text-yellow-400">
+                                                        {trade.total_fees_paid.toFixed(6)}
+                                                    </td>
+                                                    <td className="p-2 text-gray-300">
+                                                        <div className="flex items-center gap-1">
+                                                            <Clock className="w-3 h-3" />
+                                                            {trade.total_duration_ms.toFixed(0)}ms
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-2 text-gray-400">
+                                                        {trade.steps.length} steps
+                                                        {trade.error_message && (
+                                                            <div className="text-red-400 text-xs mt-1">
+                                                                Failed at step {trade.failed_at_step}
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    {detailedTrades.length === 0 && (
+                                        <div className="text-center text-gray-400 py-8">No trades executed yet</div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
 

@@ -19,6 +19,56 @@ export interface ArbitrageOpportunity {
   steps: TradeStep[];
 }
 
+export interface DetailedTradeLog {
+  trade_id: string;
+  timestamp: string;
+  exchange: string;
+  triangle_path: string[];
+  status: 'success' | 'failed' | 'partial';
+  status_emoji: string;
+  initial_amount: number;
+  final_amount: number;
+  base_currency: string;
+  expected_profit_amount: number;
+  expected_profit_percentage: number;
+  actual_profit_amount: number;
+  actual_profit_percentage: number;
+  total_fees_paid: number;
+  total_slippage: number;
+  net_pnl: number;
+  total_duration_ms: number;
+  steps: TradeStepDetail[];
+  error_message?: string;
+  failed_at_step?: number;
+}
+
+export interface TradeStepDetail {
+  step_number: number;
+  symbol: string;
+  direction: 'buy' | 'sell';
+  expected_price: number;
+  actual_price: number;
+  expected_quantity: number;
+  actual_quantity: number;
+  expected_amount_out: number;
+  actual_amount_out: number;
+  fees_paid: number;
+  execution_time_ms: number;
+  slippage_percentage: number;
+}
+
+export interface TradeStatistics {
+  total_trades: number;
+  successful_trades: number;
+  failed_trades: number;
+  success_rate: number;
+  total_profit: number;
+  total_fees: number;
+  average_duration_ms: number;
+  best_trade: DetailedTradeLog | null;
+  worst_trade: DetailedTradeLog | null;
+}
+
 export interface TradeStep {
   symbol: string;
   side: 'buy' | 'sell';
@@ -78,6 +128,32 @@ class BackendAPI {
     }
   }
 
+  async getTrades(): Promise<DetailedTradeLog[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/trades`);
+      if (response.ok) {
+        return await response.json();
+      }
+      return [];
+    } catch (error) {
+      console.error('Failed to fetch trades:', error);
+      return [];
+    }
+  }
+
+  async getTradeStats(): Promise<TradeStatistics | null> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/trade-stats`);
+      if (response.ok) {
+        return await response.json();
+      }
+      return null;
+    } catch (error) {
+      console.error('Failed to fetch trade stats:', error);
+      return null;
+    }
+  }
+
   async executeOpportunity(opportunityId: string): Promise<boolean> {
     try {
       const response = await fetch(`${this.baseUrl}/api/opportunities/${opportunityId}/execute`, {
@@ -121,6 +197,8 @@ class BackendAPI {
           // Handle different message types
           if (data.type === 'opportunities_update') {
             console.log('Received opportunities update:', data.data);
+          } else if (data.type === 'trade_executed') {
+            console.log('Received trade execution:', data.data);
           }
           
           onMessage(data);
