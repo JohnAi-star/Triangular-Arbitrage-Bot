@@ -72,6 +72,7 @@ def main():
     - 🔴 LIVE TRADING ONLY - NO PAPER MODE
     - Zero-fee pair prioritization
     - Comprehensive logging and statistics
+    - Real-time WebSocket updates in GUI
     
     Starting GUI...
     """)
@@ -88,7 +89,9 @@ def main():
         # Create and run GUI application
         app = ArbitrageBotGUI()
         
-        # Start web server for React frontend integration
+        print("✅ GUI initialized with WebSocket manager")
+        print("✅ Real-time opportunity updates enabled")
+        
         app.run()
         return 0
         

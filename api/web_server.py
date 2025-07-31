@@ -165,7 +165,7 @@ class ArbitrageWebServer:
                 from arbitrage.multi_exchange_detector import MultiExchangeDetector
                 self.detector = MultiExchangeDetector(
                     self.exchange_manager,
-                    self.websocket_manager,
+                    self.websocket_manager,  # Pass WebSocket manager correctly
                     {
                         'min_profit_percentage': max(0.01, config.minProfitPercentage),  # Minimum 0.01%
                         'max_trade_amount': config.maxTradeAmount
@@ -383,9 +383,13 @@ class ArbitrageWebServer:
         try:
             profitable_opportunities = [
                 opp for opp in opportunities 
-                if opp.profit_percentage >= 0.05  # Execute opportunities above 0.05%
+                if hasattr(opp, 'is_profitable') and opp.is_profitable and opp.profit_percentage >= 0.05
             ]
             
+            if not profitable_opportunities:
+                logger.debug("No profitable opportunities found for auto-execution")
+                return
+                
             # Execute top opportunities
             for opportunity in profitable_opportunities[:3]:  # Execute top 3 opportunities
                 try:

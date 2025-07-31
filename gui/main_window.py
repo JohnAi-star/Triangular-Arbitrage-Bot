@@ -12,6 +12,8 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
+from utils.websocket_manager import WebSocketManager
+from utils.trade_logger import get_trade_logger
 
 from config.config import Config
 from config.exchanges_config import SUPPORTED_EXCHANGES
@@ -27,6 +29,13 @@ class ArbitrageBotGUI:
     def __init__(self):
         self.logger = setup_logger('GUI')
         
+        # Initialize WebSocket manager for real-time updates
+        self.websocket_manager = WebSocketManager()
+        self.websocket_manager.run_in_background()
+        
+        # Initialize trade logger with WebSocket manager
+        self.trade_logger = get_trade_logger(self.websocket_manager)
+        
         # Initialize components
         self.exchange_manager = MultiExchangeManager()
         self.detector = None
@@ -41,10 +50,62 @@ class ArbitrageBotGUI:
         # Setup GUI
         self.setup_gui()
         
+        # Add GUI callback for WebSocket updates
+        self.websocket_manager.add_callback(self._handle_websocket_message)
+        
         # Start async event loop in separate thread
         self.loop = asyncio.new_event_loop()
         self.async_thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self.async_thread.start()
+    
+    def _handle_websocket_message(self, message: Dict[str, Any]):
+        """Handle WebSocket messages in the GUI."""
+        try:
+            event_type = message.get('type')
+            data = message.get('data')
+            
+            if event_type == 'opportunities_update':
+                # Update opportunities in GUI thread
+                self.root.after(0, lambda: self._update_opportunities_from_websocket(data))
+            elif event_type == 'trade_executed':
+                # Update trade history in GUI thread
+                self.root.after(0, lambda: self._update_trade_history_from_websocket(data))
+            
+            self.logger.info(f"Processed WebSocket message: {event_type}")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling WebSocket message: {e}")
+    
+    def _update_opportunities_from_websocket(self, opportunities_data):
+        """Update opportunities display from WebSocket data."""
+        try:
+            if isinstance(opportunities_data, list):
+                # Convert WebSocket data to opportunity objects
+                self.opportunities = []
+                for opp_data in opportunities_data:
+                    # Create a simple opportunity object for display
+                    opportunity = type('Opportunity', (), {
+                        'exchange': opp_data.get('exchange', 'Unknown'),
+                        'triangle_path': opp_data.get('trianglePath', ''),
+                        'profit_percentage': opp_data.get('profitPercentage', 0),
+                        'profit_amount': opp_data.get('profitAmount', 0),
+                        'initial_amount': opp_data.get('volume', 0),
+                        'is_profitable': opp_data.get('profitPercentage', 0) > 0
+                    })()
+                    self.opportunities.append(opportunity)
+                
+                self.logger.info(f"Updated GUI with {len(self.opportunities)} opportunities from WebSocket")
+        except Exception as e:
+            self.logger.error(f"Error updating opportunities from WebSocket: {e}")
+    
+    def _update_trade_history_from_websocket(self, trade_data):
+        """Update trade history from WebSocket data."""
+        try:
+            trade_info = f"Trade executed: {trade_data.get('exchange', 'Unknown')} - "
+            trade_info += f"Profit: {trade_data.get('profitPercentage', 0):.4f}%"
+            self.add_to_trading_history(trade_info)
+        except Exception as e:
+            self.logger.error(f"Error updating trade history from WebSocket: {e}")
     
     def setup_gui(self):
         """Setup the main GUI window."""
@@ -280,11 +341,15 @@ class ArbitrageBotGUI:
                 return
             
             # Initialize detector
-            self.detector = MultiExchangeDetector(self.exchange_manager, None, {
-                'min_profit_percentage': self.min_profit_var.get(),
-                'max_trade_amount': self.max_trade_var.get(),
-                'prioritize_zero_fee': Config.PRIORITIZE_ZERO_FEE
-            })
+            self.detector = MultiExchangeDetector(
+                self.exchange_manager, 
+                self.websocket_manager,
+                {
+                    'min_profit_percentage': self.min_profit_var.get(),
+                    'max_trade_amount': self.max_trade_var.get(),
+                    'prioritize_zero_fee': Config.PRIORITIZE_ZERO_FEE
+                }
+            )
             await self.detector.initialize()
             
             # Initialize executor
@@ -292,6 +357,9 @@ class ArbitrageBotGUI:
                 'auto_trading': self.auto_trading_var.get(),
                 'paper_trading': self.paper_trading_var.get()
             })
+            
+            # Set WebSocket manager for trade executor
+            self.executor.set_websocket_manager(self.websocket_manager)
             
             self.status_var.set("Bot running - scanning for opportunities...")
             
@@ -362,29 +430,32 @@ class ArbitrageBotGUI:
     
     def update_opportunities_display(self):
         """Update the opportunities treeview."""
-        # Clear existing items
-        for item in self.opportunities_tree.get_children():
-            self.opportunities_tree.delete(item)
-        
-        # Add current opportunities
-        for i, opportunity in enumerate(self.opportunities[:Config.MAX_OPPORTUNITIES_DISPLAY]):
-            values = (
-                opportunity.exchange if hasattr(opportunity, 'exchange') else 'Multi',
-                opportunity.triangle_path,
-                f"{opportunity.profit_percentage:.4f}%",
-                f"${opportunity.profit_amount:.6f}",
-                f"${opportunity.initial_amount:.2f}",
-                "Execute"
-            )
+        try:
+            # Clear existing items
+            for item in self.opportunities_tree.get_children():
+                self.opportunities_tree.delete(item)
             
-            # Color code by profitability
-            tags = ("profitable",) if opportunity.is_profitable else ("unprofitable",)
+            # Add current opportunities
+            for i, opportunity in enumerate(self.opportunities[:Config.MAX_OPPORTUNITIES_DISPLAY]):
+                values = (
+                    opportunity.exchange if hasattr(opportunity, 'exchange') else 'Multi',
+                    opportunity.triangle_path,
+                    f"{opportunity.profit_percentage:.4f}%",
+                    f"${opportunity.profit_amount:.6f}",
+                    f"${opportunity.initial_amount:.2f}",
+                    "Execute"
+                )
+                
+                # Color code by profitability
+                tags = ("profitable",) if opportunity.is_profitable else ("unprofitable",)
+                
+                self.opportunities_tree.insert("", "end", values=values, tags=tags)
             
-            self.opportunities_tree.insert("", "end", values=values, tags=tags)
-        
-        # Configure tags
-        self.opportunities_tree.tag_configure("profitable", background="lightgreen")
-        self.opportunities_tree.tag_configure("unprofitable", background="lightcoral")
+            # Configure tags
+            self.opportunities_tree.tag_configure("profitable", background="lightgreen")
+            self.opportunities_tree.tag_configure("unprofitable", background="lightcoral")
+        except Exception as e:
+            self.logger.error(f"Error updating opportunities display: {e}")
     
     def update_statistics(self):
         """Update statistics display."""
@@ -427,27 +498,31 @@ class ArbitrageBotGUI:
     
     def on_opportunity_double_click(self, event):
         """Handle double-click on opportunity."""
-        selection = self.opportunities_tree.selection()
-        if selection:
-            item = self.opportunities_tree.item(selection[0])
-            index = self.opportunities_tree.index(selection[0])
-            
-            if index < len(self.opportunities):
-                opportunity = self.opportunities[index]
-                self.show_opportunity_details(opportunity)
+        try:
+            selection = self.opportunities_tree.selection()
+            if selection:
+                item = self.opportunities_tree.item(selection[0])
+                index = self.opportunities_tree.index(selection[0])
+                
+                if index < len(self.opportunities):
+                    opportunity = self.opportunities[index]
+                    self.show_opportunity_details(opportunity)
+        except Exception as e:
+            self.logger.error(f"Error handling opportunity double click: {e}")
     
     def show_opportunity_details(self, opportunity: ArbitrageOpportunity):
         """Show detailed information about an opportunity."""
-        details_window = ctk.CTkToplevel(self.root)
-        details_window.title("Opportunity Details")
-        details_window.geometry("600x400")
-        
-        # Create scrollable text widget
-        text_widget = tk.Text(details_window, wrap=tk.WORD, padx=10, pady=10)
-        text_widget.pack(fill="both", expand=True)
-        
-        # Insert opportunity details
-        details = f"""
+        try:
+            details_window = ctk.CTkToplevel(self.root)
+            details_window.title("Opportunity Details")
+            details_window.geometry("600x400")
+            
+            # Create scrollable text widget
+            text_widget = tk.Text(details_window, wrap=tk.WORD, padx=10, pady=10)
+            text_widget.pack(fill="both", expand=True)
+            
+            # Insert opportunity details
+            details = f"""
 Arbitrage Opportunity Details
 ============================
 
@@ -464,80 +539,103 @@ Financial Details:
 
 Trade Steps:
 """
-        
-        for i, step in enumerate(opportunity.steps, 1):
-            details += f"{i}. {step.side.upper()} {step.quantity:.6f} {step.symbol} at {step.price:.8f}\n"
-        
-        details += f"""
+            
+            for i, step in enumerate(opportunity.steps, 1):
+                details += f"{i}. {step.side.upper()} {step.quantity:.6f} {step.symbol} at {step.price:.8f}\n"
+            
+            details += f"""
 Status: {opportunity.status.value}
 Detected At: {opportunity.detected_at.strftime('%Y-%m-%d %H:%M:%S')}
 """
-        
-        text_widget.insert(tk.END, details)
-        text_widget.configure(state="disabled")
-        
-        # Execute button
-        execute_btn = ctk.CTkButton(
-            details_window,
-            text="Execute This Opportunity",
-            command=lambda: self.execute_opportunity(opportunity, details_window)
-        )
-        execute_btn.pack(pady=10)
+            
+            text_widget.insert(tk.END, details)
+            text_widget.configure(state="disabled")
+            
+            # Execute button
+            execute_btn = ctk.CTkButton(
+                details_window,
+                text="Execute This Opportunity",
+                command=lambda: self.execute_opportunity(opportunity, details_window)
+            )
+            execute_btn.pack(pady=10)
+        except Exception as e:
+            self.logger.error(f"Error showing opportunity details: {e}")
     
     def execute_selected_opportunity(self):
         """Execute the selected opportunity."""
-        selection = self.opportunities_tree.selection()
-        if not selection:
-            messagebox.showwarning("Warning", "Please select an opportunity to execute")
-            return
-        
-        index = self.opportunities_tree.index(selection[0])
-        if index < len(self.opportunities):
-            opportunity = self.opportunities[index]
+        try:
+            selection = self.opportunities_tree.selection()
+            if not selection:
+                messagebox.showwarning("Warning", "Please select an opportunity to execute")
+                return
+            
+            index = self.opportunities_tree.index(selection[0])
+            if index < len(self.opportunities):
+                opportunity = self.opportunities[index]
+                asyncio.run_coroutine_threadsafe(
+                    self.executor.execute_arbitrage(opportunity),
+                    self.loop
+                )
+                self.add_to_trading_history(f"Manual execution: {opportunity}")
+        except Exception as e:
+            self.logger.error(f"Error executing selected opportunity: {e}")
+            messagebox.showerror("Error", f"Failed to execute opportunity: {str(e)}")
+    
+    def execute_opportunity(self, opportunity: ArbitrageOpportunity, window=None):
+        """Execute a specific opportunity."""
+        try:
+            if window:
+                window.destroy()
+            
             asyncio.run_coroutine_threadsafe(
                 self.executor.execute_arbitrage(opportunity),
                 self.loop
             )
             self.add_to_trading_history(f"Manual execution: {opportunity}")
-    
-    def execute_opportunity(self, opportunity: ArbitrageOpportunity, window=None):
-        """Execute a specific opportunity."""
-        if window:
-            window.destroy()
-        
-        asyncio.run_coroutine_threadsafe(
-            self.executor.execute_arbitrage(opportunity),
-            self.loop
-        )
-        self.add_to_trading_history(f"Manual execution: {opportunity}")
+        except Exception as e:
+            self.logger.error(f"Error executing opportunity: {e}")
+            messagebox.showerror("Error", f"Failed to execute opportunity: {str(e)}")
     
     def add_to_trading_history(self, message: str):
         """Add a message to the trading history."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.trading_history.insert(0, f"[{timestamp}] {message}")
-        
-        # Limit history size
-        if self.trading_history.size() > 100:
-            self.trading_history.delete(tk.END)
+        try:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            self.trading_history.insert(0, f"[{timestamp}] {message}")
+            
+            # Limit history size
+            if self.trading_history.size() > 100:
+                self.trading_history.delete(tk.END)
+        except Exception as e:
+            self.logger.error(f"Error adding to trading history: {e}")
     
     def clear_trading_history(self):
         """Clear the trading history."""
-        self.trading_history.delete(0, tk.END)
+        try:
+            self.trading_history.delete(0, tk.END)
+        except Exception as e:
+            self.logger.error(f"Error clearing trading history: {e}")
     
     def run(self):
         """Start the GUI application."""
         try:
             self.root.mainloop()
+        except Exception as e:
+            self.logger.error(f"Error running GUI: {e}")
         finally:
             # Cleanup
             self.running = False
+            if hasattr(self, 'websocket_manager'):
+                self.websocket_manager.stop()
             if hasattr(self, 'loop'):
                 self.loop.call_soon_threadsafe(self.loop.stop)
 
 def main():
     """Main entry point for the GUI application."""
-    app = ArbitrageBotGUI()
-    app.run()
+    try:
+        app = ArbitrageBotGUI()
+        app.run()
+    except Exception as e:
+        print(f"Fatal error: {e}")
 
 if __name__ == "__main__":
     main()

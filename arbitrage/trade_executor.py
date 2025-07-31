@@ -48,7 +48,11 @@ class TradeExecutor:
     
     def set_websocket_manager(self, websocket_manager):
         """Set WebSocket manager for trade broadcasting."""
-        self.detailed_trade_logger = get_trade_logger(websocket_manager)
+        if websocket_manager:
+            self.detailed_trade_logger = get_trade_logger(websocket_manager)
+            self.logger.info("✅ WebSocket manager set for trade executor")
+        else:
+            self.logger.warning("⚠️ No WebSocket manager provided to trade executor")
         
     async def _verify_sufficient_balance(self, exchange, base_currency: str, required_amount: float) -> bool:
         """Verify sufficient balance for trading."""
@@ -196,6 +200,15 @@ class TradeExecutor:
     
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
         """Execute the triangular arbitrage trade."""
+        # Validate opportunity profitability before execution
+        if hasattr(opportunity, 'is_profitable') and not opportunity.is_profitable:
+            self.logger.info(f"Skipping unprofitable opportunity: {opportunity.profit_percentage:.4f}%")
+            return False
+        
+        if opportunity.profit_percentage < 0.05:  # Minimum 0.05% profit
+            self.logger.info(f"Opportunity skipped: profit {opportunity.profit_percentage:.4f}% below 0.05% threshold")
+            return False
+            
         start_time = datetime.now()
         trade_start_ms = time.time() * 1000
         trade_id = f"trade_{int(trade_start_ms)}_{uuid.uuid4().hex[:8]}"

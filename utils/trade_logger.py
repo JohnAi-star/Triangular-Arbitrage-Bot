@@ -145,6 +145,8 @@ def get_trade_logger(websocket_manager=None) -> TradeLogger:
     global _trade_logger_instance
     if _trade_logger_instance is None:
         _trade_logger_instance = TradeLogger(websocket_manager)
+        print(f"✅ TradeLogger initialized with WebSocket manager: {websocket_manager is not None}")
     elif websocket_manager and not _trade_logger_instance.websocket_manager:
         _trade_logger_instance.websocket_manager = websocket_manager
+        print(f"✅ TradeLogger WebSocket manager updated: {websocket_manager is not None}")
     return _trade_logger_instance

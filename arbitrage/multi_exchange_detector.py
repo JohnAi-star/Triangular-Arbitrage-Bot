@@ -28,6 +28,13 @@ class ArbitrageResult:
     profit_percentage: float
     profit_amount: float
     initial_amount: float
+    net_profit_percent: float = 0.0
+    min_profit_threshold: float = 0.05
+    
+    @property
+    def is_profitable(self) -> bool:
+        """Check if the opportunity is profitable above threshold."""
+        return self.net_profit_percent > self.min_profit_threshold and self.profit_percentage > 0
 
 class MultiExchangeDetector:
     def __init__(self, exchange_manager, websocket_manager, config: Dict[str, Any]):
@@ -202,14 +209,19 @@ class MultiExchangeDetector:
             try:
                 profit = await self._calculate_real_triangle_profit(ex, ticker, a, b, c)
                 if profit and profit >= self.min_profit_pct:
-                    results.append(ArbitrageResult(
+                    result = ArbitrageResult(
                         exchange=ex.name,
                         triangle_path=path,
                         profit_percentage=profit,
                         profit_amount=(self.max_trade_amount * profit / 100),
-                        initial_amount=self.max_trade_amount
-                    ))
+                        initial_amount=self.max_trade_amount,
+                        net_profit_percent=profit,
+                        min_profit_threshold=self.min_profit_pct
+                    )
+                    results.append(result)
                     logger.info(f"💰 PROFITABLE: {a}→{b}→{c} = {profit:.4f}% profit")
+                else:
+                    logger.debug(f"Skipped {a}→{b}→{c}: {profit:.4f}% below {self.min_profit_pct}% threshold")
             except Exception as e:
                 logger.debug(f"Skipping triangle {a}-{b}-{c}: {str(e)}")
         
@@ -224,7 +236,7 @@ class MultiExchangeDetector:
             pair2 = f"{b}/{c}"  # B→C  
             pair3 = f"{a}/{c}"  # A→C (for closing the triangle)
 
-            logger.debug(f"🧮 Calculating REAL profit for {a}→{b}→{c}")
+            logger.debug(f"🧮 Calculating REAL profit for {a}→{b}→{c} using pairs: {pair1}, {pair2}, {pair3}")
             
             # Get REAL prices from live market data
             if pair1 not in ticker or pair2 not in ticker or pair3 not in ticker:
@@ -237,40 +249,66 @@ class MultiExchangeDetector:
                 logger.debug(f"Invalid price data for {a}-{b}-{c}")
                 return 0.0
             
-            # Step 1: A → B (sell A for B) 
-            price1 = float(t1['bid'])  # Sell A, get B
-            if price1 <= 0:
-                return 0.0
-            amount_b = self.max_trade_amount / price1
+            # Extract and validate prices
+            price1 = float(t1['bid'])  # A/B bid (sell A for B)
+            price2 = float(t2['bid'])  # B/C bid (sell B for C)
+            price3 = float(t3['ask'])  # A/C ask (buy A with C)
             
-            # Step 2: B → C (sell B for C)  
-            price2 = float(t2['bid'])  # Sell B, get C
-            if price2 <= 0:
+            if price1 <= 0 or price2 <= 0 or price3 <= 0:
+                logger.debug(f"Invalid prices: {price1}, {price2}, {price3}")
                 return 0.0
-            amount_c = amount_b * price2
             
-            # Step 3: C → A (buy A with C to complete triangle)
-            price3 = float(t3['ask'])  # Buy A with C
-            if price3 <= 0:
+            # CORRECTED ARBITRAGE CALCULATION
+            start_amount = self.max_trade_amount
+            
+            # Step 1: A → B (sell A for B)
+            # If we have 100 A and A/B = 0.5, we get 100 * 0.5 = 50 B
+            amount_after_step1 = start_amount * price1
+            logger.debug(f"Step 1: {start_amount:.6f} {a} → {amount_after_step1:.6f} {b} (price: {price1:.8f})")
+            
+            # Step 2: B → C (sell B for C)
+            # If we have 50 B and B/C = 2000, we get 50 * 2000 = 100000 C
+            amount_after_step2 = amount_after_step1 * price2
+            logger.debug(f"Step 2: {amount_after_step1:.6f} {b} → {amount_after_step2:.6f} {c} (price: {price2:.8f})")
+            
+            # Step 3: C → A (buy A with C)
+            # If we have 100000 C and A/C = 1000, we can buy 100000 / 1000 = 100 A
+            final_amount = amount_after_step2 / price3
+            logger.debug(f"Step 3: {amount_after_step2:.6f} {c} → {final_amount:.6f} {a} (price: {price3:.8f})")
+            
+            # Calculate profit percentage
+            gross_profit = final_amount - start_amount
+            profit_pct = (gross_profit / start_amount) * 100
+            
+            logger.debug(f"Calculation: {start_amount:.6f} {a} → {final_amount:.6f} {a} = {profit_pct:.4f}% profit")
+            
+            # SANITY CHECK: Cap unrealistic profits
+            if profit_pct > 3.0:
+                logger.warning(f"⚠️ Unrealistic profit detected, skipping: {profit_pct:.4f}% for {a}→{b}→{c}")
                 return 0.0
-            final_amount_a = amount_c / price3
             
-            # Calculate REAL profit
-            gross_profit = final_amount_a - self.max_trade_amount
-            profit_pct = (gross_profit / self.max_trade_amount) * 100
+            if profit_pct < -50.0:
+                logger.warning(f"⚠️ Unrealistic loss detected, skipping: {profit_pct:.4f}% for {a}→{b}→{c}")
+                return 0.0
             
             # Apply REAL trading fees (0.1% per trade = 0.3% total for 3 trades) 
             # Add slippage estimate (0.05% per trade = 0.15% total)
             total_costs = 0.3 + 0.15  # 0.45% total costs
             net_profit_pct = profit_pct - total_costs
             
-            if net_profit_pct > 0.01:  # Only log profitable opportunities
-                logger.info(f"💎 PROFITABLE: {a}→{b}→{c} = {profit_pct:.4f}% gross, {net_profit_pct:.4f}% net (costs: {total_costs}%)")
+            # Log detailed calculation for debugging
+            logger.debug(f"Triangle {a}→{b}→{c}: Start={start_amount:.6f}, Final={final_amount:.6f}, "
+                        f"Gross={profit_pct:.4f}%, Net={net_profit_pct:.4f}% (after {total_costs}% costs)")
+            
+            if net_profit_pct > self.min_profit_pct:
+                logger.info(f"💎 PROFITABLE: {a}→{b}→{c} = {profit_pct:.4f}% gross, {net_profit_pct:.4f}% net")
+            else:
+                logger.debug(f"Opportunity skipped: {a}→{b}→{c} profit {net_profit_pct:.4f}% below threshold {self.min_profit_pct}%")
             
             return net_profit_pct
             
         except Exception as e:
-            logger.debug(f"Calculation failed for {a}-{b}-{c}: {str(e)}")
+            logger.error(f"Calculation failed for {a}-{b}-{c}: {str(e)}", exc_info=True)
             return 0.0
 
     async def _get_ticker_data(self, ex):
@@ -308,6 +346,11 @@ class MultiExchangeDetector:
         payload = []
         
         for opp in opportunities:
+            # Ensure we have valid profit data
+            if not hasattr(opp, 'is_profitable') or not opp.is_profitable:
+                logger.debug(f"Skipping non-profitable opportunity: {opp.profit_percentage:.4f}%")
+                continue
+                
             payload.append({
                 'id': f"live_{int(datetime.now().timestamp()*1000)}_{len(payload)}",
                 'exchange': opp.exchange,
@@ -325,12 +368,17 @@ class MultiExchangeDetector:
         # Broadcast via WebSocket
         if self.websocket_manager and hasattr(self.websocket_manager, 'broadcast'):
             try:
-                await self.websocket_manager.broadcast('opportunities_update', payload)
+                if hasattr(self.websocket_manager, 'broadcast_sync'):
+                    # Use sync broadcast for GUI integration
+                    self.websocket_manager.broadcast_sync('opportunities_update', payload)
+                else:
+                    # Use async broadcast for web interface
+                    await self.websocket_manager.broadcast('opportunities_update', payload)
                 logger.info("✅ Successfully broadcasted 🔴 LIVE opportunities to UI")
             except Exception as e:
                 logger.error(f"Error broadcasting to WebSocket: {e}")
         else:
-            logger.warning(f"WebSocket manager issue: manager={self.websocket_manager}, has_broadcast={hasattr(self.websocket_manager, 'broadcast') if self.websocket_manager else False}")
+            logger.warning(f"⚠️ WebSocket manager not available for broadcasting")
             # Still log opportunities for debugging
             for opp in payload[:5]:  # Show first 5
                 logger.info(f"💎 Opportunity: {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}%")
