@@ -41,9 +41,9 @@ interface ExchangeConfig {
 export const ArbitrageBotDashboard: React.FC = () => {
     const [isRunning, setIsRunning] = useState(false);
     const [autoTrading, setAutoTrading] = useState(false);
-    const [paperTrading, setPaperTrading] = useState(true);
-    const [minProfit, setMinProfit] = useState(0.1);
-    const [maxTradeAmount, setMaxTradeAmount] = useState(100);
+    const [paperTrading, setPaperTrading] = useState(false);  // Default to LIVE trading
+    const [minProfit, setMinProfit] = useState(0.5);
+    const [maxTradeAmount, setMaxTradeAmount] = useState(10);
     const [maxConsecutiveFails, setMaxConsecutiveFails] = useState(3);
     const [consecutiveFails, setConsecutiveFails] = useState(0);
     const [pausedAutoTrading, setPausedAutoTrading] = useState(false);
@@ -256,11 +256,16 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                 onChange={(e) => toggleAutoTrading(e.target.checked)}
                                 disabled={!isRunning}
                             />
-                            Auto Trading Mode
+                            Auto Trading (LIVE)
                         </label>
                         <label className="flex items-center gap-3 text-sm text-gray-300 mb-3">
-                            <input type="checkbox" checked={paperTrading} onChange={(e) => setPaperTrading(e.target.checked)} />
-                            Paper Trading
+                            <input
+                                type="checkbox"
+                                checked={paperTrading}
+                                onChange={(e) => setPaperTrading(e.target.checked)}
+                                disabled={isRunning}
+                            />
+                            Paper Trading (Simulation)
                         </label>
                         {pausedAutoTrading && (
                             <button
@@ -275,11 +280,34 @@ export const ArbitrageBotDashboard: React.FC = () => {
                     <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
                         <h3 className="text-lg font-semibold text-white mb-4">Settings</h3>
                         <label className="block text-sm text-gray-300 mb-2">Min Profit %</label>
-                        <input type="number" value={minProfit} onChange={(e) => setMinProfit(parseFloat(e.target.value))} className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white" />
+                        <input
+                            type="number"
+                            value={minProfit}
+                            onChange={(e) => setMinProfit(Math.max(0.01, parseFloat(e.target.value)))}
+                            min="0.01"
+                            step="0.01"
+                            className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+                        />
                         <label className="block text-sm text-gray-300 mb-2">Max Trade Amount</label>
-                        <input type="number" value={maxTradeAmount} onChange={(e) => setMaxTradeAmount(parseFloat(e.target.value))} className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white" />
+                        <input
+                            type="number"
+                            value={maxTradeAmount}
+                            onChange={(e) => setMaxTradeAmount(Math.max(1, parseFloat(e.target.value)))}
+                            min="1"
+                            className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+                        />
                         <label className="block text-sm text-gray-300 mb-2">Max Consecutive Fails</label>
-                        <input type="number" value={maxConsecutiveFails} onChange={(e) => setMaxConsecutiveFails(parseInt(e.target.value))} className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white" />
+                        <input
+                            type="number"
+                            value={maxConsecutiveFails}
+                            onChange={(e) => setMaxConsecutiveFails(parseInt(e.target.value))}
+                            min="1"
+                            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+                            title="How many failed trades in a row before pausing auto mode"
+                        />
+                        <div className="text-xs text-gray-400 mt-1">
+                            How many failed trades in a row before pausing auto mode
+                        </div>
                     </div>
 
                     <div className="lg:col-span-2 bg-slate-800/50 p-6 rounded-xl border border-slate-700">
@@ -289,7 +317,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <div className="grid grid-cols-3 gap-4">
                             <div className="text-center">
                                 <div className="text-2xl text-blue-400">{stats.opportunitiesFound}</div>
-                                <div className="text-xs text-gray-400">Opportunities</div>
+                                <div className="text-xs text-gray-400">Opportunities (≥{minProfit}%)</div>
                             </div>
                             <div className="text-center">
                                 <div className="text-2xl text-green-400">{stats.tradesExecuted}</div>
@@ -302,6 +330,9 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         </div>
                         <div className="mt-6 text-gray-300">
                             <p>Auto-Trades: {autoStats.autoTradesExecuted} | Auto-Profit: ${autoStats.autoProfit.toFixed(2)} | Success Rate: {autoStats.autoSuccessRate.toFixed(1)}%</p>
+                            <p className="text-xs text-gray-400 mt-2">
+                                LIVE TRADING: ${maxTradeAmount} per cycle | Min Profit: {minProfit}% | Mode: {paperTrading ? 'Paper' : 'LIVE'}
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -385,7 +416,27 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     </tbody>
                                 </table>
                                 {opportunities.length === 0 && (
-                                    <div className="text-center text-gray-400 py-8">No opportunities detected</div>
+                                    <div className="text-center text-gray-400 py-8">
+                                        <div className="text-center text-gray-400 py-8">No opportunities detected</div>
+                                        <div className="text-center text-gray-400 py-8">
+                                            {isRunning ? (
+                                                <div>
+                                                    <div className="text-lg mb-2">Scanning for LIVE opportunities...</div>
+                                                    <div className="text-sm">
+                                                        Try lowering "Min Profit %" to 0.05% to see more opportunities
+                                                    </div>
+                                                    <div className="text-xs mt-2 text-gray-500">
+                                                        Using REAL market data from {paperTrading ? 'Paper Trading' : 'LIVE Trading'} mode
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div>
+                                                    <div className="text-lg mb-2">Click "Start Bot" to begin</div>
+                                                    <div className="text-sm">LIVE trading will show real profitable opportunities</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 )}
                             </div>
                         )}

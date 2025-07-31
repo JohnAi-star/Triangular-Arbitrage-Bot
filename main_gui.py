@@ -46,13 +46,13 @@ def check_configuration():
     if not Config.validate():
         messagebox.showwarning(
             "Configuration Error",
-            "❌ CRITICAL: No valid exchange credentials found!\n\n"
+            "❌ CRITICAL: No valid exchange credentials found for LIVE TRADING!\n\n"
             "The bot requires REAL API credentials to fetch market data,\n"
-            "even in paper trading mode.\n\n"
+            "for LIVE TRADING mode.\n\n"
             "Please configure your API credentials in the .env file:\n"
             "- BINANCE_API_KEY=your_api_key\n"
             "- BINANCE_API_SECRET=your_api_secret\n\n"
-            "The bot cannot run without real exchange connections."
+            "🔴 LIVE TRADING requires real exchange connections."
         )
         return False
     return True
@@ -60,16 +60,16 @@ def check_configuration():
 def main():
     """Main entry point."""
     print("""
-    🔺 Multi-Exchange Triangular Arbitrage Bot
+    🔺 🔴 LIVE TRADING Multi-Exchange Triangular Arbitrage Bot
     ==========================================
-    GUI-driven bot for detecting and executing triangular arbitrage
+    🔴 LIVE TRADING bot for detecting and executing triangular arbitrage
     opportunities across multiple cryptocurrency exchanges.
     
     Features:
     - Real-time opportunity detection
     - Multi-exchange support (Binance, Bybit, KuCoin, etc.)
-    - Manual and automatic trading modes
-    - Paper trading and backtesting
+    - Manual and automatic 🔴 LIVE trading modes
+    - 🔴 LIVE TRADING ONLY - NO PAPER MODE
     - Zero-fee pair prioritization
     - Comprehensive logging and statistics
     
@@ -89,34 +89,8 @@ def main():
         app = ArbitrageBotGUI()
         
         # Start web server for React frontend integration
-        if WEB_SERVER_AVAILABLE:
-            try:
-                start_web_server_background()
-                print("✅ Web server started for React frontend integration")
-                print("🌐 React frontend can connect at: http://localhost:5173")
-                print("📡 API server running at: http://localhost:8000")
-            except Exception as e:
-                print(f"⚠️  Web server failed to start: {e}")
-                print("   React frontend integration will not be available")
-        
         app.run()
         return 0
-        
-        if not self.paper_trading_var.get():
-            # Switching to live trading
-            result = messagebox.askyesno(
-                "⚠️ LIVE TRADING WARNING",
-                "You are about to enable LIVE TRADING mode!\n\n"
-                "This will execute REAL trades with REAL money on the exchanges.\n"
-                "Make sure you:\n"
-                "• Have tested thoroughly in paper trading mode\n"
-                "• Understand the risks involved\n"
-                "• Have set appropriate trade limits\n\n"
-                "Are you sure you want to enable live trading?"
-            )
-            if not result:
-                self.paper_trading_var.set(True)
-                return
         
     except KeyboardInterrupt:
         print("\nApplication interrupted by user")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fixed Triangular Arbitrage Detector - Now properly detects opportunities
+LIVE TRADING Triangular Arbitrage Detector - Generates REAL profitable opportunities
 """
 
 import asyncio
@@ -8,6 +8,7 @@ from typing import Dict, List, Any, Set, Tuple
 from datetime import datetime
 import logging
 from dataclasses import dataclass
+import random
 
 # Configure logging
 logging.basicConfig(
@@ -18,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger('MultiExchangeDetector')
 
 # Major currencies for triangular arbitrage
-MAJOR_CURRENCIES = {'BTC', 'ETH', 'USDT', 'BNB', 'USDC', 'BUSD', 'ADA', 'DOT', 'LINK', 'LTC'}
+MAJOR_CURRENCIES = {'BTC', 'ETH', 'USDT', 'BNB', 'USDC', 'BUSD', 'ADA', 'DOT', 'LINK', 'LTC', 'XRP', 'SOL', 'MATIC', 'AVAX'}
 
 @dataclass
 class ArbitrageResult:
@@ -34,28 +35,30 @@ class MultiExchangeDetector:
         self.websocket_manager = websocket_manager
         self.config = config
         
-        # Configuration
-        self.min_profit_pct = float(config.get('min_profit_percentage', 0.05))  # Lower threshold
+        # Configuration - LOWER thresholds for more opportunities
+        self.min_profit_pct = max(0.01, float(config.get('min_profit_percentage', 0.05)))  # Minimum 0.01%
         self.max_trade_amount = float(config.get('max_trade_amount', 100))
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
         # Rate limiting cache
         self._last_tickers: Dict[str, Dict[str, Any]] = {}
         self._last_ticker_time: Dict[str, float] = {}
+        
+        logger.info(f"🎯 LIVE TRADING Detector initialized - Min Profit: {self.min_profit_pct}%, Max Trade: ${self.max_trade_amount}")
 
     async def initialize(self):
         """Initialize triangle detection for all exchanges"""
-        logger.info("Initializing multi-exchange triangle detector...")
+        logger.info("🚀 Initializing LIVE TRADING multi-exchange triangle detector...")
         for ex_name, ex in self.exchange_manager.exchanges.items():
             try:
                 pairs = list(ex.trading_pairs.keys())
                 logger.info(f"Processing {len(pairs)} pairs for {ex_name}")
                 
-                # Build triangles with improved logic
-                triangles = self._build_triangles_improved(pairs, ex_name)
+                # Build REAL triangles with existing pairs
+                triangles = self._build_real_triangles(pairs, ex_name)
                 self.triangle_paths[ex_name] = triangles
                 
-                logger.info(f"Built {len(triangles)} VALID triangles for {ex_name}")
+                logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name}")
                 if triangles:
                     sample = " → ".join(triangles[0][:3])
                     logger.info(f"Sample triangle: {sample}")
@@ -65,102 +68,93 @@ class MultiExchangeDetector:
                 self.triangle_paths[ex_name] = []
         
         total = sum(len(t) for t in self.triangle_paths.values())
-        logger.info(f"Total VALID triangles across all exchanges: {total}")
+        logger.info(f"🎯 Total REAL triangles across all exchanges: {total}")
 
-    def _build_triangles_improved(self, pairs: List[str], exchange_name: str) -> List[List[str]]:
-        """Improved triangle building with better pair parsing"""
-        logger.info(f"Building triangles from {len(pairs)} trading pairs on {exchange_name}...")
+    def _build_real_triangles(self, pairs: List[str], exchange_name: str) -> List[List[str]]:
+        """Build REAL triangles using only existing trading pairs"""
+        logger.info(f"🔧 Building REAL triangles from {len(pairs)} trading pairs on {exchange_name}...")
         
-        # Parse all pairs and build currency graph
-        currency_pairs = {}
-        all_currencies = set()
+        # Parse existing pairs
+        existing_pairs = set(pairs)
+        currencies = set()
         
         for pair in pairs:
-            try:
-                # Handle different pair formats
-                if '/' in pair:
-                    base, quote = pair.split('/')
-                else:
-                    # For Binance format like BTCUSDT
-                    base, quote = self._parse_binance_pair(pair)
-                    if not base or not quote:
-                        continue
-                
-                # Only consider major currencies for better triangle detection
-                if base in MAJOR_CURRENCIES and quote in MAJOR_CURRENCIES:
-                    all_currencies.add(base)
-                    all_currencies.add(quote)
-                    
-                    # Store both directions
-                    if base not in currency_pairs:
-                        currency_pairs[base] = {}
-                    if quote not in currency_pairs:
-                        currency_pairs[quote] = {}
-                    
-                    currency_pairs[base][quote] = pair
-                    currency_pairs[quote][base] = pair
-                    
-            except Exception as e:
-                logger.debug(f"Skipping pair {pair}: {e}")
-                continue
+            if '/' in pair:
+                base, quote = pair.split('/')
+                # Add all currencies, not just major ones
+                currencies.add(base)
+                currencies.add(quote)
         
-        logger.info(f"Found {len(all_currencies)} major currencies: {sorted(all_currencies)}")
+        # Filter to focus on major currencies for better opportunities
+        major_currencies_found = currencies.intersection(MAJOR_CURRENCIES)
+        logger.info(f"Found {len(currencies)} total currencies, {len(major_currencies_found)} major: {sorted(major_currencies_found)}")
         
-        # Generate triangular paths
+        # Generate REAL triangular paths
         triangles = []
-        currencies = sorted(all_currencies)
         
-        for a in currencies:
-            if a not in currency_pairs:
-                continue
+        # Build triangles dynamically from available currencies
+        stable_coins = ['USDT', 'USDC', 'BUSD']
+        major_bases = ['BTC', 'ETH', 'BNB']
+        
+        # Find available stable coins and major bases
+        available_stables = [c for c in stable_coins if c in major_currencies_found]
+        available_bases = [c for c in major_bases if c in major_currencies_found]
+        available_alts = [c for c in major_currencies_found if c not in stable_coins and c not in major_bases]
+        
+        logger.info(f"Available: {len(available_stables)} stables, {len(available_bases)} bases, {len(available_alts)} alts")
+        
+        # Generate triangle patterns
+        patterns_to_check = []
+        
+        # Base -> Alt -> Stable triangles
+        for base in available_bases:
+            for alt in available_alts[:10]:  # Limit to top 10 alts
+                for stable in available_stables:
+                    patterns_to_check.append((base, alt, stable))
+        
+        # Base -> Base -> Stable triangles
+        for base1 in available_bases:
+            for base2 in available_bases:
+                if base1 != base2:
+                    for stable in available_stables:
+                        patterns_to_check.append((base1, base2, stable))
+        
+        logger.info(f"Checking {len(patterns_to_check)} potential triangle patterns...")
+        
+        for a, b, c in patterns_to_check:
+            if a in major_currencies_found and b in major_currencies_found and c in major_currencies_found:
+                # Check if all required pairs exist
+                pair1 = f"{a}/{b}"
+                pair2 = f"{b}/{c}"
+                pair3 = f"{a}/{c}"
                 
-            for b in currency_pairs[a]:
-                if b not in currency_pairs:
-                    continue
-                    
-                for c in currency_pairs[b]:
-                    if c == a or c not in currency_pairs:
-                        continue
-                    
-                    # Check if we can complete the triangle back to A
-                    if a in currency_pairs[c]:
-                        triangle = [a, b, c, a]
+                if pair1 in existing_pairs and pair2 in existing_pairs and pair3 in existing_pairs:
+                    triangle = [a, b, c, a]  # Complete cycle
+                    triangles.append(triangle)
+                    logger.info(f"✅ Valid triangle: {a} → {b} → {c} → {a} (pairs: {pair1}, {pair2}, {pair3})")
+        
+        # Add reverse patterns for more opportunities  
+        original_count = len(triangles)
+        for a, b, c in patterns_to_check:
+            if a in major_currencies_found and b in major_currencies_found and c in major_currencies_found:
+                # Reverse pattern: A → C → B → A
+                pair1 = f"{a}/{c}"
+                pair2 = f"{c}/{b}"
+                pair3 = f"{a}/{b}"
+                
+                if pair1 in existing_pairs and pair2 in existing_pairs and pair3 in existing_pairs:
+                    triangle = [a, c, b, a]  # Reverse cycle
+                    if triangle not in triangles:
                         triangles.append(triangle)
+                        logger.info(f"✅ Valid reverse triangle: {a} → {c} → {b} → {a} (pairs: {pair1}, {pair2}, {pair3})")
         
-        # Remove duplicates and limit
-        unique_triangles = []
-        seen = set()
-        
-        for triangle in triangles:
-            # Create a canonical representation
-            sorted_triangle = tuple(sorted(triangle[:3]))
-            if sorted_triangle not in seen:
-                seen.add(sorted_triangle)
-                unique_triangles.append(triangle)
-                
-                if len(unique_triangles) >= 50:  # Limit for performance
-                    break
-        
-        logger.info(f"Generated {len(unique_triangles)} unique triangles")
-        return unique_triangles
-
-    def _parse_binance_pair(self, pair: str) -> Tuple[str, str]:
-        """Parse Binance-style pairs like BTCUSDT"""
-        # Try common quote currencies first (longest first to avoid conflicts)
-        quote_currencies = sorted(MAJOR_CURRENCIES, key=len, reverse=True)
-        
-        for quote in quote_currencies:
-            if pair.endswith(quote) and len(pair) > len(quote):
-                base = pair[:-len(quote)]
-                if base in MAJOR_CURRENCIES:
-                    return base, quote
-        
-        return None, None
+        logger.info(f"🎯 Generated {len(triangles)} REAL triangles ({original_count} forward, {len(triangles)-original_count} reverse)")
+        return triangles[:100]  # Limit to top 100 for performance
 
     async def scan_all_opportunities(self) -> List[ArbitrageResult]:
-        """Scan all exchanges for profitable arbitrage opportunities"""
+        """Scan all exchanges for REAL profitable arbitrage opportunities"""
         all_results = []
-        logger.info("Starting scan for all opportunities...")
+        logger.info("🔍 Starting LIVE TRADING scan for opportunities...")
 
         for ex_name, triangles in self.triangle_paths.items():
             ex = self.exchange_manager.exchanges.get(ex_name)
@@ -171,36 +165,43 @@ class MultiExchangeDetector:
             try:
                 results = await self._scan_exchange_triangles(ex, triangles)
                 all_results.extend(results)
-                logger.info(f"Found {len(results)} opportunities on {ex_name}")
+                logger.info(f"💰 Found {len(results)} REAL opportunities on {ex_name}")
             except Exception as e:
                 logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
 
-        # Sort by profit and prepare UI payload
+        # Sort by profit and prepare for UI
         all_results.sort(key=lambda x: x.profit_percentage, reverse=True)
         
-        # Always broadcast, even if empty
-        await self._broadcast_opportunities(all_results)
+        # Show ALL opportunities above minimum threshold
+        profitable_results = [
+            result for result in all_results 
+            if result.profit_percentage >= self.min_profit_pct
+        ]
         
-        return all_results
+        logger.info(f"💎 Found {len(all_results)} total opportunities, {len(profitable_results)} above {self.min_profit_pct}% threshold")
+        
+        # Always broadcast opportunities
+        await self._broadcast_opportunities(profitable_results)
+        
+        return profitable_results
 
     async def _scan_exchange_triangles(self, ex, triangles: List[List[str]]) -> List[ArbitrageResult]:
-        """Scan triangles for a specific exchange with simulated opportunities"""
+        """Scan triangles for REAL profitable opportunities"""
         results = []
         
-        # Get ticker data
+        # Get REAL ticker data
         ticker = await self._get_ticker_data(ex)
         if not ticker:
             logger.warning(f"No ticker data for {ex.name}")
-            # Generate some demo opportunities for testing
-            return self._generate_demo_opportunities(ex.name, triangles[:5])
+            return []
 
-        logger.info(f"Scanning {min(len(triangles), 20)} triangles for {ex.name}")
+        logger.info(f"🔍 Scanning {len(triangles)} REAL triangles for {ex.name}")
         
-        for i, path in enumerate(triangles[:20]):  # Limit to 20 triangles per scan
+        for i, path in enumerate(triangles):
             a, b, c, _ = path
             try:
-                profit = await self._calculate_triangle_profit(ex, ticker, a, b, c)
-                if profit and abs(profit) >= self.min_profit_pct:
+                profit = await self._calculate_real_triangle_profit(ex, ticker, a, b, c)
+                if profit and profit >= self.min_profit_pct:
                     results.append(ArbitrageResult(
                         exchange=ex.name,
                         triangle_path=path,
@@ -208,124 +209,80 @@ class MultiExchangeDetector:
                         profit_amount=(self.max_trade_amount * profit / 100),
                         initial_amount=self.max_trade_amount
                     ))
+                    logger.info(f"💰 PROFITABLE: {a}→{b}→{c} = {profit:.4f}% profit")
             except Exception as e:
                 logger.debug(f"Skipping triangle {a}-{b}-{c}: {str(e)}")
         
-        # If no real opportunities found, generate some demo ones
-        if not results and len(triangles) > 0:
-            results = self._generate_demo_opportunities(ex.name, triangles[:3])
-        
+        logger.info(f"✅ Found {len(results)} 🔴 LIVE profitable opportunities on {ex.name}")
         return results
 
-    def _generate_demo_opportunities(self, exchange_name: str, triangles: List[List[str]]) -> List[ArbitrageResult]:
-        """Generate demo opportunities for testing"""
-        import random
-        results = []
-        
-        for i, triangle in enumerate(triangles[:5]):
-            # Generate realistic profit percentages
-            profit_pct = random.uniform(0.05, 0.25)  # 0.05% to 0.25%
-            
-            results.append(ArbitrageResult(
-                exchange=exchange_name,
-                triangle_path=triangle,
-                profit_percentage=profit_pct,
-                profit_amount=(self.max_trade_amount * profit_pct / 100),
-                initial_amount=self.max_trade_amount
-            ))
-        
-        logger.info(f"Generated {len(results)} demo opportunities for {exchange_name}")
-        return results
-
-    async def _calculate_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
-        """Calculate profit percentage for a specific triangle path"""
+    async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
+        """Calculate REAL profit percentage using live market data"""
         try:
-            # Build pair names based on exchange format
-            if ex.name.lower() == 'binance':
-                p1 = f"{a}{b}"  # A->B
-                p2 = f"{b}{c}"  # B->C  
-                p3_direct = f"{c}{a}"  # C->A
-                p3_inverse = f"{a}{c}"  # A->C (inverse)
-            else:
-                p1 = f"{a}/{b}"
-                p2 = f"{b}/{c}"
-                p3_direct = f"{c}/{a}"
-                p3_inverse = f"{a}/{c}"
+            # Build pair names
+            pair1 = f"{a}/{b}"  # A→B
+            pair2 = f"{b}/{c}"  # B→C  
+            pair3 = f"{a}/{c}"  # A→C (for closing the triangle)
 
-            # REAL ARBITRAGE CALCULATION using live market data
-            logger.info(f"Calculating REAL arbitrage for {a}→{b}→{c} using live prices")
+            logger.debug(f"🧮 Calculating REAL profit for {a}→{b}→{c}")
             
-            # Step 1: A → B (sell A for B)
-            if p1 in ticker:
-                bid1, ask1 = self._get_prices(ticker, p1)
-                amount_b = self.max_trade_amount / ask1  # Buy B with A
-                logger.debug(f"Step 1: {self.max_trade_amount} {a} → {amount_b:.6f} {b} at {ask1}")
-            else:
-                # Try inverse pair
-                p1_inv = f"{b}{a}" if ex.name.lower() == 'binance' else f"{b}/{a}"
-                if p1_inv in ticker:
-                    bid1_inv, ask1_inv = self._get_prices(ticker, p1_inv)
-                    amount_b = self.max_trade_amount * bid1_inv  # Sell A for B
-                    logger.debug(f"Step 1 (inv): {self.max_trade_amount} {a} → {amount_b:.6f} {b} at {bid1_inv}")
-                else:
-                    raise ValueError(f"No price data for {p1} or {p1_inv}")
+            # Get REAL prices from live market data
+            if pair1 not in ticker or pair2 not in ticker or pair3 not in ticker:
+                logger.debug(f"Missing price data: {pair1} in ticker: {pair1 in ticker}, {pair2} in ticker: {pair2 in ticker}, {pair3} in ticker: {pair3 in ticker}")
+                return 0.0
             
-            # Step 2: B → C (sell B for C)
-            if p2 in ticker:
-                bid2, ask2 = self._get_prices(ticker, p2)
-                amount_c = amount_b / ask2  # Buy C with B
-                logger.debug(f"Step 2: {amount_b:.6f} {b} → {amount_c:.6f} {c} at {ask2}")
-            else:
-                # Try inverse pair
-                p2_inv = f"{c}{b}" if ex.name.lower() == 'binance' else f"{c}/{b}"
-                if p2_inv in ticker:
-                    bid2_inv, ask2_inv = self._get_prices(ticker, p2_inv)
-                    amount_c = amount_b * bid2_inv  # Sell B for C
-                    logger.debug(f"Step 2 (inv): {amount_b:.6f} {b} → {amount_c:.6f} {c} at {bid2_inv}")
-                else:
-                    raise ValueError(f"No price data for {p2} or {p2_inv}")
+            # Validate price data
+            t1, t2, t3 = ticker[pair1], ticker[pair2], ticker[pair3]
+            if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
+                logger.debug(f"Invalid price data for {a}-{b}-{c}")
+                return 0.0
             
-            # Step 3: C → A (sell C for A to complete triangle)
-            if p3_direct in ticker:
-                bid3, ask3 = self._get_prices(ticker, p3_direct)
-                final_amount_a = amount_c * bid3  # Sell C for A
-                logger.debug(f"Step 3: {amount_c:.6f} {c} → {final_amount_a:.6f} {a} at {bid3}")
-            elif p3_inverse in ticker:
-                bid3_inv, ask3_inv = self._get_prices(ticker, p3_inverse)
-                final_amount_a = amount_c / ask3_inv  # Buy A with C
-                logger.debug(f"Step 3 (inv): {amount_c:.6f} {c} → {final_amount_a:.6f} {a} at {ask3_inv}")
-            else:
-                raise ValueError(f"No return path for {p3_direct} or {p3_inverse}")
+            # Step 1: A → B (sell A for B) 
+            price1 = float(t1['bid'])  # Sell A, get B
+            if price1 <= 0:
+                return 0.0
+            amount_b = self.max_trade_amount / price1
             
-            # Calculate REAL profit using actual market prices
+            # Step 2: B → C (sell B for C)  
+            price2 = float(t2['bid'])  # Sell B, get C
+            if price2 <= 0:
+                return 0.0
+            amount_c = amount_b * price2
+            
+            # Step 3: C → A (buy A with C to complete triangle)
+            price3 = float(t3['ask'])  # Buy A with C
+            if price3 <= 0:
+                return 0.0
+            final_amount_a = amount_c / price3
+            
+            # Calculate REAL profit
             gross_profit = final_amount_a - self.max_trade_amount
             profit_pct = (gross_profit / self.max_trade_amount) * 100
             
-            # Apply realistic trading fees (0.1% per trade = 0.3% total)
-            fee_adjusted_profit_pct = profit_pct - 0.3
+            # Apply REAL trading fees (0.1% per trade = 0.3% total for 3 trades) 
+            # Add slippage estimate (0.05% per trade = 0.15% total)
+            total_costs = 0.3 + 0.15  # 0.45% total costs
+            net_profit_pct = profit_pct - total_costs
             
-            logger.info(f"REAL ARBITRAGE: {a}→{b}→{c} = {profit_pct:.4f}% gross, {fee_adjusted_profit_pct:.4f}% net")
+            if net_profit_pct > 0.01:  # Only log profitable opportunities
+                logger.info(f"💎 PROFITABLE: {a}→{b}→{c} = {profit_pct:.4f}% gross, {net_profit_pct:.4f}% net (costs: {total_costs}%)")
             
-            return fee_adjusted_profit_pct
+            return net_profit_pct
             
         except Exception as e:
-            logger.debug(f"Real calculation failed for {a}-{b}-{c}: {str(e)}")
-            # Only fall back to demo if absolutely necessary
-            if "demo" in str(e).lower():
-                import random
-                return random.uniform(0.05, 0.15)
-            else:
-                return 0.0  # No opportunity if real calculation fails
+            logger.debug(f"Calculation failed for {a}-{b}-{c}: {str(e)}")
+            return 0.0
 
     async def _get_ticker_data(self, ex):
-        """Get ticker data with caching and rate limiting"""
+        """Get ticker data with smart caching"""
         current_time = asyncio.get_event_loop().time()
         last_fetch = self._last_ticker_time.get(ex.name, 0)
         
-        if current_time - last_fetch < 30:  # 30 second cache
+        # Use 5-second cache for faster updates
+        if current_time - last_fetch < 5:
             ticker = self._last_tickers.get(ex.name, {})
             if ticker:
-                logger.info(f"Using cached tickers for {ex.name}")
+                logger.debug(f"Using cached tickers for {ex.name}")
                 return ticker
 
         ticker = await self._safe_fetch_tickers(ex)
@@ -336,51 +293,47 @@ class MultiExchangeDetector:
         return ticker
 
     async def _safe_fetch_tickers(self, ex):
-        """Fetch tickers with error handling"""
+        """Fetch tickers with rate limiting protection"""
         try:
-            await asyncio.sleep(0.5)  # Rate limiting
+            await asyncio.sleep(0.2)  # Rate limiting
             tickers = await ex.fetch_tickers()
-            logger.info(f"Fetched {len(tickers)} fresh tickers from {ex.name}")
+            logger.info(f"📊 Fetched {len(tickers)} 🔴 LIVE tickers from {ex.name}")
             return tickers
         except Exception as e:
             logger.error(f"Error fetching tickers from {ex.name}: {str(e)}")
             return self._last_tickers.get(ex.name, {})
 
-    def _get_prices(self, ticker, symbol):
-        """Get bid/ask prices with validation"""
-        t = ticker.get(symbol, {})
-        bid = float(t.get('bid', 0))
-        ask = float(t.get('ask', 0))
-        if bid <= 0 or ask <= 0:
-            raise ValueError(f"Invalid prices for {symbol}")
-        return bid, ask
-
     async def _broadcast_opportunities(self, opportunities: List[ArbitrageResult]):
-        """Format and broadcast opportunities to UI"""
+        """Format and broadcast REAL opportunities to UI"""
         payload = []
         
         for opp in opportunities:
             payload.append({
-                'id': f"opp_{int(datetime.now().timestamp()*1000)}_{len(payload)}",
+                'id': f"live_{int(datetime.now().timestamp()*1000)}_{len(payload)}",
                 'exchange': opp.exchange,
-                'path': " → ".join(opp.triangle_path[:3]),
-                'profit_pct': round(opp.profit_percentage, 4),
-                'profit_amount': round(opp.profit_amount, 6),
+                'trianglePath': " → ".join(opp.triangle_path[:3]),
+                'profitPercentage': round(opp.profit_percentage, 4),
+                'profitAmount': round(opp.profit_amount, 6),
                 'volume': opp.initial_amount,
+                'status': 'detected',
+                'dataType': '🔴_LIVE_MARKET_DATA',
                 'timestamp': datetime.now().isoformat()
             })
         
-        logger.info(f"Broadcasting {len(payload)} opportunities to UI")
+        logger.info(f"📡 Broadcasting {len(payload)} 🔴 LIVE opportunities to UI")
         
         # Broadcast via WebSocket
-        if hasattr(self.websocket_manager, 'broadcast'):
+        if self.websocket_manager and hasattr(self.websocket_manager, 'broadcast'):
             try:
-                await self.websocket_manager.broadcast('opportunities', payload)
-                logger.info("Successfully broadcasted to WebSocket clients")
+                await self.websocket_manager.broadcast('opportunities_update', payload)
+                logger.info("✅ Successfully broadcasted 🔴 LIVE opportunities to UI")
             except Exception as e:
                 logger.error(f"Error broadcasting to WebSocket: {e}")
         else:
-            logger.warning("WebSocket manager has no broadcast method")
+            logger.warning(f"WebSocket manager issue: manager={self.websocket_manager}, has_broadcast={hasattr(self.websocket_manager, 'broadcast') if self.websocket_manager else False}")
+            # Still log opportunities for debugging
+            for opp in payload[:5]:  # Show first 5
+                logger.info(f"💎 Opportunity: {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}%")
 
 
 if __name__ == "__main__":

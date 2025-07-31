@@ -12,7 +12,8 @@ SUPPORTED_EXCHANGES = {
         'zero_fee_pairs': [],
         'maker_fee': 0.001,
         'taker_fee': 0.001,
-        'enabled': True
+        'enabled': True,
+        'requires_passphrase': False
     },
     'bybit': {
         'name': 'Bybit',
@@ -23,7 +24,8 @@ SUPPORTED_EXCHANGES = {
         'zero_fee_pairs': [],
         'maker_fee': 0.001,
         'taker_fee': 0.001,
-        'enabled': True
+        'enabled': True,
+        'requires_passphrase': False
     },
     'kucoin': {
         'name': 'KuCoin',
@@ -34,7 +36,8 @@ SUPPORTED_EXCHANGES = {
         'zero_fee_pairs': ['BTC/ETH', 'ETH/BTC'],  # Example zero-fee pairs
         'maker_fee': 0.001,
         'taker_fee': 0.001,
-        'enabled': True
+        'enabled': True,
+        'requires_passphrase': True  # KuCoin requires passphrase
     },
     'coinbase': {
         'name': 'Coinbase Pro',

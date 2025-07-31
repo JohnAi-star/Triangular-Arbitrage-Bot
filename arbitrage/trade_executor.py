@@ -43,22 +43,121 @@ class TradeExecutor:
         self.trade_logger = setup_trade_logger()
         self.detailed_trade_logger = get_trade_logger()
         self.auto_trading = config.get('auto_trading', False)
-        # Always check global config for paper trading setting
-        self.paper_trading = config.get('paper_trading', Config.PAPER_TRADING)
+        # ALWAYS LIVE TRADING - NO PAPER MODE
+        self.paper_trading = False
     
     def set_websocket_manager(self, websocket_manager):
         """Set WebSocket manager for trade broadcasting."""
         self.detailed_trade_logger = get_trade_logger(websocket_manager)
         
+    async def _verify_sufficient_balance(self, exchange, base_currency: str, required_amount: float) -> bool:
+        """Verify sufficient balance for trading."""
+        try:
+            balance = await exchange.get_account_balance()
+            available = balance.get(base_currency, 0.0)
+            
+            if available >= required_amount:
+                self.logger.info(f"✅ Sufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
+                return True
+            else:
+                self.logger.error(f"❌ Insufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
+                return False
+        except Exception as e:
+            self.logger.error(f"Error checking balance: {e}")
+            return False
+    
+    async def _get_real_market_price(self, exchange, symbol: str, side: str) -> float:
+        """Get real-time market price for accurate execution."""
+        try:
+            ticker = await exchange.get_ticker(symbol)
+            if side.lower() == 'buy':
+                price = ticker.get('ask', 0)  # Buy at ask price
+            else:
+                price = ticker.get('bid', 0)  # Sell at bid price
+            
+            self.logger.info(f"📊 Real-time {symbol} {side} price: {price:.8f}")
+            return float(price) if price else 0.0
+        except Exception as e:
+            self.logger.error(f"Error getting market price for {symbol}: {e}")
+            return 0.0
+    
+    async def _execute_single_order(self, exchange, symbol: str, side: str, quantity: float, step_num: int) -> Dict[str, Any]:
+        """Execute a single market order with detailed logging."""
+        try:
+            self.logger.info(f"🔄 STEP {step_num}: Executing REAL {side.upper()} order")
+            self.logger.info(f"   Symbol: {symbol}")
+            self.logger.info(f"   Quantity: {quantity:.8f}")
+            self.logger.info(f"   Side: {side.upper()}")
+            
+            # Get current market price for logging
+            market_price = await self._get_real_market_price(exchange, symbol, side)
+            estimated_value = quantity * market_price if side == 'sell' else quantity
+            self.logger.info(f"   Estimated Value: ${estimated_value:.2f}")
+            
+            # Execute the REAL order
+            order_start_time = time.time()
+            order = await exchange.place_market_order(symbol, side, quantity)
+            execution_time = (time.time() - order_start_time) * 1000
+            
+            if order and order.get('id'):
+                # Log successful order details
+                order_id = order.get('id')
+                filled_qty = float(order.get('filled', 0))
+                avg_price = float(order.get('average', 0))
+                total_cost = float(order.get('cost', 0))
+                fee_info = order.get('fee', {})
+                fee_cost = float(fee_info.get('cost', 0))
+                fee_currency = fee_info.get('currency', 'Unknown')
+                
+                self.logger.info(f"✅ REAL ORDER EXECUTED SUCCESSFULLY:")
+                self.logger.info(f"   Order ID: {order_id}")
+                self.logger.info(f"   Filled: {filled_qty:.8f} {symbol}")
+                self.logger.info(f"   Average Price: {avg_price:.8f}")
+                self.logger.info(f"   Total Cost: {total_cost:.8f}")
+                self.logger.info(f"   Fee: {fee_cost:.8f} {fee_currency}")
+                self.logger.info(f"   Execution Time: {execution_time:.0f}ms")
+                self.logger.info(f"   Status: {order.get('status', 'Unknown')}")
+                
+                # Verify order was filled
+                if order.get('status') == 'closed' and filled_qty > 0:
+                    self.logger.info(f"🎉 Order {order_id} FULLY FILLED - Trade recorded on Binance!")
+                    return {
+                        'success': True,
+                        'order_id': order_id,
+                        'filled_quantity': filled_qty,
+                        'average_price': avg_price,
+                        'total_cost': total_cost,
+                        'fee_cost': fee_cost,
+                        'fee_currency': fee_currency,
+                        'execution_time_ms': execution_time,
+                        'raw_order': order
+                    }
+                else:
+                    self.logger.error(f"❌ Order {order_id} not fully filled: status={order.get('status')}, filled={filled_qty}")
+                    return {'success': False, 'error': f'Order not filled: {order.get("status")}', 'order_id': order_id}
+            else:
+                self.logger.error(f"❌ Order execution failed - no order ID returned")
+                return {'success': False, 'error': 'No order ID returned', 'raw_response': order}
+                
+        except Exception as e:
+            self.logger.error(f"❌ CRITICAL: Order execution failed for {symbol} {side}: {str(e)}")
+            return {'success': False, 'error': str(e), 'exception_type': type(e).__name__}
+    
     async def request_confirmation(self, opportunity: ArbitrageOpportunity) -> bool:
         """Request manual confirmation for trade execution."""
         # Skip confirmation if auto-trading is enabled
         if self.auto_trading:
-            self.logger.info(f"Auto-trading enabled - executing without confirmation")
+            self.logger.info(f"🤖 🔴 LIVE AUTO-TRADING: Executing without confirmation")
             return True
             
         # Skip confirmation if manual confirmation is disabled
         if not self.config.get('enable_manual_confirmation', True):
+            self.logger.info(f"🤖 🔴 LIVE AUTO-TRADING: Manual confirmation disabled")
+            return True
+            
+        # For live trading auto mode, execute immediately
+        if self.auto_trading:
+            self.logger.info(f"🔴 🤖 LIVE AUTO-TRADING: Executing immediately")
             return True
             
         print("\n" + "="*80)
@@ -73,9 +172,7 @@ class TradeExecutor:
         print(f"Estimated Slippage: {opportunity.estimated_slippage:.6f} {opportunity.base_currency}")
         print(f"Net Profit: {opportunity.net_profit:.6f} {opportunity.base_currency}")
         
-        # Use global config for paper trading check
-        is_paper_trading = Config.PAPER_TRADING
-        mode_text = safe_unicode_text('🤖 AUTO-TRADING' if self.auto_trading else '🟡 PAPER TRADING (SIMULATION)' if is_paper_trading else '🔴 LIVE TRADING (REAL MONEY)')
+        mode_text = safe_unicode_text('🤖 🔴 LIVE AUTO-TRADING' if self.auto_trading else '🔴 LIVE TRADING (REAL MONEY)')
         print(f"Trading Mode: {mode_text}")
         
         print("\nTrade Steps:")
@@ -83,23 +180,19 @@ class TradeExecutor:
             print(f"  {i}. {step.side.upper()} {step.quantity:.6f} {step.symbol} at {step.price:.8f}")
         print("="*80)
         
-        if not is_paper_trading:
-            warning_text = safe_unicode_text("⚠️  WARNING: This will execute REAL trades with REAL money!")
-            print(warning_text)
-            print(safe_unicode_text("⚠️  Make sure you understand the risks before proceeding!"))
+        warning_text = safe_unicode_text("⚠️  WARNING: This will execute REAL trades with REAL money!")
+        print(warning_text)
+        print(safe_unicode_text("⚠️  Make sure you understand the risks before proceeding!"))
         
-        while True:
-            prompt = "Execute this trade? (y/n/q): " if is_paper_trading else "Execute REAL trade with REAL money? (y/n/q): "
-            response = input(prompt).lower().strip()
-            if response == 'y':
-                return True
-            elif response == 'n':
-                return False
-            elif response == 'q':
-                print("Quitting...")
-                exit(0)
-            else:
-                print("Please enter 'y' for yes, 'n' for no, or 'q' to quit")
+        # AUTO-EXECUTE if auto-trading is enabled - NO PROMPTS
+        if self.auto_trading:
+            self.logger.info("🤖 🔴 LIVE AUTO-TRADING: Executing automatically")
+            return True
+        
+        # Only prompt if manual mode
+        prompt = "Execute REAL trade with REAL money? (y/n/q): "
+        response = input(prompt).lower().strip()
+        return response == 'y'
     
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
         """Execute the triangular arbitrage trade."""
@@ -128,6 +221,12 @@ class TradeExecutor:
             opportunity.status = OpportunityStatus.EXECUTING
             self.logger.info(f"Starting execution on {exchange_id}: {opportunity.triangle_path}")
             
+            # Verify sufficient balance before starting
+            if not await self._verify_sufficient_balance(exchange, opportunity.base_currency, opportunity.initial_amount):
+                self.logger.error("❌ Insufficient balance for trade execution")
+                opportunity.status = OpportunityStatus.FAILED
+                return False
+            
             # Initialize trade log
             trade_log = TradeLog(
                 trade_id=trade_id,
@@ -150,100 +249,81 @@ class TradeExecutor:
             
             # Log trade attempt
             execution_type = "AUTO" if self.auto_trading else "MANUAL"
-            trading_mode = "PAPER" if Config.PAPER_TRADING else "LIVE"
+            trading_mode = "🔴 LIVE"
             
             self.trade_logger.info(f"TRADE_ATTEMPT ({execution_type}): {opportunity.to_dict()}")
             self.logger.info(f"Starting {trading_mode} trade execution ({execution_type}): {opportunity.triangle_path}")
             
-            # Execute each step
+            # Execute each step with REAL orders
             execution_results = []
             current_balance = opportunity.initial_amount
+            order_ids = []  # Track all order IDs for verification
             
             for i, step in enumerate(opportunity.steps):
-                step_start_ms = time.time() * 1000
                 try:
-                    self.logger.info(f"Executing step {i+1} ({trading_mode}/{execution_type}): {step.side.upper()} {step.quantity:.6f} {step.symbol}")
+                    self.logger.info(f"🔄 EXECUTING STEP {i+1}/{len(opportunity.steps)} ({trading_mode}/{execution_type})")
+                    self.logger.info(f"   Action: {step.side.upper()} {step.quantity:.6f} {step.symbol}")
+                    self.logger.info(f"   Expected Price: {step.price:.8f}")
                     
-                    # Place market order
-                    result = await exchange.place_market_order(
-                        step.symbol, 
-                        step.side, 
-                        step.quantity
-                    )
+                    # Execute REAL market order
+                    result = await self._execute_single_order(exchange, step.symbol, step.side, step.quantity, i+1)
                     
-                    step_end_ms = time.time() * 1000
-                    step_duration_ms = step_end_ms - step_start_ms
                     execution_results.append(result)
                     
-                    # Verify execution
-                    if result.get('status') == 'failed':
-                        raise Exception(f"Order failed: {result.get('error', 'Unknown error')}")
+                    if not result.get('success'):
+                        raise Exception(f"Order execution failed: {result.get('error', 'Unknown error')}")
                     
-                    if not result:
-                        raise Exception("No response from exchange")
+                    # Extract execution details
+                    order_id = result.get('order_id', 'N/A')
+                    filled_qty = result.get('filled_quantity', 0)
+                    avg_price = result.get('average_price', step.price)
+                    fees_paid = result.get('fee_cost', 0)
+                    execution_time_ms = result.get('execution_time_ms', 0)
                     
-                    if result.get('status') == 'closed':
-                        actual_amount = float(result.get('filled', 0))
-                        actual_price = float(result.get('average', step.price))
-                        
-                        # Calculate fees for this step
-                        fees_paid = float(result.get('fee', {}).get('cost', 0))
-                        if fees_paid == 0:
-                            # Estimate fees if not provided by exchange
-                            maker_fee, taker_fee = await exchange.get_trading_fees(step.symbol)
-                            if Config.PAPER_TRADING:
-                                # In paper trading, calculate fees on notional value
-                                notional_value = step.quantity * step.price if step.side == 'sell' else step.quantity
-                                fees_paid = notional_value * taker_fee
-                            else:
-                                # In live trading, fees should come from exchange response
-                                fees_paid = (actual_amount * actual_price * taker_fee) if step.side == 'buy' else (step.quantity * actual_price * taker_fee)
-                        
-                        # Calculate slippage
-                        expected_price = step.price
-                        slippage_pct = abs((actual_price - expected_price) / expected_price) * 100
-                        
-                        # Log detailed step execution
-                        step_log_msg = (
-                            f"Step {i+1} completed ({trading_mode}/{execution_type}): "
-                            f"Expected {step.expected_amount:.6f}, "
-                            f"Actual: {actual_amount:.6f}, "
-                            f"Price: {actual_price:.8f} (expected {expected_price:.8f}), "
-                            f"Fees: {fees_paid:.6f}, "
-                            f"Slippage: {slippage_pct:.4f}%, "
-                            f"Duration: {step_duration_ms:.0f}ms"
-                        )
-                        
-                        if Config.PAPER_TRADING:
-                            self.logger.info(f"PAPER: {step_log_msg}")
-                        else:
-                            self.logger.info(f"LIVE: {step_log_msg}")
-                        
-                        # Create detailed step log
-                        step_log = TradeStepLog(
-                            step_number=i + 1,
-                            symbol=step.symbol,
-                            direction=TradeDirection.BUY if step.side == 'buy' else TradeDirection.SELL,
-                            expected_price=expected_price,
-                            actual_price=actual_price,
-                            expected_quantity=step.quantity,
-                            actual_quantity=actual_amount if step.side == 'sell' else step.quantity,
-                            expected_amount_out=step.expected_amount,
-                            actual_amount_out=actual_amount,
-                            fees_paid=fees_paid,
-                            execution_time_ms=step_duration_ms,
-                            slippage_percentage=slippage_pct
-                        )
-                        
-                        trade_log.steps.append(step_log)
-                        trade_log.total_fees_paid += fees_paid
-                        
-                        current_balance = actual_amount
+                    order_ids.append(order_id)
+                    
+                    # Calculate slippage
+                    expected_price = step.price
+                    slippage_pct = abs((avg_price - expected_price) / expected_price) * 100 if expected_price > 0 else 0
+                    
+                    # Log detailed step execution
+                    self.logger.info(f"✅ STEP {i+1} COMPLETED SUCCESSFULLY:")
+                    self.logger.info(f"   Order ID: {order_id}")
+                    self.logger.info(f"   Filled: {filled_qty:.8f}")
+                    self.logger.info(f"   Price: {avg_price:.8f} (expected {expected_price:.8f})")
+                    self.logger.info(f"   Fees: {fees_paid:.8f}")
+                    self.logger.info(f"   Slippage: {slippage_pct:.4f}%")
+                    self.logger.info(f"   Duration: {execution_time_ms:.0f}ms")
+                    
+                    # Create detailed step log
+                    step_log = TradeStepLog(
+                        step_number=i + 1,
+                        symbol=step.symbol,
+                        direction=TradeDirection.BUY if step.side == 'buy' else TradeDirection.SELL,
+                        expected_price=expected_price,
+                        actual_price=avg_price,
+                        expected_quantity=step.quantity,
+                        actual_quantity=filled_qty,
+                        expected_amount_out=step.expected_amount,
+                        actual_amount_out=filled_qty if step.side == 'sell' else filled_qty * avg_price,
+                        fees_paid=fees_paid,
+                        execution_time_ms=execution_time_ms,
+                        slippage_percentage=slippage_pct
+                    )
+                    
+                    trade_log.steps.append(step_log)
+                    trade_log.total_fees_paid += fees_paid
+                    
+                    # Update current balance for next step
+                    if step.side == 'sell':
+                        current_balance = filled_qty * avg_price  # Got quote currency
                     else:
-                        raise Exception(f"Order not filled: {result}")
+                        current_balance = filled_qty  # Got base currency
+                    
+                    self.logger.info(f"   Updated Balance: {current_balance:.8f}")
                         
                 except Exception as e:
-                    self.logger.error(f"Error executing step {i+1}: {e}")
+                    self.logger.error(f"❌ CRITICAL ERROR in step {i+1}: {str(e)}")
                     opportunity.status = OpportunityStatus.FAILED
                     
                     # Update trade log for failure
@@ -262,6 +342,11 @@ class TradeExecutor:
                     
                     return False
             
+            # All steps completed successfully
+            self.logger.info(f"🎉 ALL STEPS COMPLETED SUCCESSFULLY!")
+            self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
+            self.logger.info(f"   Check your Binance account for these trades!")
+            
             # Calculate actual profit
             actual_profit = current_balance - opportunity.initial_amount
             actual_profit_percentage = (actual_profit / opportunity.initial_amount) * 100
@@ -278,16 +363,18 @@ class TradeExecutor:
             trade_log.total_duration_ms = trade_end_ms - trade_start_ms
             trade_log.total_slippage = sum(step.slippage_percentage / 100 * step.expected_amount_out for step in trade_log.steps)
             
-            success_msg = (
-                f"Arbitrage completed successfully on {exchange_id} ({trading_mode}/{execution_type})! "
-                f"Actual profit: {actual_profit_percentage:.4f}% "
-                f"({actual_profit:.6f} {opportunity.base_currency})"
-            )
-            
-            if Config.PAPER_TRADING:
-                self.logger.info(f"PAPER: {success_msg}")
-            else:
-                self.logger.info(f"LIVE: {success_msg}")
+            # Log final success
+            self.logger.info(f"🎉 ARBITRAGE TRADE COMPLETED SUCCESSFULLY!")
+            self.logger.info(f"   Exchange: {exchange_id}")
+            self.logger.info(f"   Trade ID: {trade_id}")
+            self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
+            self.logger.info(f"   Initial Amount: {opportunity.initial_amount:.8f} {opportunity.base_currency}")
+            self.logger.info(f"   Final Amount: {current_balance:.8f} {opportunity.base_currency}")
+            self.logger.info(f"   Actual Profit: {actual_profit:.8f} {opportunity.base_currency} ({actual_profit_percentage:.4f}%)")
+            self.logger.info(f"   Total Fees: {trade_log.total_fees_paid:.8f}")
+            self.logger.info(f"   Net P&L: {actual_profit - trade_log.total_fees_paid:.8f} {opportunity.base_currency}")
+            self.logger.info(f"   Execution Time: {trade_log.total_duration_ms:.0f}ms")
+            self.logger.info(f"🔴 LIVE TRADING: Check your Binance account to see these trades!")
             
             # Log successful trade
             self.trade_logger.info(f"TRADE_SUCCESS ({trading_mode}/{execution_type}): {opportunity.to_dict()}")
@@ -311,8 +398,8 @@ class TradeExecutor:
             await self.detailed_trade_logger.log_trade(trade_log)
             
             execution_type = "AUTO" if self.auto_trading else "MANUAL" 
-            trading_mode = "PAPER" if Config.PAPER_TRADING else "LIVE"
-            self.logger.error(f"Arbitrage execution failed on {exchange_id} ({trading_mode}/{execution_type}): {e}")
+            trading_mode = "🔴 LIVE"
+            self.logger.error(f"❌ ARBITRAGE EXECUTION FAILED on {exchange_id} ({trading_mode}/{execution_type}): {str(e)}")
             self.trade_logger.error(f"TRADE_FAILED ({trading_mode}/{execution_type}): {opportunity.to_dict()} | Error: {str(e)}")
             
             return False

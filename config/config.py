@@ -15,26 +15,28 @@ class Config:
     for exchange_id in SUPPORTED_EXCHANGES.keys():
         api_key = os.getenv(f'{exchange_id.upper()}_API_KEY', '')
         api_secret = os.getenv(f'{exchange_id.upper()}_API_SECRET', '')
+        passphrase = os.getenv(f'{exchange_id.upper()}_PASSPHRASE', '')  # For KuCoin
         sandbox = os.getenv(f'{exchange_id.upper()}_SANDBOX', 'false').lower() == 'true'
         
         EXCHANGE_CREDENTIALS[exchange_id] = {
             'api_key': api_key,
             'api_secret': api_secret,
+            'passphrase': passphrase,
             'sandbox': sandbox,
             'enabled': bool(api_key and api_secret)
         }
     
     # Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.1'))
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '100'))
+    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.05'))  # Lower threshold for more opportunities
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '10'))
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
     PRIORITIZE_ZERO_FEE: bool = os.getenv('PRIORITIZE_ZERO_FEE', 'true').lower() == 'true'
     
     # Bot Configuration
-    ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'true').lower() == 'true'
-    AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
+    ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'false').lower() == 'false'  # Default to false for auto-trading
+    AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'  # Default to false, enable via UI
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
-    PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'true').lower() == 'true'  # Default to true for safety
+    PAPER_TRADING: bool = False  # ALWAYS LIVE TRADING - NO PAPER MODE
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'true'
     
     @classmethod

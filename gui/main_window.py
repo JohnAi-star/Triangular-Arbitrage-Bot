@@ -280,7 +280,7 @@ class ArbitrageBotGUI:
                 return
             
             # Initialize detector
-            self.detector = MultiExchangeDetector(self.exchange_manager, {
+            self.detector = MultiExchangeDetector(self.exchange_manager, None, {
                 'min_profit_percentage': self.min_profit_var.get(),
                 'max_trade_amount': self.max_trade_var.get(),
                 'prioritize_zero_fee': Config.PRIORITIZE_ZERO_FEE

@@ -7,14 +7,15 @@ import subprocess, os
 GIT_COMMIT = "unknown"
 
 try:
-    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    commit = subprocess.check_output(
-        ["git", "-C", repo_root, "rev-parse", "HEAD"],
-        stderr=subprocess.DEVNULL
-    ).decode().strip()
-    GIT_COMMIT = commit[:7]
+    if os.path.exists(os.path.join(os.path.dirname(__file__), "..", ".git")):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        commit = subprocess.check_output(
+            ["git", "-C", repo_root, "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+        GIT_COMMIT = commit[:7]
 except Exception:
-    GIT_COMMIT = "unknown"
+    pass  # Keep GIT_COMMIT as "unknown"
 
 print(f"Multi-Exchange Manager (Commit: {GIT_COMMIT})")
 # -----------------------------------------------
@@ -79,7 +80,8 @@ class MultiExchangeManager:
             'exchange_id': exchange_id,
             'api_key': credentials.get('api_key', ''),
             'api_secret': credentials.get('api_secret', ''),
-            'sandbox': credentials.get('sandbox', True),
+            'passphrase': credentials.get('passphrase', ''),  # For KuCoin
+            'sandbox': credentials.get('sandbox', False),  # Default to live trading
             'fee_token': exchange_config.get('fee_token'),
             'fee_discount': exchange_config.get('fee_discount', 0.0),
             'zero_fee_pairs': exchange_config.get('zero_fee_pairs', []),
