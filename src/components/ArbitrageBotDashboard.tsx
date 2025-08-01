@@ -88,25 +88,45 @@ export const ArbitrageBotDashboard: React.FC = () => {
         console.log('Setting up WebSocket connection...');
         backendAPI.connectWebSocket((data: any) => {
             console.log('WebSocket message received:', data);
-            if (data.type === 'opportunities_update' || data.type === 'opportunities') {
+            
+            if (data.type === 'opportunities_update') {
                 console.log('Updating opportunities:', data.data);
-                const formattedOpportunities = data.data.map((opp: any) => ({
-                    id: opp.id,
-                    exchange: opp.exchange,
-                    trianglePath: opp.trianglePath || opp.path,
-                    profitPercentage: opp.profitPercentage || opp.profit_pct,
-                    profitAmount: opp.profitAmount || opp.profit_amount,
-                    volume: opp.volume,
-                    status: opp.status || 'detected',
-                    timestamp: opp.timestamp
-                }));
-                setOpportunities(formattedOpportunities);
+                
+                // Ensure data.data is an array
+                const opportunitiesData = Array.isArray(data.data) ? data.data : [];
+                console.log('Opportunities array length:', opportunitiesData.length);
+                
+                if (opportunitiesData.length > 0) {
+                    const formattedOpportunities = opportunitiesData.map((opp: any, index: number) => {
+                        console.log(`Processing opportunity ${index}:`, opp);
+                        return {
+                            id: opp.id || `opp_${Date.now()}_${index}`,
+                            exchange: opp.exchange || 'Unknown',
+                            trianglePath: opp.trianglePath || opp.path || 'Unknown Path',
+                            profitPercentage: opp.profitPercentage || opp.profit_pct || 0,
+                            profitAmount: opp.profitAmount || opp.profit_amount || 0,
+                            volume: opp.volume || 0,
+                            status: opp.status || 'detected',
+                            timestamp: opp.timestamp || new Date().toISOString()
+                        };
+                    });
+                    
+                    console.log('Setting formatted opportunities:', formattedOpportunities);
+                    setOpportunities(formattedOpportunities);
 
-                // Update stats
-                setStats(prev => ({
-                    ...prev,
-                    opportunitiesFound: formattedOpportunities.length
-                }));
+                    // Update stats
+                    setStats(prev => ({
+                        ...prev,
+                        opportunitiesFound: formattedOpportunities.length
+                    }));
+                } else {
+                    console.log('No opportunities in data, clearing opportunities');
+                    setOpportunities([]);
+                    setStats(prev => ({
+                        ...prev,
+                        opportunitiesFound: 0
+                    }));
+                }
             } else if (data.type === 'opportunity_executed') {
                 const executed = data.data as ArbitrageOpportunity;
                 if (executed.status === 'completed' || executed.status === 'failed') {
@@ -417,25 +437,26 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                 </table>
                                 {opportunities.length === 0 && (
                                     <div className="text-center text-gray-400 py-8">
-                                        <div className="text-center text-gray-400 py-8">No opportunities detected</div>
-                                        <div className="text-center text-gray-400 py-8">
-                                            {isRunning ? (
-                                                <div>
-                                                    <div className="text-lg mb-2">Scanning for LIVE opportunities...</div>
-                                                    <div className="text-sm">
-                                                        Try lowering "Min Profit %" to 0.05% to see more opportunities
-                                                    </div>
-                                                    <div className="text-xs mt-2 text-gray-500">
-                                                        Using REAL market data from {paperTrading ? 'Paper Trading' : 'LIVE Trading'} mode
-                                                    </div>
+                                        {isRunning ? (
+                                            <div>
+                                                <div className="text-lg mb-2">🔍 Scanning for LIVE opportunities...</div>
+                                                <div className="text-sm mb-2">
+                                                    Current settings: Min Profit ≥ {minProfit}%, Max Trade: ${maxTradeAmount}
                                                 </div>
-                                            ) : (
-                                                <div>
-                                                    <div className="text-lg mb-2">Click "Start Bot" to begin</div>
-                                                    <div className="text-sm">LIVE trading will show real profitable opportunities</div>
+                                                <div className="text-xs mt-2 text-gray-500">
+                                                    Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} | 
+                                                    Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
-                                            )}
-                                        </div>
+                                                <div className="text-xs mt-1 text-blue-400">
+                                                    Try lowering "Min Profit %" to see more opportunities
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <div className="text-lg mb-2">Click "Start Bot" to begin</div>
+                                                <div className="text-sm">LIVE trading will show real profitable opportunities</div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

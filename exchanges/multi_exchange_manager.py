@@ -72,14 +72,23 @@ class MultiExchangeManager:
         exchange_config = SUPPORTED_EXCHANGES[exchange_id]
         credentials = Config.EXCHANGE_CREDENTIALS.get(exchange_id, {})
 
-        if not credentials.get('enabled') and not Config.PAPER_TRADING:
-            self.logger.warning(f"No credentials for {exchange_id}")
+        # Log credential status for debugging
+        api_key = credentials.get('api_key', '').strip()
+        api_secret = credentials.get('api_secret', '').strip()
+        
+        self.logger.info(f"🔑 Checking credentials for {exchange_id}:")
+        self.logger.info(f"   API Key: {'SET (' + api_key[:8] + '...)' if api_key else 'MISSING'}")
+        self.logger.info(f"   API Secret: {'SET' if api_secret else 'MISSING'}")
+        self.logger.info(f"   Enabled: {credentials.get('enabled', False)}")
+        
+        if not credentials.get('enabled'):
+            self.logger.error(f"❌ No valid credentials for {exchange_id}")
             return None
 
         config = {
             'exchange_id': exchange_id,
-            'api_key': credentials.get('api_key', ''),
-            'api_secret': credentials.get('api_secret', ''),
+            'api_key': api_key,
+            'api_secret': api_secret,
             'passphrase': credentials.get('passphrase', ''),  # For KuCoin
             'sandbox': credentials.get('sandbox', False),  # Default to live trading
             'fee_token': exchange_config.get('fee_token'),

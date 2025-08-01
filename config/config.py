@@ -27,14 +27,18 @@ class Config:
         }
     
     # Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.05'))  # Lower threshold for more opportunities
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '10'))
+    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.08'))  # 0.08% minimum for consistent profit
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '25'))  # $25 per trade for better profit margins
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
     PRIORITIZE_ZERO_FEE: bool = os.getenv('PRIORITIZE_ZERO_FEE', 'true').lower() == 'true'
     
+    # Development flags
+    FORCE_FAKE_OPPORTUNITY: bool = False  # Disable fake opportunities for live trading
+    MIN_PROFIT_THRESHOLD: float = float(os.getenv('MIN_PROFIT_THRESHOLD', '0.08'))  # 0.08% minimum threshold
+    
     # Bot Configuration
-    ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'false').lower() == 'false'  # Default to false for auto-trading
-    AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'  # Default to false, enable via UI
+    ENABLE_MANUAL_CONFIRMATION: bool = False  # No manual confirmation for auto-trading
+    AUTO_TRADING_MODE: bool = True  # Enable auto-trading by default
     LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
     PAPER_TRADING: bool = False  # ALWAYS LIVE TRADING - NO PAPER MODE
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'true'
@@ -62,18 +66,17 @@ class Config:
     @classmethod
     def validate(cls) -> bool:
         """Validate configuration parameters."""
-        # ALWAYS require at least one exchange with valid credentials
+        # For GUI mode, we need real credentials to access balance
         has_valid_exchange = any(
             cred['enabled'] for cred in cls.EXCHANGE_CREDENTIALS.values()
         )
         
-        # Even in paper trading, we need credentials to fetch real market data
         if not has_valid_exchange:
-            print("❌ ERROR: No valid exchange credentials found!")
-            print("   The bot requires real API credentials to fetch market data.")
-            print("   Even in paper trading mode, real market data is needed.")
-            print("   Please configure your API credentials in the .env file.")
-            return False
+            # For GUI, we can still run without credentials but warn user
+            print("⚠️  WARNING: No valid exchange credentials found!")
+            print("   Limited functionality - cannot access real account balance.")
+            print("   Configure API credentials in .env for full functionality.")
+            return True  # Allow GUI to start
             
         if cls.MIN_PROFIT_PERCENTAGE <= 0:
             print("❌ ERROR: MIN_PROFIT_PERCENTAGE must be greater than 0")

@@ -56,13 +56,20 @@ class UnifiedExchange(BaseExchange):
                 'rateLimit': 1200
             }
 
-            if not self.config.get('api_key') or not self.config.get('api_secret'):
-                self.logger.error(f"No API credentials for {self.exchange_id} - LIVE TRADING REQUIRES REAL CREDENTIALS")
+            # Check for API credentials
+            api_key = self.config.get('api_key', '').strip()
+            api_secret = self.config.get('api_secret', '').strip()
+            
+            if not api_key or not api_secret:
+                self.logger.error(f"❌ No API credentials for {self.exchange_id}")
+                self.logger.error(f"   API Key: {'SET' if api_key else 'MISSING'}")
+                self.logger.error(f"   API Secret: {'SET' if api_secret else 'MISSING'}")
+                self.logger.error("   Please configure your .env file with valid credentials")
                 return False
 
             exchange_config.update({
-                'apiKey': self.config.get('api_key', ''),
-                'secret': self.config.get('api_secret', ''),
+                'apiKey': api_key,
+                'secret': api_secret,
                 'sandbox': False  # ALWAYS LIVE TRADING - NO SANDBOX
             })
             
@@ -78,20 +85,27 @@ class UnifiedExchange(BaseExchange):
             # Verify account balance for live trading
             balance = await self.get_account_balance()
             total_balance_usd = sum(float(bal) for bal in balance.values() if bal > 0)
-            self.logger.info(f"🔴 LIVE TRADING - {self.exchange_id} total balance: ~${total_balance_usd:.2f}")
-            if total_balance_usd < 10:
-                self.logger.warning(f"⚠️ Low balance on {self.exchange_id} - minimum $10 recommended for trading")
+            self.logger.info(f"💰 REAL BALANCE - {self.exchange_id}: ~${total_balance_usd:.2f} USD")
+            
+            # Log detailed balance for debugging
+            if balance:
+                major_balances = {k: v for k, v in balance.items() if v > 0.05}
+                self.logger.info(f"   Major balances: {major_balances}")
+            
+            if total_balance_usd < 5:
+                self.logger.warning(f"⚠️ Low balance on {self.exchange_id} - minimum $5 recommended for trading")
 
             self.trading_pairs = {
                 s: m for s, m in self.exchange.markets.items() if m.get("active", False)
             }
 
             self.is_connected = True
-            self.logger.info(f"✅ Connected to {self.exchange_id} in 🔴 LIVE TRADING mode")
+            self.logger.info(f"✅ Connected to {self.exchange_id} - REAL ACCOUNT ACCESS")
             self.logger.info(f"{self.exchange_id}: {len(self.trading_pairs)} trading pairs")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to connect to {self.exchange_id}: {e}")
+            self.logger.error(f"❌ Failed to connect to {self.exchange_id}: {e}")
+            self.logger.error("   Check your API credentials in .env file")
             return False
 
     async def _check_internet_connectivity(self) -> bool:
@@ -331,7 +345,12 @@ class UnifiedExchange(BaseExchange):
         if not self.is_connected:
             return {}
         try:
+            self.logger.info(f"🔍 Fetching account balance from {self.exchange_id}...")
             balance = await self.exchange.fetch_balance()
+            
+            # Log the full balance object for debugging
+            self.logger.info(f"📊 Raw balance response: {balance}")
+            
             # Handle both dict and direct value formats
             result = {}
             for currency, info in balance.items():
@@ -341,24 +360,68 @@ class UnifiedExchange(BaseExchange):
                     free_balance = float(info.get('free', 0.0))
                     if free_balance > 0:
                         result[currency] = free_balance
+                        self.logger.info(f"💰 Found {currency}: {free_balance:.8f}")
                 elif isinstance(info, (int, float)) and float(info) > 0:
                     result[currency] = float(info)
+                    self.logger.info(f"💰 Found {currency}: {float(info):.8f}")
             
-            # Log balance details for debugging
-            total_usd_estimate = 0
+            # Get current prices for USD conversion
+            total_usd_estimate = await self._calculate_usd_value(result)
+            
+            self.logger.info(f"💵 Account balance for {self.exchange_id}: {len(result)} currencies")
+            self.logger.info(f"💵 Estimated Total: ~${total_usd_estimate:.2f} USD")
+            
+            # Log individual balances
             for curr, bal in result.items():
-                if curr in ['USDT', 'USDC', 'BUSD']:
-                    total_usd_estimate += bal
-                elif curr == 'BTC':
-                    total_usd_estimate += bal * 45000  # Rough estimate
-                elif curr == 'ETH':
-                    total_usd_estimate += bal * 3000   # Rough estimate
+                self.logger.info(f"   {curr}: {bal:.8f}")
             
-            self.logger.info(f"Account balance for {self.exchange_id}: {len(result)} currencies, ~${total_usd_estimate:.2f} USD")
             return result
         except Exception as e:
             self.logger.error(f"Error fetching balance from {self.exchange_id}: {e}")
             return {}
+    
+    async def _calculate_usd_value(self, balances: Dict[str, float]) -> float:
+        """Calculate USD value of all balances using current market prices."""
+        total_usd = 0.0
+        
+        for currency, amount in balances.items():
+            if amount <= 0:
+                continue
+                
+            try:
+                if currency in ['USDT', 'USDC', 'BUSD', 'USD']:
+                    # Stablecoins are 1:1 with USD
+                    usd_value = amount
+                    total_usd += usd_value
+                    self.logger.info(f"💵 {currency}: {amount:.8f} = ${usd_value:.2f} USD")
+                else:
+                    # Try to get current price vs USDT
+                    symbol = f"{currency}/USDT"
+                    if symbol in self.trading_pairs:
+                        ticker = await self.get_ticker(symbol)
+                        if ticker and ticker.get('last'):
+                            price = float(ticker['last'])
+                            usd_value = amount * price
+                            total_usd += usd_value
+                            self.logger.info(f"💵 {currency}: {amount:.8f} × ${price:.2f} = ${usd_value:.2f} USD")
+                        else:
+                            self.logger.warning(f"⚠️ No price data for {symbol}")
+                    else:
+                        # Fallback to rough estimates for major currencies
+                        if currency == 'BTC':
+                            usd_value = amount * 100000  # Rough BTC price
+                            total_usd += usd_value
+                            self.logger.info(f"💵 {currency}: {amount:.8f} × $100,000 ≈ ${usd_value:.2f} USD (estimate)")
+                        elif currency == 'ETH':
+                            usd_value = amount * 3500  # Rough ETH price
+                            total_usd += usd_value
+                            self.logger.info(f"💵 {currency}: {amount:.8f} × $3,500 ≈ ${usd_value:.2f} USD (estimate)")
+                        else:
+                            self.logger.info(f"💵 {currency}: {amount:.8f} (no USD conversion available)")
+            except Exception as e:
+                self.logger.error(f"Error calculating USD value for {currency}: {e}")
+        
+        return total_usd
 
     async def get_trading_fees(self, symbol: str) -> Tuple[float, float]:
         try:

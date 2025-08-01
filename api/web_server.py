@@ -32,11 +32,12 @@ def setup_logger(name: str) -> logging.Logger:
         datefmt='%Y-%m-%d %H:%M:%S'
     )
     
-    # Console handler
     ch = logging.StreamHandler()
     ch.setFormatter(formatter)
-    logger.addHandler(ch)
-    
+
+    if not logger.hasHandlers():
+        logger.addHandler(ch)
+
     return logger
 
 # Get git commit hash safely
@@ -92,7 +93,6 @@ class WebSocketManager:
                 self.logger.warning(f"Failed to send to client: {str(e)}")
                 disconnected.append(connection)
         
-        # Clean up disconnected clients
         for conn in disconnected:
             await self.disconnect(conn)
 
@@ -114,7 +114,7 @@ class ArbitrageWebServer:
         self.running = False
         self.auto_trading = False
         self.opportunities: List[Dict[str, Any]] = []
-        self.opportunities_cache: Dict[str, Any] = {}  # Cache for opportunity lookup
+        self.opportunities_cache: Dict[str, Any] = {}
         self.stats = {
             'opportunitiesFound': 0,
             'tradesExecuted': 0,
@@ -137,66 +137,59 @@ class ArbitrageWebServer:
         @app.post("/api/bot/start")
         async def start_bot(config: BotConfig):
             try:
-                # Update global config with user settings
                 from config.config import Config
-                Config.PAPER_TRADING = False  # ALWAYS LIVE TRADING
+                Config.PAPER_TRADING = False
                 Config.AUTO_TRADING_MODE = config.autoTradingMode
                 Config.MIN_PROFIT_PERCENTAGE = config.minProfitPercentage
                 Config.MAX_TRADE_AMOUNT = config.maxTradeAmount
-                
+
                 self.auto_trading = config.autoTradingMode
                 trading_mode = "🔴 LIVE"
-                self.logger.info("🚀 Starting bot with config: "
-                                f"minProfit={config.minProfitPercentage}%, "
-                                f"maxTrade={config.maxTradeAmount}, "
-                                f"autoTrade={config.autoTradingMode}, "
-                                f"liveTrading=TRUE, "
-                                f"mode={trading_mode}, "
-                                f"exchanges={config.selectedExchanges}")
+                self.logger.info(f"🚀 Starting bot with config: "
+                                 f"minProfit={config.minProfitPercentage}%, "
+                                 f"maxTrade={config.maxTradeAmount}, "
+                                 f"autoTrade={config.autoTradingMode}, "
+                                 f"liveTrading=TRUE, "
+                                 f"mode={trading_mode}, "
+                                 f"exchanges={config.selectedExchanges}")
 
-                # Initialize exchange manager
                 from exchanges.multi_exchange_manager import MultiExchangeManager
                 self.exchange_manager = MultiExchangeManager()
                 success = await self.exchange_manager.initialize_exchanges(config.selectedExchanges)
                 if not success:
                     raise HTTPException(status_code=400, detail="Exchange initialization failed")
 
-                # Initialize detector
                 from arbitrage.multi_exchange_detector import MultiExchangeDetector
                 self.detector = MultiExchangeDetector(
                     self.exchange_manager,
-                    self.websocket_manager,  # Pass WebSocket manager correctly
+                    self.websocket_manager,
                     {
-                        'min_profit_percentage': max(0.01, config.minProfitPercentage),  # Minimum 0.01%
+                        'min_profit_percentage': max(0.00001, config.minProfitPercentage),
                         'max_trade_amount': config.maxTradeAmount
                     }
                 )
                 await self.detector.initialize()
 
-                # Initialize executor
                 from arbitrage.trade_executor import TradeExecutor
                 self.executor = TradeExecutor(
-                self.exchange_manager,
-                 {
-                   'auto_trading': config.autoTradingMode,
-                  'paper_trading': False,  # ALWAYS LIVE TRADING
-                   'enable_manual_confirmation': False  # Disable prompts for auto-trading
-                 }
-            )
-                
-                # Set WebSocket manager for trade logging
+                    self.exchange_manager,
+                    {
+                        'auto_trading': config.autoTradingMode,
+                        'paper_trading': False,
+                        'enable_manual_confirmation': False
+                    }
+                )
                 self.executor.set_websocket_manager(self.websocket_manager)
 
                 self.running = True
-                # Start scanning loop with faster updates
                 asyncio.create_task(self._fast_scanning_loop())
-
                 self.stats['activeExchanges'] = len(config.selectedExchanges)
+
                 return {
-                    "status": "success", 
-                    "message": f"🚀 🔴 LIVE TRADING Bot started successfully",
+                    "status": "success",
+                    "message": "🚀 🔴 LIVE TRADING Bot started successfully",
                     "trading_mode": trading_mode,
-                   "paper_trading": False
+                    "paper_trading": False
                 }
             except Exception as e:
                 self.logger.error(f"Error starting bot: {str(e)}", exc_info=True)
@@ -215,101 +208,16 @@ class ArbitrageWebServer:
                 self.logger.error(f"Error stopping bot: {str(e)}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @app.post("/api/bot/toggle-auto-trading")
-        async def toggle_auto_trading(request: dict):
-            try:
-                self.auto_trading = request.get('autoTrading', False)
-                self.logger.info(f"Auto-trading {'enabled' if self.auto_trading else 'disabled'}")
-                
-                # Update executor if it exists
-                if self.executor:
-                    self.executor.config['auto_trading'] = self.auto_trading
-                
-                # Broadcast the change to all clients
-                await self.websocket_manager.broadcast('auto_trading_changed', {
-                    'autoTrading': self.auto_trading
-                })
-                
-                return {"status": "success", "autoTrading": self.auto_trading}
-            except Exception as e:
-                self.logger.error(f"Error toggling auto-trading: {str(e)}")
-                raise HTTPException(status_code=500, detail=str(e))
-
         @app.get("/api/opportunities")
         async def get_opportunities():
             return self.opportunities
-        
-        @app.post("/api/opportunities/{opp_id}/execute")
-        async def execute_opportunity(opp_id: str):
-            try:
-                self.logger.info(f"🎯 LIVE TRADE execution requested for opportunity: {opp_id}")
-                
-                # Look up opportunity in cache
-                if opp_id not in self.opportunities_cache:
-                    self.logger.error(f"Opportunity {opp_id} not found in cache")
-                    raise HTTPException(status_code=404, detail="Opportunity not found or expired")
-                
-                opportunity_data = self.opportunities_cache[opp_id]
-                
-                # Convert to ArbitrageOpportunity object for execution
-                from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep
-                
-                opportunity = ArbitrageOpportunity(
-                    base_currency=opportunity_data.get('base_currency', 'BTC'),
-                    intermediate_currency=opportunity_data.get('intermediate_currency', 'ETH'),
-                    quote_currency=opportunity_data.get('quote_currency', 'USDT'),
-                    pair1=f"{opportunity_data.get('base_currency', 'BTC')}/{opportunity_data.get('intermediate_currency', 'ETH')}",
-                    pair2=f"{opportunity_data.get('intermediate_currency', 'ETH')}/{opportunity_data.get('quote_currency', 'USDT')}",
-                    pair3=f"{opportunity_data.get('base_currency', 'BTC')}/{opportunity_data.get('quote_currency', 'USDT')}",
-                    initial_amount=opportunity_data.get('volume', 100),
-                    final_amount=opportunity_data.get('volume', 100) * (1 + opportunity_data.get('profit_pct', 0) / 100),
-                    estimated_fees=opportunity_data.get('volume', 100) * 0.003,  # 0.3% estimated fees
-                    estimated_slippage=opportunity_data.get('volume', 100) * 0.001  # 0.1% estimated slippage
-                )
-                
-                # Set exchange attribute
-                setattr(opportunity, 'exchange', opportunity_data.get('exchange', 'binance'))
-                
-                # Execute the trade
-                if not self.executor:
-                    raise HTTPException(status_code=400, detail="Trade executor not initialized")
-                
-                self.logger.info(f"💰 Executing LIVE TRADE: {opportunity.triangle_path}")
-                success = await self.executor.execute_arbitrage(opportunity)
-                
-                # Update stats
-                if success:
-                    self.stats['tradesExecuted'] += 1
-                    self.stats['totalProfit'] += opportunity.profit_amount
-                    self.logger.info(f"✅ LIVE TRADE SUCCESS: Profit ${opportunity.profit_amount:.6f}")
-                
-                # Remove from cache after execution attempt
-                del self.opportunities_cache[opp_id]
-                
-                return {
-                    "status": "success" if success else "failed",
-                    "opportunity_id": opp_id,
-                    "executed": success,
-                    "initial_amount": opportunity.initial_amount,
-                    "final_amount": opportunity.final_amount,
-                    "profit_amount": opportunity.profit_amount,
-                    "profit_percentage": opportunity.profit_percentage
-                }
-                
-            except HTTPException:
-                raise
-            except Exception as e:
-                self.logger.error(f"Error executing opportunity {opp_id}: {str(e)}", exc_info=True)
-                raise HTTPException(status_code=500, detail=str(e))
-        
+
         @app.get("/api/trades")
         async def get_trades():
-            """Get recent detailed trade logs."""
             return self.trade_logger.get_recent_trades(50)
-        
+
         @app.get("/api/trade-stats")
         async def get_trade_stats():
-            """Get comprehensive trade statistics."""
             return self.trade_logger.get_trade_statistics()
 
         @app.websocket("/ws")
@@ -317,7 +225,7 @@ class ArbitrageWebServer:
             await self.websocket_manager.connect(websocket)
             try:
                 while True:
-                    await websocket.receive_text()  # Keep connection alive
+                    await websocket.receive_text()
             except WebSocketDisconnect:
                 await self.websocket_manager.disconnect(websocket)
 
@@ -327,11 +235,9 @@ class ArbitrageWebServer:
             try:
                 if self.detector and self.exchange_manager:
                     opportunities = await self.detector.scan_all_opportunities()
-                    
-                    # Format opportunities for UI
+
                     self.opportunities = []
                     for i, opp in enumerate(opportunities):
-                        # Only show opportunities that meet the minimum profit threshold
                         if opp.profit_percentage >= self.detector.min_profit_pct:
                             opp_id = f"opp_{int(time.time()*1000)}_{i}"
                             opportunity_data = {
@@ -340,7 +246,7 @@ class ArbitrageWebServer:
                                 "trianglePath": " → ".join(opp.triangle_path[:3]),
                                 "profitPercentage": round(opp.profit_percentage, 4),
                                 "profitAmount": round(opp.profit_amount, 4),
-                                "volume": self.detector.max_trade_amount,  # Use exact trade amount
+                                "volume": self.detector.max_trade_amount,
                                 "status": "detected" if opp.profit_percentage > 0 else "low_profit",
                                 "dataType": "REAL_MARKET_DATA",
                                 "timestamp": datetime.now().isoformat(),
@@ -350,93 +256,72 @@ class ArbitrageWebServer:
                                 "profit_pct": opp.profit_percentage
                             }
                             self.opportunities.append(opportunity_data)
-                            # Cache the opportunity for later execution
                             self.opportunities_cache[opp_id] = opportunity_data
-                    self.opportunities = self.opportunities[:100]  # Keep only latest 100 opportunities
-                    
-                    # Clean old opportunities from cache (keep last 500)
+
+                    self.opportunities = self.opportunities[:100]
+
                     if len(self.opportunities_cache) > 500:
                         old_keys = list(self.opportunities_cache.keys())[:-500]
                         for key in old_keys:
                             del self.opportunities_cache[key]
-                    
+
                     self.stats['opportunitiesFound'] = len(self.opportunities)
-                    
-                    # Broadcast opportunities update
                     await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
-                    
-                    # Auto-execute profitable opportunities if auto-trading is enabled
+
                     if self.auto_trading and self.executor:
                         await self._auto_execute_opportunities(opportunities)
-                    
-                    # Also log for debugging
+
                     if self.opportunities:
                         self.logger.info(f"💎 Found {len(self.opportunities)} LIVE opportunities, broadcasting to {len(self.websocket_manager.connections)} clients")
-                
-                await asyncio.sleep(3)  # Scan every 3 seconds for faster detection
+
+                await asyncio.sleep(3)
             except Exception as e:
                 self.logger.error(f"Error in scanning loop: {str(e)}", exc_info=True)
-                await asyncio.sleep(10)  # Shorter delay on error
+                await asyncio.sleep(10)
 
     async def _auto_execute_opportunities(self, opportunities):
-        """Auto-execute profitable opportunities when auto-trading is enabled."""
         try:
-            profitable_opportunities = [
-                opp for opp in opportunities 
-                if hasattr(opp, 'is_profitable') and opp.is_profitable and opp.profit_percentage >= 0.05
+            # PROFIT FOCUS: Only execute highly profitable opportunities
+            highly_profitable_opportunities = [
+                opp for opp in opportunities
+                if hasattr(opp, 'is_profitable') and opp.is_profitable and opp.profit_percentage >= 0.08
             ]
-            
-            if not profitable_opportunities:
-                logger.debug("No profitable opportunities found for auto-execution")
+
+            if not highly_profitable_opportunities:
+                self.logger.debug("No highly profitable opportunities found for auto-execution (need ≥0.08%)")
                 return
-                
-            # Execute top opportunities
-            for opportunity in profitable_opportunities[:3]:  # Execute top 3 opportunities
+
+            # Execute top 2 most profitable opportunities to maximize profit
+            sorted_opportunities = sorted(highly_profitable_opportunities, key=lambda x: x.profit_percentage, reverse=True)
+            for opportunity in sorted_opportunities[:2]:
                 try:
-                    self.logger.info(f"🤖 AUTO-EXECUTING LIVE TRADE: {opportunity.exchange} - {opportunity.profit_percentage:.4f}% profit")
-                    
-                    # Set exchange attribute for execution
+                    expected_profit_usd = self.detector.max_trade_amount * (opportunity.profit_percentage / 100)
+                    self.logger.info(f"💰 AUTO-EXECUTING PROFITABLE TRADE: {opportunity.exchange} - "
+                                   f"{opportunity.profit_percentage:.4f}% profit (${expected_profit_usd:.2f})")
                     setattr(opportunity, 'exchange', opportunity.exchange)
-                    
                     success = await self.executor.execute_arbitrage(opportunity)
-                    
+
                     if success:
                         self.stats['tradesExecuted'] += 1
-                        self.stats['totalProfit'] += opportunity.profit_amount
-                        
-                        # Broadcast auto-execution result
+                        self.stats['totalProfit'] += expected_profit_usd
                         await self.websocket_manager.broadcast('opportunity_executed', {
                             'id': f"auto_{int(time.time()*1000)}",
                             'exchange': opportunity.exchange,
                             'profitPercentage': opportunity.profit_percentage,
-                            'profitAmount': opportunity.profit_amount,
-                            'volume': self.detector.max_trade_amount,  # Use exact trade amount
+                            'profitAmount': expected_profit_usd,
+                            'volume': self.detector.max_trade_amount,
                             'status': 'completed',
                             'timestamp': datetime.now().isoformat(),
                             'auto_executed': True
                         })
-                        
-                        self.logger.info(f"✅ LIVE AUTO-EXECUTION SUCCESS: {opportunity.profit_percentage:.4f}% profit, ${opportunity.profit_amount:.6f}")
+                        self.logger.info(f"💰 PROFIT GENERATED: {opportunity.profit_percentage:.4f}% profit, ${expected_profit_usd:.2f} earned!")
                     else:
-                        self.logger.warning(f"❌ LIVE AUTO-EXECUTION FAILED for {opportunity.exchange}")
-                        
-                        # Broadcast failure
-                        await self.websocket_manager.broadcast('opportunity_executed', {
-                            'id': f"auto_{int(time.time()*1000)}",
-                            'exchange': opportunity.exchange,
-                            'profitPercentage': opportunity.profit_percentage,
-                            'profitAmount': 0,
-                            'volume': self.detector.max_trade_amount,
-                            'status': 'failed',
-                            'timestamp': datetime.now().isoformat(),
-                            'auto_executed': True
-                        })
-                        
+                        self.logger.warning(f"❌ PROFIT OPPORTUNITY MISSED for {opportunity.exchange}")
                 except Exception as e:
-                    self.logger.error(f"❌ Error in LIVE auto-execution: {str(e)}")
-                    
+                    self.logger.error(f"❌ Error in PROFIT auto-execution: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error in auto-execute opportunities: {str(e)}")
+
     def run(self, host: str = "0.0.0.0", port: int = 8000):
         self.logger.info(f"Starting web server on {host}:{port}")
         uvicorn.run(app, host=host, port=port, log_level="info")

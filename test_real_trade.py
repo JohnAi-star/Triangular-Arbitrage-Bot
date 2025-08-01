@@ -194,7 +194,7 @@ if __name__ == "__main__":
     print("🔺 Real Trade Execution Test")
     print("=" * 50)
     print("⚠️  WARNING: This will execute REAL trades with REAL money!")
-    print("   Only a small amount (~$8) will be used for testing\n")
+    print("   Only a small amount (~$4) will be used for testing\n")
 
     response = input("Continue with REAL trade test? (y/n): ").lower().strip()
     if response != 'y':

@@ -209,18 +209,21 @@ class BackendAPI {
           
           // Handle different message types
           if (data.type === 'opportunities_update') {
-            console.log('Received opportunities update:', data.data);
+            console.log('Received opportunities update:', data.data, 'Length:', Array.isArray(data.data) ? data.data.length : 'Not array');
           } else if (data.type === 'trade_executed') {
             console.log('Received trade execution:', data.data);
           } else if (data.type === 'opportunity_executed') {
             console.log('Received opportunity execution:', data.data);
           } else if (data.type === 'auto_trading_changed') {
             console.log('Auto-trading mode changed:', data.data);
+          } else {
+            console.log('Unknown message type:', data.type);
           }
           
           onMessage(data);
         } catch (error) {
           console.error('Failed to parse WebSocket message:', error);
+          console.error('Raw message was:', event.data);
         }
       };
 

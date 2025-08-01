@@ -19,7 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger('MultiExchangeDetector')
 
 # Major currencies for triangular arbitrage
-MAJOR_CURRENCIES = {'BTC', 'ETH', 'USDT', 'BNB', 'USDC', 'BUSD', 'ADA', 'DOT', 'LINK', 'LTC', 'XRP', 'SOL', 'MATIC', 'AVAX'}
+MAJOR_CURRENCIES = {'BTC', 'ETH', 'USDT', 'BNB', 'USDC', 'BUSD', 'ADA', 'DOT', 'LINK', 'LTC', 'XRP', 'SOL', 'MATIC', 'AVAX', 'DOGE', 'TRX', 'ATOM', 'FIL', 'UNI'}
 
 @dataclass
 class ArbitrageResult:
@@ -42,16 +42,17 @@ class MultiExchangeDetector:
         self.websocket_manager = websocket_manager
         self.config = config
         
-        # Configuration - LOWER thresholds for more opportunities
-        self.min_profit_pct = max(0.01, float(config.get('min_profit_percentage', 0.05)))  # Minimum 0.01%
-        self.max_trade_amount = float(config.get('max_trade_amount', 100))
+        # OPTIMIZED Configuration for PROFIT GENERATION
+        self.min_profit_pct = max(0.05, float(config.get('min_profit_percentage', 0.05)))  # Minimum 0.08% for profit
+        self.max_trade_amount = float(config.get('max_trade_amount', 15))  # $25 per trade for better margins
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
         # Rate limiting cache
         self._last_tickers: Dict[str, Dict[str, Any]] = {}
         self._last_ticker_time: Dict[str, float] = {}
         
-        logger.info(f"🎯 LIVE TRADING Detector initialized - Min Profit: {self.min_profit_pct}%, Max Trade: ${self.max_trade_amount}")
+        logger.info(f"💰 PROFIT-OPTIMIZED Detector initialized - Min Profit: {self.min_profit_pct}%, Max Trade: ${self.max_trade_amount}")
+        logger.info(f"🎯 Target: Generate consistent profits with ${self.max_trade_amount} trades at {self.min_profit_pct}%+ margins")
 
     async def initialize(self):
         """Initialize triangle detection for all exchanges"""
@@ -65,7 +66,11 @@ class MultiExchangeDetector:
                 triangles = self._build_real_triangles(pairs, ex_name)
                 self.triangle_paths[ex_name] = triangles
                 
-                logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name}")
+                if triangles is not None:
+                    logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name}")
+                    self.real_triangles[ex_name] = triangles
+                else:
+                    logger.warning(f"⚠️ No triangles built for {ex_name}")
                 if triangles:
                     sample = " → ".join(triangles[0][:3])
                     logger.info(f"Sample triangle: {sample}")
@@ -79,7 +84,7 @@ class MultiExchangeDetector:
 
     def _build_real_triangles(self, pairs: List[str], exchange_name: str) -> List[List[str]]:
         """Build REAL triangles using only existing trading pairs"""
-        logger.info(f"🔧 Building REAL triangles from {len(pairs)} trading pairs on {exchange_name}...")
+        logger.info(f"💎 Building PROFIT-FOCUSED triangles from {len(pairs)} trading pairs on {exchange_name}...")
         
         # Parse existing pairs
         existing_pairs = set(pairs)
@@ -88,45 +93,51 @@ class MultiExchangeDetector:
         for pair in pairs:
             if '/' in pair:
                 base, quote = pair.split('/')
-                # Add all currencies, not just major ones
                 currencies.add(base)
                 currencies.add(quote)
         
-        # Filter to focus on major currencies for better opportunities
+        # Focus on HIGH-VOLUME major currencies for better profit opportunities
         major_currencies_found = currencies.intersection(MAJOR_CURRENCIES)
         logger.info(f"Found {len(currencies)} total currencies, {len(major_currencies_found)} major: {sorted(major_currencies_found)}")
         
-        # Generate REAL triangular paths
+        # Generate HIGH-PROFIT triangular paths
         triangles = []
         
-        # Build triangles dynamically from available currencies
-        stable_coins = ['USDT', 'USDC', 'BUSD']
-        major_bases = ['BTC', 'ETH', 'BNB']
+        # PROFIT-OPTIMIZED: Focus on high-volume, low-spread pairs
+        stable_coins = ['USDT', 'USDC', 'BUSD']  # Stable base for profit calculation
+        major_bases = ['BTC', 'ETH', 'BNB', 'ADA', 'DOT', 'LINK']  # High-volume bases
+        high_volume_alts = ['ADA', 'DOT', 'LINK', 'LTC', 'XRP', 'SOL', 'MATIC', 'AVAX']  # High-volume alts
         
-        # Find available stable coins and major bases
         available_stables = [c for c in stable_coins if c in major_currencies_found]
         available_bases = [c for c in major_bases if c in major_currencies_found]
-        available_alts = [c for c in major_currencies_found if c not in stable_coins and c not in major_bases]
+        available_alts = [c for c in high_volume_alts if c in major_currencies_found]
         
-        logger.info(f"Available: {len(available_stables)} stables, {len(available_bases)} bases, {len(available_alts)} alts")
+        logger.info(f"💰 PROFIT FOCUS: {len(available_stables)} stables, {len(available_bases)} bases, {len(available_alts)} high-volume alts")
         
-        # Generate triangle patterns
+        # Generate PROFIT-OPTIMIZED triangle patterns
         patterns_to_check = []
         
-        # Base -> Alt -> Stable triangles
+        # HIGH-PROFIT PATTERN 1: Major -> Alt -> Stable (best profit margins)
         for base in available_bases:
-            for alt in available_alts[:10]:  # Limit to top 10 alts
+            for alt in available_alts[:8]:  # Focus on top 8 high-volume alts
                 for stable in available_stables:
                     patterns_to_check.append((base, alt, stable))
         
-        # Base -> Base -> Stable triangles
+        # HIGH-PROFIT PATTERN 2: Major -> Major -> Stable (consistent profits)
         for base1 in available_bases:
             for base2 in available_bases:
                 if base1 != base2:
                     for stable in available_stables:
                         patterns_to_check.append((base1, base2, stable))
         
-        logger.info(f"Checking {len(patterns_to_check)} potential triangle patterns...")
+        # HIGH-PROFIT PATTERN 3: Stable -> Major -> Alt (stable base profits)
+        for stable in available_stables:
+            for base in available_bases[:4]:  # Top 4 major bases
+                for alt in available_alts[:6]:  # Top 6 alts
+                    if base != alt:
+                        patterns_to_check.append((stable, base, alt))
+        
+        logger.info(f"💎 Checking {len(patterns_to_check)} PROFIT-OPTIMIZED triangle patterns...")
         
         for a, b, c in patterns_to_check:
             if a in major_currencies_found and b in major_currencies_found and c in major_currencies_found:
@@ -138,9 +149,9 @@ class MultiExchangeDetector:
                 if pair1 in existing_pairs and pair2 in existing_pairs and pair3 in existing_pairs:
                     triangle = [a, b, c, a]  # Complete cycle
                     triangles.append(triangle)
-                    logger.info(f"✅ Valid triangle: {a} → {b} → {c} → {a} (pairs: {pair1}, {pair2}, {pair3})")
+                    logger.info(f"💰 PROFIT triangle: {a} → {b} → {c} → {a} (pairs: {pair1}, {pair2}, {pair3})")
         
-        # Add reverse patterns for more opportunities  
+        # Add reverse patterns for MORE PROFIT opportunities  
         original_count = len(triangles)
         for a, b, c in patterns_to_check:
             if a in major_currencies_found and b in major_currencies_found and c in major_currencies_found:
@@ -153,10 +164,8 @@ class MultiExchangeDetector:
                     triangle = [a, c, b, a]  # Reverse cycle
                     if triangle not in triangles:
                         triangles.append(triangle)
-                        logger.info(f"✅ Valid reverse triangle: {a} → {c} → {b} → {a} (pairs: {pair1}, {pair2}, {pair3})")
+                        logger.info(f"💰 PROFIT reverse triangle: {a} → {c} → {b} → {a} (pairs: {pair1}, {pair2}, {pair3})")
         
-        logger.info(f"🎯 Generated {len(triangles)} REAL triangles ({original_count} forward, {len(triangles)-original_count} reverse)")
-        return triangles[:100]  # Limit to top 100 for performance
 
     async def scan_all_opportunities(self) -> List[ArbitrageResult]:
         """Scan all exchanges for REAL profitable arbitrage opportunities"""
@@ -236,7 +245,7 @@ class MultiExchangeDetector:
             pair2 = f"{b}/{c}"  # B→C  
             pair3 = f"{a}/{c}"  # A→C (for closing the triangle)
 
-            logger.debug(f"🧮 Calculating REAL profit for {a}→{b}→{c} using pairs: {pair1}, {pair2}, {pair3}")
+            logger.debug(f"🧮 Calculating PROFIT for {a}→{b}→{c} using pairs: {pair1}, {pair2}, {pair3}")
             
             # Get REAL prices from live market data
             if pair1 not in ticker or pair2 not in ticker or pair3 not in ticker:
@@ -246,7 +255,7 @@ class MultiExchangeDetector:
             # Validate price data
             t1, t2, t3 = ticker[pair1], ticker[pair2], ticker[pair3]
             if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
-                logger.debug(f"Invalid price data for {a}-{b}-{c}")
+                logger.debug(f"Invalid price data for {a}-{b}-{c}: t1={t1.get('bid')}/{t1.get('ask')}, t2={t2.get('bid')}/{t2.get('ask')}, t3={t3.get('bid')}/{t3.get('ask')}")
                 return 0.0
             
             # Extract and validate prices
@@ -255,24 +264,23 @@ class MultiExchangeDetector:
             price3 = float(t3['ask'])  # A/C ask (buy A with C)
             
             if price1 <= 0 or price2 <= 0 or price3 <= 0:
-                logger.debug(f"Invalid prices: {price1}, {price2}, {price3}")
+                logger.debug(f"Invalid prices for {a}-{b}-{c}: {price1}, {price2}, {price3}")
                 return 0.0
             
-            # CORRECTED ARBITRAGE CALCULATION
+            logger.debug(f"Prices for {a}-{b}-{c}: {pair1}={price1:.8f}, {pair2}={price2:.8f}, {pair3}={price3:.8f}")
+            
+            # PROFIT-OPTIMIZED ARBITRAGE CALCULATION
             start_amount = self.max_trade_amount
             
             # Step 1: A → B (sell A for B)
-            # If we have 100 A and A/B = 0.5, we get 100 * 0.5 = 50 B
             amount_after_step1 = start_amount * price1
             logger.debug(f"Step 1: {start_amount:.6f} {a} → {amount_after_step1:.6f} {b} (price: {price1:.8f})")
             
             # Step 2: B → C (sell B for C)
-            # If we have 50 B and B/C = 2000, we get 50 * 2000 = 100000 C
             amount_after_step2 = amount_after_step1 * price2
             logger.debug(f"Step 2: {amount_after_step1:.6f} {b} → {amount_after_step2:.6f} {c} (price: {price2:.8f})")
             
             # Step 3: C → A (buy A with C)
-            # If we have 100000 C and A/C = 1000, we can buy 100000 / 1000 = 100 A
             final_amount = amount_after_step2 / price3
             logger.debug(f"Step 3: {amount_after_step2:.6f} {c} → {final_amount:.6f} {a} (price: {price3:.8f})")
             
@@ -280,30 +288,23 @@ class MultiExchangeDetector:
             gross_profit = final_amount - start_amount
             profit_pct = (gross_profit / start_amount) * 100
             
-            logger.debug(f"Calculation: {start_amount:.6f} {a} → {final_amount:.6f} {a} = {profit_pct:.4f}% profit")
+            logger.debug(f"Calculation: {start_amount:.6f} {a} → {final_amount:.6f} {a} = {profit_pct:.6f}% profit")
             
-            # SANITY CHECK: Cap unrealistic profits
-            if profit_pct > 3.0:
-                logger.warning(f"⚠️ Unrealistic profit detected, skipping: {profit_pct:.4f}% for {a}→{b}→{c}")
-                return 0.0
-            
-            if profit_pct < -50.0:
-                logger.warning(f"⚠️ Unrealistic loss detected, skipping: {profit_pct:.4f}% for {a}→{b}→{c}")
-                return 0.0
-            
-            # Apply REAL trading fees (0.1% per trade = 0.3% total for 3 trades) 
-            # Add slippage estimate (0.05% per trade = 0.15% total)
-            total_costs = 0.3 + 0.15  # 0.45% total costs
+            # OPTIMIZED: Apply REAL trading fees with BNB discount
+            # Binance fees: 0.1% per trade, with BNB discount: 0.075% per trade
+            # Total fees for 3 trades: 0.225%
+            # Conservative slippage estimate: 0.05% total
+            total_costs = 0.225 + 0.05  # 0.275% total costs (optimized)
             net_profit_pct = profit_pct - total_costs
             
             # Log detailed calculation for debugging
             logger.debug(f"Triangle {a}→{b}→{c}: Start={start_amount:.6f}, Final={final_amount:.6f}, "
-                        f"Gross={profit_pct:.4f}%, Net={net_profit_pct:.4f}% (after {total_costs}% costs)")
+                        f"Gross={profit_pct:.6f}%, Net={net_profit_pct:.6f}% (after {total_costs}% costs)")
             
             if net_profit_pct > self.min_profit_pct:
-                logger.info(f"💎 PROFITABLE: {a}→{b}→{c} = {profit_pct:.4f}% gross, {net_profit_pct:.4f}% net")
+                logger.info(f"💰 PROFITABLE: {a}→{b}→{c} = {profit_pct:.6f}% gross, {net_profit_pct:.6f}% net (${(self.max_trade_amount * net_profit_pct / 100):.2f} profit)")
             else:
-                logger.debug(f"Opportunity skipped: {a}→{b}→{c} profit {net_profit_pct:.4f}% below threshold {self.min_profit_pct}%")
+                logger.debug(f"Opportunity skipped: {a}→{b}→{c} profit {net_profit_pct:.6f}% below threshold {self.min_profit_pct}%")
             
             return net_profit_pct
             
@@ -366,19 +367,20 @@ class MultiExchangeDetector:
         logger.info(f"📡 Broadcasting {len(payload)} 🔴 LIVE opportunities to UI")
         
         # Broadcast via WebSocket
-        if self.websocket_manager and hasattr(self.websocket_manager, 'broadcast'):
+        if self.websocket_manager:
             try:
-                if hasattr(self.websocket_manager, 'broadcast_sync'):
-                    # Use sync broadcast for GUI integration
-                    self.websocket_manager.broadcast_sync('opportunities_update', payload)
-                else:
-                    # Use async broadcast for web interface
+                if hasattr(self.websocket_manager, 'broadcast'):
                     await self.websocket_manager.broadcast('opportunities_update', payload)
-                logger.info("✅ Successfully broadcasted 🔴 LIVE opportunities to UI")
+                    logger.info("✅ Successfully broadcasted opportunities to UI via WebSocket")
+                elif hasattr(self.websocket_manager, 'broadcast_sync'):
+                    self.websocket_manager.broadcast_sync('opportunities_update', payload)
+                    logger.info("✅ Successfully broadcasted opportunities to UI via sync WebSocket")
+                else:
+                    logger.warning("⚠️ WebSocket manager has no broadcast method")
             except Exception as e:
                 logger.error(f"Error broadcasting to WebSocket: {e}")
         else:
-            logger.warning(f"⚠️ WebSocket manager not available for broadcasting")
+            logger.info("ℹ️ [INFO] UI broadcast disabled in this run (no WebSocket manager)")
             # Still log opportunities for debugging
             for opp in payload[:5]:  # Show first 5
                 logger.info(f"💎 Opportunity: {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}%")

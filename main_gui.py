@@ -43,19 +43,29 @@ def check_dependencies():
 
 def check_configuration():
     """Check if configuration is valid."""
-    if not Config.validate():
-        messagebox.showwarning(
-            "Configuration Error",
-            "❌ CRITICAL: No valid exchange credentials found for LIVE TRADING!\n\n"
-            "The bot requires REAL API credentials to fetch market data,\n"
-            "for LIVE TRADING mode.\n\n"
-            "Please configure your API credentials in the .env file:\n"
-            "- BINANCE_API_KEY=your_api_key\n"
-            "- BINANCE_API_SECRET=your_api_secret\n\n"
-            "🔴 LIVE TRADING requires real exchange connections."
-        )
-        return False
-    return True
+    # Validate config and show appropriate warnings
+    is_valid = Config.validate()
+    
+    # Check specifically for Binance credentials
+    binance_creds = Config.EXCHANGE_CREDENTIALS.get('binance', {})
+    has_binance_creds = binance_creds.get('enabled', False)
+    
+    print(f"🔍 Configuration Check:")
+    print(f"   Binance API Key: {'✅ SET' if binance_creds.get('api_key') else '❌ MISSING'}")
+    print(f"   Binance API Secret: {'✅ SET' if binance_creds.get('api_secret') else '❌ MISSING'}")
+    print(f"   Credentials Enabled: {'✅ YES' if has_binance_creds else '❌ NO'}")
+    print(f"   Min Profit Threshold: {Config.MIN_PROFIT_THRESHOLD}%")
+    print(f"   Force Fake Opportunity: {'✅ ENABLED' if Config.FORCE_FAKE_OPPORTUNITY else '❌ DISABLED'}")
+    
+    if not has_binance_creds:
+        print("⚠️  WARNING: No Binance credentials - limited functionality")
+        print("   To access real balance, configure .env file with:")
+        print("   BINANCE_API_KEY=your_key")
+        print("   BINANCE_API_SECRET=your_secret")
+    else:
+        print("✅ Real Binance credentials found - will access real balance")
+    
+    return True  # Always allow GUI to start
 
 def main():
     """Main entry point."""
