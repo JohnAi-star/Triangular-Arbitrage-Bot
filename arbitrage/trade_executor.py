@@ -205,8 +205,8 @@ class TradeExecutor:
             self.logger.info(f"Skipping unprofitable opportunity: {opportunity.profit_percentage:.4f}%")
             return False
         
-        if opportunity.profit_percentage < 0.05:  # Minimum 0.05% profit
-            self.logger.info(f"Opportunity skipped: profit {opportunity.profit_percentage:.4f}% below 0.05% threshold")
+        if opportunity.profit_percentage < 0.5:  # Minimum 0.5% profit for profitability
+            self.logger.info(f"Opportunity skipped: profit {opportunity.profit_percentage:.4f}% below 0.5% threshold")
             return False
             
         start_time = datetime.now()

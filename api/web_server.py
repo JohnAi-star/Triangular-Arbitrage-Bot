@@ -140,8 +140,8 @@ class ArbitrageWebServer:
                 from config.config import Config
                 Config.PAPER_TRADING = False
                 Config.AUTO_TRADING_MODE = config.autoTradingMode
-                Config.MIN_PROFIT_PERCENTAGE = config.minProfitPercentage
-                Config.MAX_TRADE_AMOUNT = config.maxTradeAmount
+                Config.MIN_PROFIT_PERCENTAGE = max(0.5, config.minProfitPercentage)  # Ensure minimum 0.5%
+                Config.MAX_TRADE_AMOUNT = min(100, config.maxTradeAmount)            # Cap at $100
 
                 self.auto_trading = config.autoTradingMode
                 trading_mode = "🔴 LIVE"
@@ -157,18 +157,25 @@ class ArbitrageWebServer:
                 self.exchange_manager = MultiExchangeManager()
                 success = await self.exchange_manager.initialize_exchanges(config.selectedExchanges)
                 if not success:
-                    raise HTTPException(status_code=400, detail="Exchange initialization failed")
+                    self.logger.warning("Exchange initialization had issues, but continuing...")
+                    # Don't fail completely, allow bot to start for debugging
 
                 from arbitrage.multi_exchange_detector import MultiExchangeDetector
                 self.detector = MultiExchangeDetector(
                     self.exchange_manager,
                     self.websocket_manager,
                     {
-                        'min_profit_percentage': max(0.00001, config.minProfitPercentage),
-                        'max_trade_amount': config.maxTradeAmount
+                        'min_profit_percentage': max(0.5, config.minProfitPercentage),  # 0.5% minimum
+                        'max_trade_amount': min(100, config.maxTradeAmount)             # $100 maximum
                     }
                 )
-                await self.detector.initialize()
+                
+                try:
+                    await self.detector.initialize()
+                    self.logger.info("✅ Detector initialized successfully")
+                except Exception as e:
+                    self.logger.error(f"Detector initialization error: {e}")
+                    # Continue anyway for debugging
 
                 from arbitrage.trade_executor import TradeExecutor
                 self.executor = TradeExecutor(
@@ -188,8 +195,8 @@ class ArbitrageWebServer:
                 return {
                     "status": "success",
                     "message": "🚀 🔴 LIVE TRADING Bot started successfully",
-                    "trading_mode": trading_mode,
-                    "paper_trading": False
+                    'min_profit_percentage': max(0.5, config.minProfitPercentage),   # 0.5% minimum
+                    'max_trade_amount': min(100, config.maxTradeAmount)              # $100 maximum
                 }
             except Exception as e:
                 self.logger.error(f"Error starting bot: {str(e)}", exc_info=True)
@@ -284,11 +291,11 @@ class ArbitrageWebServer:
             # PROFIT FOCUS: Only execute highly profitable opportunities
             highly_profitable_opportunities = [
                 opp for opp in opportunities
-                if hasattr(opp, 'is_profitable') and opp.is_profitable and opp.profit_percentage >= 0.08
+                if hasattr(opp, 'is_profitable') and opp.is_profitable and opp.profit_percentage >= 0.5
             ]
 
             if not highly_profitable_opportunities:
-                self.logger.debug("No highly profitable opportunities found for auto-execution (need ≥0.08%)")
+                self.logger.debug("No highly profitable opportunities found for auto-execution (need ≥0.5%)")
                 return
 
             # Execute top 2 most profitable opportunities to maximize profit

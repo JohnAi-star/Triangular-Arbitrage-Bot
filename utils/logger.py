@@ -13,11 +13,15 @@ def setup_logger(name: str, log_level: str = 'INFO') -> logging.Logger:
     
     # Create logger
     logger = logging.getLogger(name)
+    
+    # Prevent duplicate handlers - if logger already has handlers, return it
+    if logger.handlers:
+        return logger
+    
     logger.setLevel(getattr(logging, log_level.upper()))
     
-    # Remove existing handlers to avoid duplicates
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+    # Prevent propagation to root logger to avoid duplicates
+    logger.propagate = False
     
     # Force UTF-8 encoding for Windows compatibility
     if sys.platform.startswith('win'):

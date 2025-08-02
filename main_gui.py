@@ -43,19 +43,23 @@ def check_dependencies():
 
 def check_configuration():
     """Check if configuration is valid."""
-    # Validate config and show appropriate warnings
     is_valid = Config.validate()
     
     # Check specifically for Binance credentials
     binance_creds = Config.EXCHANGE_CREDENTIALS.get('binance', {})
     has_binance_creds = binance_creds.get('enabled', False)
     
+    # Safe access to potentially missing attributes
+    min_profit = getattr(Config, 'MIN_PROFIT_THRESHOLD', 'Not Set')
+    fake_opportunity = getattr(Config, 'FORCE_FAKE_OPPORTUNITY', False)
+
     print(f"🔍 Configuration Check:")
     print(f"   Binance API Key: {'✅ SET' if binance_creds.get('api_key') else '❌ MISSING'}")
     print(f"   Binance API Secret: {'✅ SET' if binance_creds.get('api_secret') else '❌ MISSING'}")
     print(f"   Credentials Enabled: {'✅ YES' if has_binance_creds else '❌ NO'}")
-    print(f"   Min Profit Threshold: {Config.MIN_PROFIT_THRESHOLD}%")
-    print(f"   Force Fake Opportunity: {'✅ ENABLED' if Config.FORCE_FAKE_OPPORTUNITY else '❌ DISABLED'}")
+    print(f"   Min Profit Threshold: {min_profit}%")
+    print(f"   Force Fake Opportunity: {'✅ ENABLED' if fake_opportunity else '❌ DISABLED'}")
+    print(f"   Paper Trading: {'✅ ENABLED' if Config.PAPER_TRADING else '❌ DISABLED (LIVE TRADING)'}")
     
     if not has_binance_creds:
         print("⚠️  WARNING: No Binance credentials - limited functionality")

@@ -3,7 +3,7 @@ import asyncio
 import signal
 from typing import Dict, Any
 from config.config import Config
-from exchanges.binance_exchange import BinanceExchange
+from exchanges.unified_exchange import UnifiedExchange
 from arbitrage.triangle_detector import TriangleDetector
 from arbitrage.trade_executor import TradeExecutor
 from utils.logger import setup_logger
@@ -60,15 +60,17 @@ class TriangularArbitrageBot:
             
             # Initialize exchange
             exchange_config = {
+                'exchange_id': 'binance',
                 'api_key': Config.BINANCE_API_KEY,
                 'api_secret': Config.BINANCE_API_SECRET,
                 'sandbox': Config.BINANCE_SANDBOX,
-                'bnb_fee_discount': Config.BNB_FEE_DISCOUNT,
+                'fee_token': 'BNB',
+                'fee_discount': 0.25,
                 'websocket_reconnect_attempts': Config.WEBSOCKET_RECONNECT_ATTEMPTS,
                 'websocket_reconnect_delay': Config.WEBSOCKET_RECONNECT_DELAY
             }
             
-            self.exchange = BinanceExchange(exchange_config)
+            self.exchange = UnifiedExchange(exchange_config)
             
             if not await self.exchange.connect():
                 self.logger.error("Failed to connect to exchange")

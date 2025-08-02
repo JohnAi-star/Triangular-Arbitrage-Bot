@@ -88,14 +88,14 @@ export const ArbitrageBotDashboard: React.FC = () => {
         console.log('Setting up WebSocket connection...');
         backendAPI.connectWebSocket((data: any) => {
             console.log('WebSocket message received:', data);
-            
+
             if (data.type === 'opportunities_update') {
                 console.log('Updating opportunities:', data.data);
-                
+
                 // Ensure data.data is an array
                 const opportunitiesData = Array.isArray(data.data) ? data.data : [];
                 console.log('Opportunities array length:', opportunitiesData.length);
-                
+
                 if (opportunitiesData.length > 0) {
                     const formattedOpportunities = opportunitiesData.map((opp: any, index: number) => {
                         console.log(`Processing opportunity ${index}:`, opp);
@@ -110,7 +110,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                             timestamp: opp.timestamp || new Date().toISOString()
                         };
                     });
-                    
+
                     console.log('Setting formatted opportunities:', formattedOpportunities);
                     setOpportunities(formattedOpportunities);
 
@@ -303,18 +303,21 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <input
                             type="number"
                             value={minProfit}
-                            onChange={(e) => setMinProfit(Math.max(0.01, parseFloat(e.target.value)))}
-                            min="0.01"
+                            onChange={(e) => setMinProfit(Math.max(0.5, parseFloat(e.target.value)))}
+                            min="0.5"
                             step="0.01"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+                            title="Minimum 0.5% profit to ensure profitability after fees"
                         />
                         <label className="block text-sm text-gray-300 mb-2">Max Trade Amount</label>
                         <input
                             type="number"
                             value={maxTradeAmount}
-                            onChange={(e) => setMaxTradeAmount(Math.max(1, parseFloat(e.target.value)))}
-                            min="1"
+                            onChange={(e) => setMaxTradeAmount(Math.max(10, Math.min(100, parseFloat(e.target.value))))}
+                            min="10"
+                            max="100"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
+                            title="Maximum $100 per trade for risk management"
                         />
                         <label className="block text-sm text-gray-300 mb-2">Max Consecutive Fails</label>
                         <input
@@ -444,7 +447,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                     Current settings: Min Profit ≥ {minProfit}%, Max Trade: ${maxTradeAmount}
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
-                                                    Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} | 
+                                                    Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
                                                     Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
                                                 <div className="text-xs mt-1 text-blue-400">

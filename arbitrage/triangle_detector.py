@@ -3,13 +3,13 @@ import time
 from typing import List, Dict, Any, Set, Tuple
 from itertools import combinations
 from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep
-from exchanges.base_exchange import BaseExchange
+from exchanges.unified_exchange import UnifiedExchange
 from utils.logger import setup_logger
 
 class TriangleDetector:
     """Detects triangular arbitrage opportunities in near real-time."""
 
-    def __init__(self, exchange: BaseExchange, config: Dict[str, Any]):
+    def __init__(self, exchange: UnifiedExchange, config: Dict[str, Any]):
         self.exchange = exchange
         self.config = config
         self.logger = setup_logger('TriangleDetector')

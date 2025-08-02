@@ -40,7 +40,7 @@ class WebSocketManager:
                 'timestamp': datetime.now().isoformat()
             }
             
-            self.logger.info(f"Broadcasting {event_type} to {len(self.callbacks)} callbacks")
+            self.logger.debug(f"Broadcasting {event_type} to {len(self.callbacks)} callbacks")
             
             # Call all registered callbacks
             for callback in self.callbacks:

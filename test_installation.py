@@ -69,7 +69,7 @@ async def test_exchange_connection():
     print("\n🔗 Testing exchange connection...")
     
     try:
-        from exchanges.binance_exchange import BinanceExchange
+        from exchanges.unified_exchange import UnifiedExchange
         from config.config import Config
         
         if not Config.BINANCE_API_KEY or not Config.BINANCE_API_SECRET:
@@ -79,13 +79,15 @@ async def test_exchange_connection():
             return False, "No API credentials - bot cannot function"
         
         exchange_config = {
+            'exchange_id': 'binance',
             'api_key': Config.BINANCE_API_KEY,
             'api_secret': Config.BINANCE_API_SECRET,
             'sandbox': Config.BINANCE_SANDBOX,
-            'bnb_fee_discount': Config.BNB_FEE_DISCOUNT
+            'fee_token': 'BNB',
+            'fee_discount': 0.25
         }
         
-        exchange = BinanceExchange(exchange_config)
+        exchange = UnifiedExchange(exchange_config)
         
         if await exchange.connect():
             print("✅ Exchange connection successful")

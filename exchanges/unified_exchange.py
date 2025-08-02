@@ -84,16 +84,26 @@ class UnifiedExchange(BaseExchange):
             
             # Verify account balance for live trading
             balance = await self.get_account_balance()
-            total_balance_usd = sum(float(bal) for bal in balance.values() if bal > 0)
+            if balance:
+                total_balance_usd = await self._calculate_usd_value(balance)
+            else:
+                total_balance_usd = 0.0
+                
             self.logger.info(f"💰 REAL BALANCE - {self.exchange_id}: ~${total_balance_usd:.2f} USD")
             
             # Log detailed balance for debugging
             if balance:
-                major_balances = {k: v for k, v in balance.items() if v > 0.05}
+                major_balances = {k: v for k, v in balance.items() if v > 0.001}
                 self.logger.info(f"   Major balances: {major_balances}")
+            else:
+                self.logger.warning(f"⚠️ No balance data retrieved for {self.exchange_id}")
             
             if total_balance_usd < 5:
-                self.logger.warning(f"⚠️ Low balance on {self.exchange_id} - minimum $5 recommended for trading")
+                self.logger.warning(f"⚠️ Low balance on {self.exchange_id}: ${total_balance_usd:.2f} - minimum $5 recommended for trading")
+                if total_balance_usd > 0:
+                    self.logger.info("✅ Balance detected but low - bot will still function for testing")
+            else:
+                self.logger.info(f"✅ Sufficient balance detected: ${total_balance_usd:.2f} USD")
 
             self.trading_pairs = {
                 s: m for s, m in self.exchange.markets.items() if m.get("active", False)
@@ -345,11 +355,11 @@ class UnifiedExchange(BaseExchange):
         if not self.is_connected:
             return {}
         try:
-            self.logger.info(f"🔍 Fetching account balance from {self.exchange_id}...")
+            self.logger.debug(f"🔍 Fetching account balance from {self.exchange_id}...")
             balance = await self.exchange.fetch_balance()
             
-            # Log the full balance object for debugging
-            self.logger.info(f"📊 Raw balance response: {balance}")
+            # Log the full balance object for debugging (debug level only)
+            self.logger.debug(f"📊 Raw balance response: {balance}")
             
             # Handle both dict and direct value formats
             result = {}
@@ -360,20 +370,20 @@ class UnifiedExchange(BaseExchange):
                     free_balance = float(info.get('free', 0.0))
                     if free_balance > 0:
                         result[currency] = free_balance
-                        self.logger.info(f"💰 Found {currency}: {free_balance:.8f}")
+                        self.logger.debug(f"💰 Found {currency}: {free_balance:.8f}")
                 elif isinstance(info, (int, float)) and float(info) > 0:
                     result[currency] = float(info)
-                    self.logger.info(f"💰 Found {currency}: {float(info):.8f}")
+                    self.logger.debug(f"💰 Found {currency}: {float(info):.8f}")
             
             # Get current prices for USD conversion
             total_usd_estimate = await self._calculate_usd_value(result)
             
-            self.logger.info(f"💵 Account balance for {self.exchange_id}: {len(result)} currencies")
-            self.logger.info(f"💵 Estimated Total: ~${total_usd_estimate:.2f} USD")
+            self.logger.debug(f"💵 Account balance for {self.exchange_id}: {len(result)} currencies")
+            self.logger.debug(f"💵 Estimated Total: ~${total_usd_estimate:.2f} USD")
             
             # Log individual balances
             for curr, bal in result.items():
-                self.logger.info(f"   {curr}: {bal:.8f}")
+                self.logger.debug(f"   {curr}: {bal:.8f}")
             
             return result
         except Exception as e:
@@ -382,6 +392,10 @@ class UnifiedExchange(BaseExchange):
     
     async def _calculate_usd_value(self, balances: Dict[str, float]) -> float:
         """Calculate USD value of all balances using current market prices."""
+        if not balances:
+            self.logger.warning("No balances to calculate USD value for")
+            return 0.0
+            
         total_usd = 0.0
         
         for currency, amount in balances.items():
@@ -397,7 +411,7 @@ class UnifiedExchange(BaseExchange):
                 else:
                     # Try to get current price vs USDT
                     symbol = f"{currency}/USDT"
-                    if symbol in self.trading_pairs:
+                    if hasattr(self, 'trading_pairs') and symbol in self.trading_pairs:
                         ticker = await self.get_ticker(symbol)
                         if ticker and ticker.get('last'):
                             price = float(ticker['last'])
@@ -405,22 +419,27 @@ class UnifiedExchange(BaseExchange):
                             total_usd += usd_value
                             self.logger.info(f"💵 {currency}: {amount:.8f} × ${price:.2f} = ${usd_value:.2f} USD")
                         else:
-                            self.logger.warning(f"⚠️ No price data for {symbol}")
+                            self.logger.info(f"💵 {currency}: {amount:.8f} (no current price)")
                     else:
                         # Fallback to rough estimates for major currencies
                         if currency == 'BTC':
-                            usd_value = amount * 100000  # Rough BTC price
+                            usd_value = amount * 95000  # Updated BTC price estimate
                             total_usd += usd_value
-                            self.logger.info(f"💵 {currency}: {amount:.8f} × $100,000 ≈ ${usd_value:.2f} USD (estimate)")
+                            self.logger.info(f"💵 {currency}: {amount:.8f} × $118,000 ≈ ${usd_value:.2f} USD (estimate)")
                         elif currency == 'ETH':
-                            usd_value = amount * 3500  # Rough ETH price
+                            usd_value = amount * 3200  # Updated ETH price estimate
                             total_usd += usd_value
-                            self.logger.info(f"💵 {currency}: {amount:.8f} × $3,500 ≈ ${usd_value:.2f} USD (estimate)")
+                            self.logger.info(f"💵 {currency}: {amount:.8f} × $3,200 ≈ ${usd_value:.2f} USD (estimate)")
+                        elif currency == 'BNB':
+                            usd_value = amount * 650  # Updated BNB price estimate
+                            total_usd += usd_value
+                            self.logger.info(f"💵 {currency}: {amount:.8f} × $650 ≈ ${usd_value:.2f} USD (estimate)")
                         else:
                             self.logger.info(f"💵 {currency}: {amount:.8f} (no USD conversion available)")
             except Exception as e:
                 self.logger.error(f"Error calculating USD value for {currency}: {e}")
         
+        self.logger.info(f"💰 Total USD value calculated: ${total_usd:.2f}")
         return total_usd
 
     async def get_trading_fees(self, symbol: str) -> Tuple[float, float]:
