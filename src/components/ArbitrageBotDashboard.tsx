@@ -303,22 +303,30 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <input
                             type="number"
                             value={minProfit}
-                            onChange={(e) => setMinProfit(Math.max(0.5, parseFloat(e.target.value)))}
+                            onChange={(e) => setMinProfit(Math.max(0.5, Math.min(5.0, parseFloat(e.target.value))))}
                             min="0.5"
-                            step="0.01"
+                            max="5.0"
+                            step="0.1"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
-                            title="Minimum 0.5% profit to ensure profitability after fees"
+                            title="ENFORCED: Minimum 0.5% profit required"
                         />
                         <label className="block text-sm text-gray-300 mb-2">Max Trade Amount</label>
                         <input
                             type="number"
                             value={maxTradeAmount}
-                            onChange={(e) => setMaxTradeAmount(Math.max(10, Math.min(100, parseFloat(e.target.value))))}
+                            onChange={(e) => setMaxTradeAmount(Math.max(1, Math.min(100, parseFloat(e.target.value))))}
                             min="10"
                             max="100"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
-                            title="Maximum $100 per trade for risk management"
+                            title="ENFORCED: Maximum $100 per trade"
                         />
+                        <div className="text-xs text-yellow-400 mt-2 p-2 bg-yellow-900/20 rounded">
+                            🚫 ENFORCED LIMITS:<br/>
+                            • Min Profit: 0.5%<br/>
+                            • Max Trade: $100<br/>
+                            • Trades over $100 rejected<br/>
+                            • Profits under 0.5% rejected
+                        </div>
                         <label className="block text-sm text-gray-300 mb-2">Max Consecutive Fails</label>
                         <input
                             type="number"
@@ -354,7 +362,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <div className="mt-6 text-gray-300">
                             <p>Auto-Trades: {autoStats.autoTradesExecuted} | Auto-Profit: ${autoStats.autoProfit.toFixed(2)} | Success Rate: {autoStats.autoSuccessRate.toFixed(1)}%</p>
                             <p className="text-xs text-gray-400 mt-2">
-                                LIVE TRADING: ${maxTradeAmount} per cycle | Min Profit: {minProfit}% | Mode: {paperTrading ? 'Paper' : 'LIVE'}
+                                ENFORCED LIMITS: ≤$100 per trade | ≥0.5% profit | Mode: {paperTrading ? 'Paper' : 'LIVE'}
                             </p>
                         </div>
                     </div>
@@ -442,22 +450,22 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     <div className="text-center text-gray-400 py-8">
                                         {isRunning ? (
                                             <div>
-                                                <div className="text-lg mb-2">🔍 Scanning for LIVE opportunities...</div>
+                                                <div className="text-lg mb-2">🔍 Scanning for VALID opportunities...</div>
                                                 <div className="text-sm mb-2">
-                                                    Current settings: Min Profit ≥ {minProfit}%, Max Trade: ${maxTradeAmount}
+                                                    ENFORCED LIMITS: Min Profit ≥ 0.5%, Max Trade ≤ $100
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
                                                     Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
                                                     Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
-                                                <div className="text-xs mt-1 text-blue-400">
-                                                    Try lowering "Min Profit %" to see more opportunities
+                                                <div className="text-xs mt-1 text-yellow-400">
+                                                    🚫 Only opportunities ≥0.5% profit and ≤$100 shown
                                                 </div>
                                             </div>
                                         ) : (
                                             <div>
                                                 <div className="text-lg mb-2">Click "Start Bot" to begin</div>
-                                                <div className="text-sm">LIVE trading will show real profitable opportunities</div>
+                                                <div className="text-sm">LIVE trading with ENFORCED limits (≥0.5%, ≤$100)</div>
                                             </div>
                                         )}
                                     </div>

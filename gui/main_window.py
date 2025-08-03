@@ -333,36 +333,36 @@ class ArbitrageBotGUI:
     async def _start_bot_async(self):
         """Async bot startup."""
         try:
-            # Test real balance detection first (like debug_opportunities.py)
-            self.logger.info("🔍 Testing REAL balance detection...")
-            for ex_name, ex in self.exchange_manager.exchanges.items():
-                try:
-                    balance = await ex.get_account_balance()
-                    if balance:
-                        total_currencies = len(balance)
-                        self.logger.info(f"✅ Balance detected: {total_currencies} currencies with balance")
-                        
-                        # Show top balances (like debug script)
-                        sorted_balance = sorted(balance.items(), key=lambda x: x[1], reverse=True)
-                        self.logger.info("📊 Top balances:")
-                        for currency, amount in sorted_balance[:10]:
-                            if amount > 0.001:  # Only show significant balances
-                                self.logger.info(f"   {currency}: {amount:.8f}")
-                        
-                        # Calculate USD value
-                        usd_value = await ex._calculate_usd_value(balance)
-                        self.logger.info(f"💰 REAL BALANCE - {ex_name}: ~${usd_value:.2f} USD")
-                    else:
-                        self.logger.warning("⚠️  No balance detected (account may be empty)")
-                except Exception as e:
-                    self.logger.error(f"Error checking balance for {ex_name}: {e}")
-            
             # Initialize exchanges
             if not await self.exchange_manager.initialize_exchanges(self.selected_exchanges):
                 self.status_var.set("Failed to connect to exchanges")
                 self.running = False
                 self.start_button.configure(text="Start Bot")
                 return
+            
+            # Display real balance after connection
+            self.logger.info("💰 Displaying real account balances...")
+            for ex_name, ex in self.exchange_manager.exchanges.items():
+                try:
+                    balance = await ex.get_account_balance()
+                    if balance:
+                        total_currencies = len(balance)
+                        usd_value = 0.0
+                        
+                        # Calculate USD value if method exists
+                        if hasattr(ex, '_calculate_usd_value'):
+                            usd_value = await ex._calculate_usd_value(balance)
+                        
+                        self.logger.info(f"💰 {ex_name.upper()} BALANCE: {total_currencies} currencies, ~${usd_value:.2f} USD")
+                        
+                        # Show individual balances
+                        for currency, amount in sorted(balance.items(), key=lambda x: x[1], reverse=True):
+                            if amount > 0.001:
+                                self.logger.info(f"   {currency}: {amount:.8f}")
+                    else:
+                        self.logger.warning(f"⚠️ No balance detected for {ex_name}")
+                except Exception as e:
+                    self.logger.error(f"Error displaying balance for {ex_name}: {e}")
             
             # Initialize detector
             self.detector = MultiExchangeDetector(
