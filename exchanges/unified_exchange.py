@@ -359,7 +359,7 @@ class UnifiedExchange(BaseExchange):
             balance = await self.exchange.fetch_balance()
             
             # Log the full balance object for debugging
-            self.logger.info(f"📊 Raw balance response keys: {list(balance.keys())}")
+            self.logger.debug(f"📊 Raw balance response keys: {list(balance.keys())}")
             
             # Handle both dict and direct value formats
             result = {}
@@ -372,10 +372,10 @@ class UnifiedExchange(BaseExchange):
                     total_balance = free_balance + locked_balance
                     if total_balance > 0.000001:  # Only include meaningful balances
                         result[currency] = total_balance
-                        self.logger.info(f"💰 REAL BALANCE - {currency}: {total_balance:.8f} (free: {free_balance:.8f}, locked: {locked_balance:.8f})")
+                        self.logger.debug(f"💰 REAL BALANCE - {currency}: {total_balance:.8f} (free: {free_balance:.8f}, locked: {locked_balance:.8f})")
                 elif isinstance(info, (int, float)) and float(info) > 0:
                     result[currency] = float(info)
-                    self.logger.info(f"💰 REAL BALANCE - {currency}: {float(info):.8f}")
+                    self.logger.debug(f"💰 REAL BALANCE - {currency}: {float(info):.8f}")
             
             # Get current prices for USD conversion
             total_usd_estimate = await self._calculate_usd_value(result)
@@ -386,7 +386,8 @@ class UnifiedExchange(BaseExchange):
             if result:
                 self.logger.info("💰 REAL BALANCES DETECTED:")
                 for curr, bal in sorted(result.items(), key=lambda x: x[1], reverse=True):
-                    self.logger.info(f"   {curr}: {bal:.8f}")
+                    if bal > 0.001:  # Only show significant balances in main log
+                        self.logger.info(f"   {curr}: {bal:.8f}")
             else:
                 self.logger.warning("⚠️ No balances found - check API permissions")
             
@@ -394,6 +395,17 @@ class UnifiedExchange(BaseExchange):
         except Exception as e:
             self.logger.error(f"Error fetching balance from {self.exchange_id}: {e}")
             return {}
+    
+    async def fetch_complete_balance(self) -> Dict[str, Any]:
+        """Fetch complete balance with USD conversion for compatibility"""
+        balances = await self.get_account_balance()
+        total_usd = await self._calculate_usd_value(balances)
+        
+        return {
+            'balances': balances,
+            'total_usd': total_usd,
+            'timestamp': int(time.time() * 1000)
+        }
     
     async def _calculate_usd_value(self, balances: Dict[str, float]) -> float:
         """Calculate USD value of all balances using current market prices."""

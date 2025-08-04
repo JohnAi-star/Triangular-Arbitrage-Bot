@@ -133,14 +133,32 @@ class SimpleTriangleDetector:
         """Process WebSocket ticker data - EXACT JavaScript logic"""
         try:
             data = json.loads(data)
-            if data.get('result') is None and isinstance(data, list):
+            
+            # Handle subscription confirmation message
+            if isinstance(data, dict) and data.get('result') is None:
+                logger.info("WebSocket subscription confirmed")
+                return
+            
+            # Handle ticker array data
+            if isinstance(data, list):
                 
                 # Update price data
                 for d in data:
-                    symbol = d.get('s')
-                    if symbol in self.sym_val_j:
-                        self.sym_val_j[symbol]['bidPrice'] = float(d.get('b', 0))
-                        self.sym_val_j[symbol]['askPrice'] = float(d.get('a', 0))
+                    if isinstance(d, dict) and 's' in d:
+                        symbol = d.get('s')
+                        if symbol and symbol in self.sym_val_j:
+                            bid_price = d.get('b', 0)
+                            ask_price = d.get('a', 0)
+                            
+                            if bid_price and ask_price:
+                                try:
+                                    self.sym_val_j[symbol]['bidPrice'] = float(bid_price)
+                                    self.sym_val_j[symbol]['askPrice'] = float(ask_price)
+                                except (ValueError, TypeError):
+                                    continue
+                    else:
+                        # Skip non-dict items or items without symbol
+                        continue
                 
                 # Calculate arbitrage opportunities
                 profitable_opportunities = []
@@ -152,8 +170,11 @@ class SimpleTriangleDetector:
                     lv3_data = self.sym_val_j.get(pair_data['lv3'], {})
                     
                     if (lv1_data.get('bidPrice', 0) > 0 and 
+                        lv1_data.get('askPrice', 0) > 0 and
                         lv2_data.get('bidPrice', 0) > 0 and 
-                        lv3_data.get('bidPrice', 0) > 0):
+                        lv2_data.get('askPrice', 0) > 0 and
+                        lv3_data.get('bidPrice', 0) > 0 and
+                        lv3_data.get('askPrice', 0) > 0):
                         
                         # Level 1 calculation
                         if pair_data['l1'] == 'num':
@@ -179,23 +200,34 @@ class SimpleTriangleDetector:
                             lv_calc *= 1 / lv3_data['askPrice']
                             lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[ask:{lv3_data['askPrice']}]→{pair_data['d1']}"
                         
-                        # Calculate profit percentage
-                        pair_data['tpath'] = lv_str
-                        pair_data['value'] = round((lv_calc - 1) * 100, 3)
-                        
-                        # Add to profitable opportunities if above threshold
-                        if pair_data['value'] > self.min_profit_pct:
-                            opportunity = TriangleOpportunity(
-                                d1=pair_data['d1'],
-                                d2=pair_data['d2'], 
-                                d3=pair_data['d3'],
-                                lv1=pair_data['lv1'],
-                                lv2=pair_data['lv2'],
-                                lv3=pair_data['lv3'],
-                                value=pair_data['value'],
-                                tpath=pair_data['tpath']
-                            )
-                            profitable_opportunities.append(opportunity)
+                        # Calculate profit percentage with safety checks
+                        try:
+                            if lv_calc > 0 and lv_calc != float('inf'):
+                                pair_data['tpath'] = lv_str
+                                gross_profit_pct = (lv_calc - 1) * 100
+                                
+                                # Apply trading costs (0.3% total)
+                                net_profit_pct = gross_profit_pct - 0.3
+                                pair_data['value'] = round(net_profit_pct, 6)
+                                
+                                # Add to profitable opportunities if above threshold and realistic
+                                if (pair_data['value'] > self.min_profit_pct and 
+                                    pair_data['value'] < 10.0 and  # Max 10% profit (realistic)
+                                    pair_data['value'] > -5.0):    # Min -5% loss (realistic)
+                                    
+                                    opportunity = TriangleOpportunity(
+                                        d1=pair_data['d1'],
+                                        d2=pair_data['d2'], 
+                                        d3=pair_data['d3'],
+                                        lv1=pair_data['lv1'],
+                                        lv2=pair_data['lv2'],
+                                        lv3=pair_data['lv3'],
+                                        value=pair_data['value'],
+                                        tpath=pair_data['tpath']
+                                    )
+                                    profitable_opportunities.append(opportunity)
+                        except (ZeroDivisionError, OverflowError, ValueError):
+                            continue
                 
                 # Sort by profit percentage (highest first)
                 profitable_opportunities.sort(key=lambda x: x.value, reverse=True)
@@ -210,9 +242,30 @@ class SimpleTriangleDetector:
                     # Show top 5 opportunities
                     for i, opp in enumerate(profitable_opportunities[:5]):
                         logger.info(f"   {i+1}. {opp}")
+            # Handle single ticker object (not in array)
+            elif isinstance(data, dict) and 's' in data:
+                symbol = data.get('s')
+                if symbol and symbol in self.sym_val_j:
+                    bid_price = data.get('b', 0)
+                    ask_price = data.get('a', 0)
+                    
+                    if bid_price and ask_price:
+                        try:
+                            self.sym_val_j[symbol]['bidPrice'] = float(bid_price)
+                            self.sym_val_j[symbol]['askPrice'] = float(ask_price)
+                        except (ValueError, TypeError):
+                            pass
+            else:
+                # Handle other message types (like subscription confirmations)
+                logger.debug(f"Received non-array WebSocket message: {type(data)}")
                 
         except Exception as e:
             logger.error(f"Error processing WebSocket data: {e}")
+            # Only log debug info if it's a real error, not just data format issues
+            if "has no attribute 'get'" not in str(e):
+                logger.debug(f"Problematic data type: {type(data)}")
+                if hasattr(data, '__len__') and len(str(data)) < 200:
+                    logger.debug(f"Data content: {data}")
     
     async def start_websocket_stream(self):
         """Start Binance WebSocket stream - EXACT JavaScript logic"""
@@ -243,11 +296,14 @@ class SimpleTriangleDetector:
                     # Reset retry count on successful connection
                     retry_count = 0
                     
+                    # Process incoming messages
                     async for message in websocket:
                         try:
-                            self.process_data(message)
+                            if message and message.strip():
+                                self.process_data(message)
                         except Exception as e:
                             logger.error(f"Error processing message: {e}")
+                            logger.debug(f"Message that caused error: {message[:200]}...")
                             
             except Exception as e:
                 retry_count += 1
