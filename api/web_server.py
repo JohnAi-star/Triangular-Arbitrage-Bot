@@ -181,7 +181,7 @@ class ArbitrageWebServer:
                 
                 # Initialize real-time detector for WebSocket-based detection
                 self.realtime_detector = RealtimeArbitrageDetector(
-                    min_profit_pct=0.1,  # Fixed 0.1% minimum for realistic opportunities
+                    min_profit_pct=0.5,  # Set to 0.5% for real trading
                     max_trade_amount=100.0  # Fixed $100 maximum
                 )
                 
@@ -267,29 +267,31 @@ class ArbitrageWebServer:
                 if self.detector and self.exchange_manager:
                     opportunities = await self.detector.scan_all_opportunities()
 
-                    self.opportunities = []
+                    # Convert opportunities to UI format
+                    ui_opportunities = []
                     for i, opp in enumerate(opportunities):
-                        if opp.profit_percentage >= self.detector.min_profit_pct:
-                            opp_id = f"opp_{int(time.time()*1000)}_{i}"
-                            opportunity_data = {
+                        if hasattr(opp, 'is_profitable') and opp.is_profitable:
+                            opp_id = f"real_opp_{int(time.time()*1000)}_{i}"
+                            ui_opp = {
                                 "id": opp_id,
                                 "exchange": opp.exchange,
                                 "trianglePath": " → ".join(opp.triangle_path[:3]),
                                 "profitPercentage": round(opp.profit_percentage, 4),
                                 "profitAmount": round(opp.profit_amount, 4),
-                                "volume": self.detector.max_trade_amount,
-                                "status": "detected" if opp.profit_percentage > 0 else "low_profit",
-                                "dataType": "REAL_MARKET_DATA",
+                                "volume": round(opp.initial_amount, 2),
+                                "status": "detected",
+                                "dataType": "REAL_BALANCE_BASED",
                                 "timestamp": datetime.now().isoformat(),
-                                "base_currency": opp.triangle_path[0] if len(opp.triangle_path) > 0 else "BTC",
-                                "intermediate_currency": opp.triangle_path[1] if len(opp.triangle_path) > 1 else "ETH",
-                                "quote_currency": opp.triangle_path[2] if len(opp.triangle_path) > 2 else "USDT",
-                                "profit_pct": opp.profit_percentage
+                                "tradeable": True,
+                                "real_balance_based": True
                             }
-                            self.opportunities.append(opportunity_data)
-                            self.opportunities_cache[opp_id] = opportunity_data
+                            ui_opportunities.append(ui_opp)
+                            self.opportunities_cache[opp_id] = {
+                                'opportunity': opp,
+                                'ui_data': ui_opp
+                            }
 
-                    self.opportunities = self.opportunities[:100]
+                    self.opportunities = ui_opportunities[:50]  # Limit to 50 real opportunities
 
                     if len(self.opportunities_cache) > 500:
                         old_keys = list(self.opportunities_cache.keys())[:-500]
@@ -299,11 +301,13 @@ class ArbitrageWebServer:
                     self.stats['opportunitiesFound'] = len(self.opportunities)
                     await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
 
+                    if self.opportunities:
+                        self.logger.info(f"💎 Broadcasting {len(self.opportunities)} REAL TRADEABLE opportunities to UI")
+                        for opp in self.opportunities[:3]:  # Show first 3
+                            self.logger.info(f"   📊 {opp['exchange']}: {opp['trianglePath']} = {opp['profitPercentage']:.4f}% (${opp['volume']})")
+
                     if self.auto_trading and self.executor:
                         await self._auto_execute_opportunities(opportunities)
-
-                    if self.opportunities:
-                        self.logger.info(f"💎 Found {len(self.opportunities)} LIVE opportunities, broadcasting to {len(self.websocket_manager.connections)} clients")
 
                 await asyncio.sleep(3)
             except Exception as e:
@@ -368,12 +372,12 @@ class ArbitrageWebServer:
             highly_profitable_opportunities = [
                 opp for opp in opportunities
                 if (hasattr(opp, 'is_profitable') and opp.is_profitable and 
-                    opp.profit_percentage >= 0.5 and 
+                    opp.profit_percentage >= 0.1 and  # Lower threshold
                     opp.initial_amount <= 100.0)
             ]
 
             if not highly_profitable_opportunities:
-                self.logger.debug("🚫 AUTO-TRADE: No valid opportunities (need ≥0.5% profit, ≤$100 amount)")
+                self.logger.debug("🚫 AUTO-TRADE: No valid opportunities (need ≥0.1% profit, ≤$100 amount)")
                 return
 
             # Execute top 3 most profitable opportunities

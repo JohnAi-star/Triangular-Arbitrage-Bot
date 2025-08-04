@@ -17,6 +17,8 @@ export interface ArbitrageOpportunity {
   status: 'detected' | 'executing' | 'completed' | 'failed';
   timestamp: string;
   steps: TradeStep[];
+  tradeable?: boolean;
+  real_balance_based?: boolean;
 }
 
 export interface DetailedTradeLog {

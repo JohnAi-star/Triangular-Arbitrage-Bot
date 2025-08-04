@@ -10,6 +10,7 @@ from exchanges.multi_exchange_manager import MultiExchangeManager
 from arbitrage.multi_exchange_detector import MultiExchangeDetector
 from utils.logger import setup_logger
 from utils.websocket_manager import WebSocketManager
+from arbitrage.simple_triangle_detector import SimpleTriangleDetector
 
 load_dotenv()
 
@@ -33,6 +34,36 @@ async def debug_opportunities():
     print(f"✅ API Secret found: {'*' * len(api_secret)}")
     
     try:
+        # Test the simple detector first (based on JavaScript logic)
+        print("\n🚀 Testing Simple Detector (JavaScript Logic)...")
+        simple_detector = SimpleTriangleDetector(min_profit_pct=0.001)  # 0.001% threshold
+        
+        if await simple_detector.get_pairs():
+            print(f"✅ Simple detector initialized with {len(simple_detector.pairs)} paths")
+            
+            # Start WebSocket and monitor for 30 seconds
+            websocket_task = asyncio.create_task(simple_detector.start_websocket_stream())
+            
+            print("🔍 Monitoring simple detector for 30 seconds...")
+            await asyncio.sleep(30)
+            
+            opportunities = simple_detector.get_current_opportunities()
+            stats = simple_detector.get_statistics()
+            
+            print(f"📊 Simple Detector Results:")
+            print(f"   Total opportunities found: {stats['opportunities_found']}")
+            print(f"   Current opportunities: {len(opportunities)}")
+            
+            if opportunities:
+                print("💎 Top 5 opportunities from simple detector:")
+                for i, opp in enumerate(opportunities[:5]):
+                    print(f"   {i+1}. {opp}")
+            else:
+                print("   No opportunities found above 0.001% threshold")
+            
+            simple_detector.running = False
+            websocket_task.cancel()
+        
         # Initialize WebSocket manager for real-time updates
         websocket_manager = WebSocketManager()
         websocket_manager.run_in_background()

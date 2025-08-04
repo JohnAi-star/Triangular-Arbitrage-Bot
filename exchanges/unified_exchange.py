@@ -355,11 +355,11 @@ class UnifiedExchange(BaseExchange):
         if not self.is_connected:
             return {}
         try:
-            self.logger.debug(f"🔍 Fetching account balance from {self.exchange_id}...")
+            self.logger.info(f"💰 Fetching REAL account balance from {self.exchange_id}...")
             balance = await self.exchange.fetch_balance()
             
-            # Log the full balance object for debugging (debug level only)
-            self.logger.debug(f"📊 Raw balance response: {balance}")
+            # Log the full balance object for debugging
+            self.logger.info(f"📊 Raw balance response keys: {list(balance.keys())}")
             
             # Handle both dict and direct value formats
             result = {}
@@ -368,22 +368,27 @@ class UnifiedExchange(BaseExchange):
                     continue
                 if isinstance(info, dict):
                     free_balance = float(info.get('free', 0.0))
-                    if free_balance > 0:
-                        result[currency] = free_balance
-                        self.logger.debug(f"💰 Found {currency}: {free_balance:.8f}")
+                    locked_balance = float(info.get('used', 0.0))
+                    total_balance = free_balance + locked_balance
+                    if total_balance > 0.000001:  # Only include meaningful balances
+                        result[currency] = total_balance
+                        self.logger.info(f"💰 REAL BALANCE - {currency}: {total_balance:.8f} (free: {free_balance:.8f}, locked: {locked_balance:.8f})")
                 elif isinstance(info, (int, float)) and float(info) > 0:
                     result[currency] = float(info)
-                    self.logger.debug(f"💰 Found {currency}: {float(info):.8f}")
+                    self.logger.info(f"💰 REAL BALANCE - {currency}: {float(info):.8f}")
             
             # Get current prices for USD conversion
             total_usd_estimate = await self._calculate_usd_value(result)
             
-            self.logger.debug(f"💵 Account balance for {self.exchange_id}: {len(result)} currencies")
-            self.logger.debug(f"💵 Estimated Total: ~${total_usd_estimate:.2f} USD")
+            self.logger.info(f"💵 REAL Account balance for {self.exchange_id}: {len(result)} currencies")
+            self.logger.info(f"💵 REAL Estimated Total: ~${total_usd_estimate:.2f} USD")
             
-            # Log individual balances
-            for curr, bal in result.items():
-                self.logger.debug(f"   {curr}: {bal:.8f}")
+            if result:
+                self.logger.info("💰 REAL BALANCES DETECTED:")
+                for curr, bal in sorted(result.items(), key=lambda x: x[1], reverse=True):
+                    self.logger.info(f"   {curr}: {bal:.8f}")
+            else:
+                self.logger.warning("⚠️ No balances found - check API permissions")
             
             return result
         except Exception as e:

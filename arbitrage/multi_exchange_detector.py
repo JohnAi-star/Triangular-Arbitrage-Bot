@@ -10,6 +10,7 @@ from datetime import datetime
 import logging
 from dataclasses import dataclass
 from arbitrage.realtime_detector import RealtimeArbitrageDetector
+from arbitrage.simple_triangle_detector import SimpleTriangleDetector
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +55,9 @@ class MultiExchangeDetector:
             max_trade_amount=self.max_trade_amount
         )
         
+        # Initialize simple detector (based on working JavaScript logic)
+        self.simple_detector = SimpleTriangleDetector(min_profit_pct=0.001)  # Very low threshold
+        
         # Rate limiting cache
         self._last_tickers: Dict[str, Dict[str, Any]] = {}
         self._last_ticker_time: Dict[str, float] = {}
@@ -73,6 +77,11 @@ class MultiExchangeDetector:
         
         # Initialize real-time detector
         await self.realtime_detector.initialize()
+        
+        # Initialize simple detector
+        await self.simple_detector.get_pairs()
+        asyncio.create_task(self.simple_detector.start_websocket_stream())
+        logger.info("✅ Simple detector started (JavaScript logic)")
         
         # Build triangle paths
         for ex_name, ex in self.exchange_manager.exchanges.items():
@@ -303,21 +312,67 @@ class MultiExchangeDetector:
     async def scan_all_opportunities(self) -> List[ArbitrageResult]:
         """Scan all exchanges for REAL profitable arbitrage opportunities"""
         all_results = []
-        logger.info(f"🔍 Starting LIVE TRADING scan (Max: ${self.max_trade_amount}, Min Profit: {self.min_profit_pct}%)...")
+        logger.info(f"🔍 Starting REAL BALANCE-BASED scan (Max: ${self.max_trade_amount}, Min Profit: {self.min_profit_pct}%)...")
+        
+        # First, get REAL account balances
+        real_balances = {}
+        for ex_name, ex in self.exchange_manager.exchanges.items():
+            try:
+                balance = await ex.get_account_balance()
+                if balance:
+                    real_balances[ex_name] = balance
+                    logger.info(f"💰 REAL BALANCE on {ex_name}: {balance}")
+                else:
+                    logger.warning(f"⚠️ No balance found on {ex_name}")
+            except Exception as e:
+                logger.error(f"Error getting balance from {ex_name}: {e}")
+        
+        if not real_balances:
+            logger.error("❌ No real balances found on any exchange - cannot find opportunities")
+            return []
+        
+        # Get opportunities from simple detector (JavaScript logic)
+        simple_opportunities = self.simple_detector.get_current_opportunities()
+        if simple_opportunities:
+            logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
+            for i, opp in enumerate(simple_opportunities[:3]):
+                logger.info(f"   {i+1}. {opp}")
+                
+                # Convert to ArbitrageResult format
+                result = ArbitrageResult(
+                    exchange='binance',
+                    triangle_path=[opp.d1, opp.d2, opp.d3, opp.d1],
+                    profit_percentage=opp.value,
+                    profit_amount=100.0 * (opp.value / 100),  # $100 trade amount
+                    initial_amount=100.0,
+                    net_profit_percent=opp.value,
+                    min_profit_threshold=self.min_profit_pct
+                )
+                all_results.append(result)
         
         if 'binance' in self.exchange_manager.exchanges and self.realtime_detector.running:
             logger.info("📡 Using real-time WebSocket data for Binance")
 
         for ex_name, triangles in self.triangle_paths.items():
             ex = self.exchange_manager.exchanges.get(ex_name)
-            if not ex or not triangles:
-                logger.info(f"Skipping {ex_name}: no exchange or triangles")
+            if not ex:
+                logger.info(f"Skipping {ex_name}: no exchange connection")
+                continue
+                
+            if not triangles:
+                logger.info(f"Skipping {ex_name}: no triangular paths built")
+                continue
+                
+            # Check if we have real balance on this exchange
+            exchange_balance = real_balances.get(ex_name, {})
+            if not exchange_balance:
+                logger.info(f"Skipping {ex_name}: no real balance available")
                 continue
             
             try:
-                results = await self._scan_exchange_triangles(ex, triangles)
+                results = await self._scan_exchange_triangles_with_balance(ex, triangles, exchange_balance)
                 all_results.extend(results)
-                logger.info(f"💰 Found {len(results)} REAL opportunities on {ex_name}")
+                logger.info(f"💰 Found {len(results)} REAL opportunities on {ex_name} with balance: {exchange_balance}")
             except Exception as e:
                 logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
 
@@ -341,8 +396,8 @@ class MultiExchangeDetector:
         
         return profitable_results
 
-    async def _scan_exchange_triangles(self, ex, triangles: List[List[str]]) -> List[ArbitrageResult]:
-        """Scan triangles for REAL profitable opportunities"""
+    async def _scan_exchange_triangles_with_balance(self, ex, triangles: List[List[str]], real_balance: Dict[str, float]) -> List[ArbitrageResult]:
+        """Scan triangles for REAL profitable opportunities based on actual balance"""
         results = []
         
         ticker = await self._get_ticker_data(ex)
@@ -350,7 +405,31 @@ class MultiExchangeDetector:
             logger.warning(f"No ticker data for {ex.name}")
             return []
 
-        logger.info(f"🔍 Scanning {len(triangles)} REAL triangles for {ex.name}")
+        logger.info(f"🔍 Scanning {len(triangles)} REAL triangles for {ex.name} with balance: {real_balance}")
+        
+        # Only scan triangles where we have the base currency in our balance
+        valid_triangles = []
+        for path in triangles:
+            base_currency = path[0]  # First currency in triangle path
+            if base_currency in real_balance and real_balance[base_currency] > 0.001:
+                # Calculate maximum trade amount based on real balance
+                max_possible_trade = min(
+                    real_balance[base_currency] * 0.9,  # Use 90% of available balance
+                    self.max_trade_amount  # Respect configured maximum
+                )
+                if max_possible_trade >= 1.0:  # Minimum $1 trade
+                    valid_triangles.append((path, max_possible_trade))
+                    logger.info(f"✅ Valid triangle: {' → '.join(path[:3])} with max trade: ${max_possible_trade:.2f}")
+                else:
+                    logger.debug(f"❌ Insufficient balance for {base_currency}: {real_balance[base_currency]:.8f}")
+            else:
+                logger.debug(f"❌ No balance for base currency {base_currency}")
+        
+        if not valid_triangles:
+            logger.warning(f"⚠️ No valid triangles found for {ex.name} - no matching balances")
+            return []
+        
+        logger.info(f"💎 Found {len(valid_triangles)} valid triangles with sufficient balance")
         
         if hasattr(self, 'realtime_detector') and self.realtime_detector:
             try:
@@ -360,16 +439,13 @@ class MultiExchangeDetector:
             except Exception as e:
                 logger.debug(f"Could not get real-time detector stats: {e}")
         
-        for i, path in enumerate(triangles):
-            a, b, c, _ = path
+        for i, (path, max_trade_amount) in enumerate(valid_triangles):
+            base_currency, intermediate_currency, quote_currency = path[0], path[1], path[2]
             try:
-                if self.max_trade_amount > 100.0:
-                    logger.warning(f"🚫 Trade amount ${self.max_trade_amount} exceeds $100 limit, capping at $100")
-                    trade_amount = 100.0
-                else:
-                    trade_amount = self.max_trade_amount
+                # Use the calculated trade amount based on real balance
+                trade_amount = min(max_trade_amount, 100.0)  # Still cap at $100
                 
-                profit = await self._calculate_real_triangle_profit(ex, ticker, a, b, c)
+                profit = await self._calculate_real_triangle_profit(ex, ticker, base_currency, intermediate_currency, quote_currency)
                 
                 if profit and profit >= self.min_profit_pct and trade_amount <= 100.0:
                     result = ArbitrageResult(
@@ -382,17 +458,17 @@ class MultiExchangeDetector:
                         min_profit_threshold=self.min_profit_pct
                     )
                     results.append(result)
-                    logger.info(f"💰 VALID OPPORTUNITY: {a}→{b}→{c} = {profit:.4f}% profit (${trade_amount})")
+                    logger.info(f"💰 REAL OPPORTUNITY: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% profit (${trade_amount}) - TRADEABLE WITH YOUR BALANCE!")
                 elif profit and profit < self.min_profit_pct:
-                    logger.debug(f"🚫 REJECTED (low profit): {a}→{b}→{c} = {profit:.4f}% < {self.min_profit_pct}%")
+                    logger.debug(f"🚫 REJECTED (low profit): {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% < {self.min_profit_pct}%")
                 elif trade_amount > 100.0:
-                    logger.debug(f"🚫 REJECTED (high amount): {a}→{b}→{c} = ${trade_amount} > $100")
+                    logger.debug(f"🚫 REJECTED (high amount): {base_currency}→{intermediate_currency}→{quote_currency} = ${trade_amount} > $100")
                 else:
-                    logger.debug(f"🚫 REJECTED: {a}→{b}→{c} = {profit:.4f}%")
+                    logger.debug(f"🚫 REJECTED: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}%")
             except Exception as e:
-                logger.debug(f"Skipping triangle {a}-{b}-{c}: {str(e)}")
+                logger.debug(f"Skipping triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
         
-        logger.info(f"✅ Found {len(results)} VALID opportunities on {ex.name} (≥{self.min_profit_pct}%, ≤$100)")
+        logger.info(f"✅ Found {len(results)} REAL TRADEABLE opportunities on {ex.name} (≥{self.min_profit_pct}%, ≤$100, with your balance)")
         return results
 
     async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
