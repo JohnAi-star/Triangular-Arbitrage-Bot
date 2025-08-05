@@ -26,21 +26,26 @@ class Config:
         }
 
     # Core Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.5'))    # 0.5% minimum for profitability
-    MIN_PROFIT_THRESHOLD: float = float(os.getenv('MIN_PROFIT_THRESHOLD', '0.5'))      # 0.5% threshold for GUI display
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '100'))              # $100 maximum per trade
+    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.01'))   # 0.01% minimum for display
+    MIN_PROFIT_THRESHOLD: float = float(os.getenv('MIN_PROFIT_THRESHOLD', '0.01'))     # 0.01% threshold for GUI display
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '25'))               # $25 per trade
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
 
     # Fee & Trading Mode
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
     PRIORITIZE_ZERO_FEE: bool = os.getenv('PRIORITIZE_ZERO_FEE', 'true').lower() == 'true'
-    FORCE_FAKE_OPPORTUNITY: bool = os.getenv('FORCE_FAKE_OPPORTUNITY', 'false').lower() == 'true'
+    SHOW_ALL_OPPORTUNITIES: bool = True  # Always show all market opportunities
 
     # Runtime Feature Flags (defaulted to avoid crash)
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
     ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'false').lower() == 'true'
     PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'false').lower() == 'false'
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'false'
+    
+    # Scanning Configuration - Show ALL opportunities
+    SCAN_ALL_OPPORTUNITIES: bool = True   # Scan all market opportunities
+    IGNORE_BALANCE_CHECK: bool = True     # Don't check balance when scanning
+    MANUAL_EXECUTION_MODE: bool = True    # Allow manual execution of any opportunity
 
     # Slippage and Order Risk
     MAX_SLIPPAGE_PERCENTAGE: float = 0.05

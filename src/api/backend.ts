@@ -19,6 +19,9 @@ export interface ArbitrageOpportunity {
   steps: TradeStep[];
   tradeable?: boolean;
   real_balance_based?: boolean;
+  balanceRequired?: number;
+  ui_display_only?: boolean;
+  real_market_data?: boolean;
 }
 
 export interface DetailedTradeLog {

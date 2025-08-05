@@ -409,7 +409,7 @@ class ArbitrageBotGUI:
                 # Auto-execute if enabled
                 if self.auto_trading_var.get():
                     for opportunity in opportunities[:3]:  # Limit to top 3
-                        if opportunity.is_profitable:
+                        if hasattr(opportunity, 'is_profitable') and opportunity.is_profitable:
                             await self.executor.execute_arbitrage(opportunity)
                             self.add_to_trading_history(f"Auto-executed: {opportunity}")
                 
@@ -461,17 +461,46 @@ class ArbitrageBotGUI:
             
             # Add current opportunities
             for i, opportunity in enumerate(self.opportunities[:Config.MAX_OPPORTUNITIES_DISPLAY]):
+                # Handle both ArbitrageOpportunity and ArbitrageResult objects
+                if hasattr(opportunity, 'exchange'):
+                    exchange = opportunity.exchange
+                elif hasattr(opportunity, 'name'):
+                    exchange = opportunity.name
+                else:
+                    exchange = 'Unknown'
+                
+                if hasattr(opportunity, 'triangle_path'):
+                    if isinstance(opportunity.triangle_path, list):
+                        path = ' → '.join(opportunity.triangle_path[:3])
+                    else:
+                        path = str(opportunity.triangle_path)
+                else:
+                    path = 'Unknown Path'
+                
+                profit_pct = getattr(opportunity, 'profit_percentage', 0)
+                profit_amt = getattr(opportunity, 'profit_amount', 0)
+                initial_amt = getattr(opportunity, 'initial_amount', 0)
+                
+                # Check if profitable
+                is_profitable = False
+                if hasattr(opportunity, 'is_profitable'):
+                    is_profitable = opportunity.is_profitable
+                elif hasattr(opportunity, 'net_profit_percent'):
+                    is_profitable = opportunity.net_profit_percent > 0.5
+                else:
+                    is_profitable = profit_pct > 0.5
+                
                 values = (
-                    opportunity.exchange if hasattr(opportunity, 'exchange') else 'Multi',
-                    opportunity.triangle_path,
-                    f"{opportunity.profit_percentage:.4f}%",
-                    f"${opportunity.profit_amount:.6f}",
-                    f"${opportunity.initial_amount:.2f}",
+                    exchange,
+                    path,
+                    f"{profit_pct:.4f}%",
+                    f"${profit_amt:.6f}",
+                    f"${initial_amt:.2f}",
                     "Execute"
                 )
                 
                 # Color code by profitability
-                tags = ("profitable",) if opportunity.is_profitable else ("unprofitable",)
+                tags = ("profitable",) if is_profitable else ("unprofitable",)
                 
                 self.opportunities_tree.insert("", "end", values=values, tags=tags)
             

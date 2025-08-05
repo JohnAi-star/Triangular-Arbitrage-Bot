@@ -5,6 +5,7 @@ LIVE TRADING Triangular Arbitrage Detector with Enhanced Balance Display
 
 import asyncio
 import time
+import aiohttp
 from typing import Dict, List, Any, Set, Tuple
 from datetime import datetime
 import logging
@@ -32,11 +33,15 @@ class ArbitrageResult:
     initial_amount: float
     net_profit_percent: float = 0.0
     min_profit_threshold: float = 0.0001
+    is_tradeable: bool = False
+    balance_available: float = 0.0
+    required_balance: float = 0.0
+    is_demo: bool = False
     
     @property
     def is_profitable(self) -> bool:
         """Check if the opportunity is profitable above threshold."""
-        return self.net_profit_percent > self.min_profit_threshold and self.profit_percentage > 0
+        return self.profit_percentage >= self.min_profit_threshold
 
 class MultiExchangeDetector:
     def __init__(self, exchange_manager, websocket_manager, config: Dict[str, Any]):
@@ -321,149 +326,167 @@ class MultiExchangeDetector:
         return None
 
     async def scan_all_opportunities(self) -> List[ArbitrageResult]:
-        """Scan all exchanges for REAL profitable arbitrage opportunities"""
+        """Scan all exchanges for ALL arbitrage opportunities regardless of balance"""
+        scan_start_time = time.time()
         all_results = []
-        logger.info(f"🔍 Starting REAL BALANCE-BASED scan (Max: ${self.max_trade_amount}, Min Profit: {self.min_profit_pct}%)...")
+        logger.info(f"🔍 Scanning ALL opportunities regardless of balance (Min Display: {self.min_profit_pct}%)...")
         
-        # First, get REAL account balances
-        real_balances = {}
-        for ex_name, ex in self.exchange_manager.exchanges.items():
-            try:
-                balance = await ex.get_account_balance()
-                if balance:
-                    real_balances[ex_name] = balance
-                    # Only log currencies with significant balances
-                    significant_balances = {k: v for k, v in balance.items() if v > 0.001}
-                    if significant_balances:
-                        logger.info(f"💰 REAL BALANCE on {ex_name}: {significant_balances}")
-                    else:
-                        logger.info(f"💰 REAL BALANCE on {ex_name}: {len(balance)} currencies (small amounts)")
-                else:
-                    logger.warning(f"⚠️ No balance found on {ex_name}")
-            except Exception as e:
-                logger.error(f"Error getting balance from {ex_name}: {e}")
+        # STEP 1: Scan for ALL real market opportunities (ignore balance completely)
+        logger.info("🔍 Fetching ALL market opportunities regardless of account balance...")
         
-        if not real_balances:
-            logger.warning("⚠️ No real balances found - continuing with demo mode")
-            # Continue anyway for testing purposes
-        
-        # Get opportunities from simple detector (JavaScript logic)
+        # STEP 2: Get opportunities from simple detector
         simple_opportunities = self.simple_detector.get_current_opportunities()
         if simple_opportunities:
             logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
             for i, opp in enumerate(simple_opportunities[:3]):
                 logger.info(f"   {i+1}. {opp}")
                 
+                # Mark all opportunities as potentially tradeable (user can decide)
+                base_currency = opp.d1
+                required_balance = self.max_trade_amount
+                
                 # Convert to ArbitrageResult format
                 result = ArbitrageResult(
                     exchange='binance',
                     triangle_path=[opp.d1, opp.d2, opp.d3, opp.d1],
                     profit_percentage=opp.value,
-                    profit_amount=100.0 * (opp.value / 100),  # $100 trade amount
-                    initial_amount=100.0,
+                    profit_amount=self.max_trade_amount * (opp.value / 100),
+                    initial_amount=self.max_trade_amount,
                     net_profit_percent=opp.value,
-                    min_profit_threshold=self.min_profit_pct
+                    min_profit_threshold=self.min_profit_pct,
+                    is_tradeable=True,  # Show as tradeable - user can try to execute
+                    balance_available=0.0,  # Don't check balance
+                    required_balance=required_balance
                 )
                 all_results.append(result)
         
+        # STEP 3: Scan traditional triangular paths for ALL opportunities
         if 'binance' in self.exchange_manager.exchanges and self.realtime_detector.running:
             logger.info("📡 Using real-time WebSocket data for Binance")
 
         for ex_name, triangles in self.triangle_paths.items():
             ex = self.exchange_manager.exchanges.get(ex_name)
             if not ex:
-                logger.info(f"Skipping {ex_name}: no exchange connection")
+                logger.warning(f"Skipping {ex_name}: no exchange connection")
                 continue
                 
             if not triangles:
-                logger.info(f"Skipping {ex_name}: no triangular paths built")
-                continue
-                
-            # Check if we have real balance on this exchange
-            exchange_balance = real_balances.get(ex_name, {})
-            if not exchange_balance:
-                logger.info(f"Skipping {ex_name}: no real balance available")
+                logger.warning(f"Skipping {ex_name}: no triangular paths built")
                 continue
             
             try:
-                results = await self._scan_exchange_triangles_with_balance(ex, triangles, exchange_balance)
+                # Scan ALL triangles without balance restrictions
+                logger.info(f"🔍 Scanning {len(triangles)} triangles on {ex_name} for ALL opportunities...")
+                results = await self._scan_exchange_triangles_all(ex, triangles)
                 all_results.extend(results)
-                logger.info(f"💰 Found {len(results)} REAL opportunities on {ex_name} with balance: {exchange_balance}")
+                logger.info(f"💎 Found {len(results)} opportunities on {ex_name}")
             except Exception as e:
                 logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
 
+        # STEP 4: Sort all results by profitability
         all_results.sort(key=lambda x: x.profit_percentage, reverse=True)
         
-        profitable_results = [
-            result for result in all_results 
-            if result.profit_percentage >= self.min_profit_pct and result.initial_amount <= self.max_trade_amount
+        # Show ALL opportunities (let user decide what to execute)
+        filtered_results = all_results
+        
+        # STEP 5: Log comprehensive results
+        scan_duration = (time.time() - scan_start_time) * 1000  # Convert to milliseconds
+        
+        logger.info(f"📊 SCAN RESULTS (Duration: {scan_duration:.0f}ms):")
+        logger.info(f"   Total opportunities found: {len(filtered_results)}")
+        logger.info(f"   Showing ALL opportunities for manual selection")
+        logger.info(f"   User can choose which opportunities to execute")
+        
+        if len(filtered_results) > 0:
+            logger.info(f"💎 Top opportunities:")
+            for i, opp in enumerate(filtered_results[:5]):
+                logger.info(f"   {i+1}. {opp.exchange}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Available for execution")
+        else:
+            logger.info(f"   No opportunities found in current market conditions")
+        
+        # STEP 6: Broadcast ALL opportunities to UI
+        await self._broadcast_opportunities(filtered_results)
+        
+        return filtered_results
+        
+    def _generate_sample_opportunities(self) -> List[ArbitrageResult]:
+        """Generate sample opportunities for UI display when no real opportunities exist"""
+        import random
+        
+        sample_opportunities = []
+        
+        # Sample triangle paths for demonstration
+        sample_triangles = [
+            ('BTC', 'ETH', 'USDT'),
+            ('BTC', 'BNB', 'USDT'),
+            ('ETH', 'BNB', 'USDT'),
+            ('BTC', 'ADA', 'USDT'),
+            ('ETH', 'ADA', 'USDT'),
+            ('BTC', 'SOL', 'USDT'),
+            ('ETH', 'SOL', 'USDT'),
+            ('BNB', 'ADA', 'USDT'),
+            ('BTC', 'DOT', 'USDT'),
+            ('ETH', 'DOT', 'USDT')
         ]
         
-        filtered_by_profit = len([r for r in all_results if r.profit_percentage < self.min_profit_pct])
-        filtered_by_amount = len([r for r in all_results if r.initial_amount > self.max_trade_amount])
+        for i, (base, intermediate, quote) in enumerate(sample_triangles[:10]):  # Show 10 sample opportunities
+            # Generate realistic profit percentages
+            profit_pct = random.uniform(0.5, 2.0)  # 0.5% to 2.0% (realistic range)
+            trade_amount = random.uniform(10, 100)  # $10 to $100
+            profit_amount = trade_amount * (profit_pct / 100)
+            
+            # Mark as DEMO opportunities
+            is_tradeable = False  # Demo opportunities are not tradeable
+            balance_available = 0.0
+            
+            result = ArbitrageResult(
+                exchange='DEMO',
+                triangle_path=[base, intermediate, quote, base],
+                profit_percentage=profit_pct,
+                profit_amount=profit_amount,
+                initial_amount=trade_amount,
+                net_profit_percent=profit_pct,
+                min_profit_threshold=self.min_profit_pct,
+                is_tradeable=is_tradeable,
+                balance_available=balance_available,
+                required_balance=trade_amount,
+                is_demo=True  # Mark as demo opportunity
+            )
+            sample_opportunities.append(result)
         
-        logger.info(f"💎 FILTERING RESULTS:")
-        logger.info(f"   Total found: {len(all_results)}")
-        logger.info(f"   Filtered by profit (<{self.min_profit_pct}%): {filtered_by_profit}")
-        logger.info(f"   Filtered by amount (>${self.max_trade_amount}): {filtered_by_amount}")
-        logger.info(f"   ✅ VALID OPPORTUNITIES: {len(profitable_results)}")
-        
-        await self._broadcast_opportunities(profitable_results)
-        
-        return profitable_results
+        logger.info(f"✅ Generated {len(sample_opportunities)} sample opportunities for UI display")
+        return sample_opportunities
 
-    async def _scan_exchange_triangles_with_balance(self, ex, triangles: List[List[str]], real_balance: Dict[str, float]) -> List[ArbitrageResult]:
-        """Scan triangles for REAL profitable opportunities based on actual balance"""
+    async def _scan_exchange_triangles_all(self, ex, triangles: List[List[str]]) -> List[ArbitrageResult]:
+        """Scan ALL triangles for opportunities regardless of balance"""
         results = []
         
+        # Use async ticker fetching for better performance
+        ticker_start_time = time.time()
         ticker = await self._get_ticker_data(ex)
+        ticker_duration = (time.time() - ticker_start_time) * 1000
+        
         if not ticker:
-            logger.warning(f"No ticker data for {ex.name}")
+            logger.error(f"No ticker data for {ex.name}")
             return []
 
-        logger.info(f"🔍 Scanning {len(triangles)} REAL triangles for {ex.name} with balance: {real_balance}")
+        logger.info(f"🔍 Scanning {len(triangles)} triangles for {ex.name} - ALL opportunities (ticker fetch: {ticker_duration:.0f}ms)")
         
-        # Only scan triangles where we have the base currency in our balance
-        valid_triangles = []
+        # Scan ALL triangles for market opportunities
         for path in triangles:
             base_currency = path[0]  # First currency in triangle path
-            if base_currency in real_balance and real_balance[base_currency] > 0.001:
-                # Calculate maximum trade amount based on real balance
-                max_possible_trade = min(
-                    real_balance[base_currency] * 0.9,  # Use 90% of available balance
-                    self.max_trade_amount  # Respect configured maximum
+            intermediate_currency, quote_currency = path[1], path[2]
+            
+            try:
+                # Calculate profit for ALL opportunities
+                profit = await self._calculate_real_triangle_profit(
+                    ex, ticker, base_currency, intermediate_currency, quote_currency
                 )
-                if max_possible_trade >= 1.0:  # Minimum $1 trade
-                    valid_triangles.append((path, max_possible_trade))
-                    logger.info(f"✅ Valid triangle: {' → '.join(path[:3])} with max trade: ${max_possible_trade:.2f}")
-                else:
-                    logger.debug(f"❌ Insufficient balance for {base_currency}: {real_balance[base_currency]:.8f}")
-            else:
-                logger.debug(f"❌ No balance for base currency {base_currency}")
-        
-        if not valid_triangles:
-            logger.warning(f"⚠️ No valid triangles found for {ex.name} - no matching balances")
-            return []
-        
-        logger.info(f"💎 Found {len(valid_triangles)} valid triangles with sufficient balance")
-        
-        if hasattr(self, 'realtime_detector') and self.realtime_detector:
-            try:
-                realtime_stats = self.realtime_detector.get_statistics()
-                if realtime_stats.get('opportunities_found', 0) > 0:
-                    logger.info(f"📡 Real-time detector found {realtime_stats['opportunities_found']} opportunities")
-            except Exception as e:
-                logger.debug(f"Could not get real-time detector stats: {e}")
-        
-        for i, (path, max_trade_amount) in enumerate(valid_triangles):
-            base_currency, intermediate_currency, quote_currency = path[0], path[1], path[2]
-            try:
-                # Use the calculated trade amount based on real balance
-                trade_amount = min(max_trade_amount, 100.0)  # Still cap at $100
                 
-                profit = await self._calculate_real_triangle_profit(ex, ticker, base_currency, intermediate_currency, quote_currency)
-                
-                if profit and profit >= self.min_profit_pct and trade_amount <= 100.0:
+                # Create result for ALL valid calculations
+                if profit is not None:
+                    trade_amount = self.max_trade_amount
+                    
                     result = ArbitrageResult(
                         exchange=ex.name,
                         triangle_path=path,
@@ -471,21 +494,55 @@ class MultiExchangeDetector:
                         profit_amount=(trade_amount * profit / 100),
                         initial_amount=trade_amount,
                         net_profit_percent=profit,
-                        min_profit_threshold=self.min_profit_pct
+                        min_profit_threshold=self.min_profit_pct,
+                        is_tradeable=True,  # Show all as potentially tradeable
+                        balance_available=0.0,  # Don't check balance
+                        required_balance=trade_amount
                     )
+                    
+                    # Add ALL opportunities for user selection
                     results.append(result)
-                    logger.info(f"💰 REAL OPPORTUNITY: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% profit (${trade_amount}) - TRADEABLE WITH YOUR BALANCE!")
-                elif profit and profit < self.min_profit_pct:
-                    logger.debug(f"🚫 REJECTED (low profit): {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% < {self.min_profit_pct}%")
-                elif trade_amount > 100.0:
-                    logger.debug(f"🚫 REJECTED (high amount): {base_currency}→{intermediate_currency}→{quote_currency} = ${trade_amount} > $100")
+                    
+                    # Log all opportunities
+                    profit_status = "💰 PROFITABLE" if profit >= self.min_profit_pct else "📊 OPPORTUNITY"
+                    logger.debug(f"{profit_status} {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}%")
                 else:
-                    logger.debug(f"🚫 REJECTED: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}%")
+                    logger.debug(f"🚫 Invalid: {base_currency}→{intermediate_currency}→{quote_currency} = {profit}")
+                    
             except Exception as e:
-                logger.debug(f"Skipping triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
+                logger.debug(f"Error calculating triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
         
-        logger.info(f"✅ Found {len(results)} REAL TRADEABLE opportunities on {ex.name} (≥{self.min_profit_pct}%, ≤$100, with your balance)")
+        logger.info(f"✅ Found {len(results)} opportunities on {ex.name} (ALL market opportunities)")
         return results
+
+    async def _get_ticker_data(self, ex):
+        """Get ticker data with smart caching"""
+        current_time = time.time()
+        last_fetch = self._last_ticker_time.get(ex.name, 0)
+        
+        if current_time - last_fetch < 5:
+            ticker = self._last_tickers.get(ex.name, {})
+            if ticker:
+                logger.debug(f"Using cached tickers for {ex.name}")
+                return ticker
+
+        ticker = await self._safe_fetch_tickers(ex)
+        if ticker:
+            self._last_tickers[ex.name] = ticker
+            self._last_ticker_time[ex.name] = current_time
+        
+        return ticker
+
+    async def _safe_fetch_tickers(self, ex):
+        """Fetch tickers with rate limiting protection"""
+        try:
+            await asyncio.sleep(0.2)  # Rate limiting
+            tickers = await ex.fetch_tickers()
+            logger.info(f"📊 Fetched {len(tickers)} 🔴 LIVE tickers from {ex.name}")
+            return tickers
+        except Exception as e:
+            logger.error(f"Error fetching tickers from {ex.name}: {str(e)}")
+            return self._last_tickers.get(ex.name, {})
 
     async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
         """Calculate REAL profit percentage using live market data"""
@@ -617,88 +674,44 @@ class MultiExchangeDetector:
             return self._last_tickers.get(ex.name, {})
 
     async def _broadcast_opportunities(self, opportunities: List[ArbitrageResult]):
-        """Format and broadcast REAL opportunities to UI"""
+        """Format and broadcast ALL opportunities to UI for user selection"""
         payload = []
         
         for opp in opportunities:
-            if not hasattr(opp, 'is_profitable') or not opp.is_profitable:
-                logger.debug(f"🚫 UI FILTER: Non-profitable {opp.profit_percentage:.4f}%")
-                continue
-                
-            if opp.initial_amount > 100.0:
-                logger.debug(f"🚫 UI FILTER: Amount ${opp.initial_amount} > $100")
-                continue
-                
-            if opp.profit_percentage < 0.5:
-                logger.debug(f"🚫 UI FILTER: Profit {opp.profit_percentage:.4f}% < 0.5%")
-                continue
-                
             payload.append({
                 'id': f"live_{int(datetime.now().timestamp()*1000)}_{len(payload)}",
                 'exchange': opp.exchange,
                 'trianglePath': " → ".join(opp.triangle_path[:3]),
                 'profitPercentage': round(opp.profit_percentage, 4),
                 'profitAmount': round(opp.profit_amount, 6),
-                'volume': min(opp.initial_amount, 100.0),
+                'volume': opp.initial_amount,
                 'status': 'detected',
-                'dataType': 'LIVE_FILTERED_DATA',
-                'timestamp': datetime.now().isoformat()
+                'dataType': 'ALL_OPPORTUNITIES',
+                'timestamp': datetime.now().isoformat(),
+                'tradeable': opp.is_tradeable,
+                'balanceAvailable': opp.balance_available,
+                'balanceRequired': opp.required_balance,
+                'real_market_data': True,
+                'manual_execution': True
             })
         
-        if payload:
-            logger.info(f"📡 Broadcasting {len(payload)} VALID opportunities to UI (≥0.5%, ≤$100)")
+        total_count = len(payload)
+        
+        logger.info(f"📡 Broadcasting {total_count} ALL opportunities to UI for manual selection")
         
         if self.websocket_manager:
             try:
                 if hasattr(self.websocket_manager, 'broadcast'):
                     await self.websocket_manager.broadcast('opportunities_update', payload)
-                    if payload:
-                        logger.info("✅ Successfully broadcasted opportunities to UI via WebSocket")
+                    logger.info("✅ Successfully broadcasted ALL opportunities to UI via WebSocket")
                 elif hasattr(self.websocket_manager, 'broadcast_sync'):
                     self.websocket_manager.broadcast_sync('opportunities_update', payload)
-                    if payload:
-                        logger.info("✅ Successfully broadcasted opportunities to UI via sync WebSocket")
+                    logger.info("✅ Successfully broadcasted ALL opportunities to UI via sync WebSocket")
             except Exception as e:
                 logger.error(f"Error broadcasting to WebSocket: {e}")
         else:
-            logger.debug("ℹ️ [INFO] UI broadcast disabled in this run (no WebSocket manager)")
-            for opp in payload[:5]:
-                logger.info(f"💎 Opportunity: {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}%")
-
-        return [opp for opp in opportunities if opp.net_profit_percent >= 0.5]
-
-if __name__ == "__main__":
-    from exchange_manager import ExchangeManager
-    
-    async def main():
-        config = {
-            'min_profit_percentage': 0.5,
-            'max_trade_amount': 100.0,
-            'api_key': 'YOUR_API_KEY',
-            'api_secret': 'YOUR_API_SECRET'
-        }
+            logger.warning("ℹ️ UI broadcast disabled in this run (no WebSocket manager)")
         
-        exchange_manager = ExchangeManager(config)
-        await exchange_manager.initialize_exchanges(['binance'])
-        
-        detector = MultiExchangeDetector(
-            exchange_manager=exchange_manager,
-            websocket_manager=None,
-            config=config
-        )
-        
-        # Test balance display
-        await detector.show_account_balance("binance")
-        
-        # Initialize normally
-        await detector.initialize()
-        
-        # Run periodic scans
-        while True:
-            await detector.scan_all_opportunities()
-            await asyncio.sleep(60)  # Scan every 60 seconds
-    
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nShutting down...")
+        # Log top opportunities for user
+        for opp in payload[:5]:
+            logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")

@@ -425,15 +425,15 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     </thead>
                                     <tbody className="divide-y divide-slate-700">
                                         {opportunities.map(o => (
-                                            <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className={`hover:bg-slate-700/30 cursor-pointer ${o.real_balance_based ? 'bg-green-900/20 border-l-4 border-l-green-400' : ''}`}>
+                                            <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className={`hover:bg-slate-700/30 cursor-pointer ${o.real_market_data ? 'bg-green-900/20 border-l-4 border-l-green-400' : 'bg-slate-800/50'}`}>
                                                 <td className="p-2">{getStatusIcon(o.status)}</td>
                                                 <td className="p-2 text-white">
                                                     {o.exchange}
-                                                    {o.real_balance_based && <span className="ml-2 text-xs bg-green-600 px-2 py-1 rounded">REAL BALANCE</span>}
+                                                    {o.real_market_data && <span className="ml-2 text-xs bg-green-600 px-2 py-1 rounded">LIVE</span>}
                                                 </td>
                                                 <td className="p-2 text-sm text-gray-300">
                                                     {o.trianglePath}
-                                                    {o.tradeable && <div className="text-xs text-green-400">✅ Tradeable with your balance</div>}
+                                                    <div className="text-xs text-blue-400">📊 Click to execute</div>
                                                 </td>
                                                 <td className="p-2 text-green-400">{o.profitPercentage.toFixed(4)}%</td>
                                                 <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
@@ -442,9 +442,9 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                     {o.status === 'detected' && (
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className={`px-3 py-1 text-white text-xs rounded-lg ${o.real_balance_based ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}
+                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
                                                         >
-                                                            {o.real_balance_based ? 'TRADE NOW' : 'Execute'}
+                                                            EXECUTE
                                                         </button>
                                                     )}
                                                 </td>
@@ -456,22 +456,22 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     <div className="text-center text-gray-400 py-8">
                                         {isRunning ? (
                                             <div>
-                                                <div className="text-lg mb-2">🔍 Scanning for REAL opportunities based on your balance...</div>
+                                                <div className="text-lg mb-2">🔍 Scanning for ALL opportunities...</div>
                                                 <div className="text-sm mb-2">
-                                                    Looking for opportunities you can actually trade with your Binance balance
+                                                    Fetching ALL market opportunities regardless of balance
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
                                                     Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
                                                     Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
                                                 <div className="text-xs mt-1 text-yellow-400">
-                                                    💰 Only showing opportunities you can trade with your real balance
+                                                    💰 Showing ALL market opportunities - choose any to execute
                                                 </div>
                                             </div>
                                         ) : (
                                             <div>
                                                 <div className="text-lg mb-2">Click "Start Bot" to begin</div>
-                                                <div className="text-sm">Will scan for opportunities based on your real Binance balance</div>
+                                                <div className="text-sm">Will scan for ALL market opportunities</div>
                                             </div>
                                         )}
                                     </div>
