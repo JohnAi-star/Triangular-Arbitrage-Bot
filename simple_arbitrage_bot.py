@@ -54,52 +54,55 @@ class SimpleTriangularArbitrage:
         
         # Define major triangular paths that exist on Binance
         triangular_paths = [
-            # BTC-based triangles
-            ('BTC', 'ETH', 'USDT'),
-            ('BTC', 'BNB', 'USDT'),
-            ('BTC', 'ADA', 'USDT'),
-            ('BTC', 'SOL', 'USDT'),
-            ('BTC', 'DOT', 'USDT'),
-            ('BTC', 'LINK', 'USDT'),
-            
-            # ETH-based triangles
-            ('ETH', 'BNB', 'USDT'),
-            ('ETH', 'ADA', 'USDT'),
-            ('ETH', 'SOL', 'USDT'),
-            ('ETH', 'DOT', 'USDT'),
-            
-            # BNB-based triangles
-            ('BNB', 'ADA', 'USDT'),
-            ('BNB', 'SOL', 'USDT'),
-            ('BNB', 'DOT', 'USDT'),
-            
-            # USDC triangles
-            ('BTC', 'ETH', 'USDC'),
-            ('BTC', 'BNB', 'USDC'),
-            ('ETH', 'BNB', 'USDC'),
+            # USDT-based triangles (USDT → Currency1 → Currency2 → USDT)
+            ('USDT', 'BTC', 'ETH'),
+            ('USDT', 'BTC', 'BNB'),
+            ('USDT', 'ETH', 'BNB'),
+            ('USDT', 'BTC', 'ADA'),
+            ('USDT', 'ETH', 'ADA'),
+            ('USDT', 'BTC', 'SOL'),
+            ('USDT', 'ETH', 'SOL'),
+            ('USDT', 'BNB', 'ADA'),
+            ('USDT', 'BNB', 'SOL'),
+            ('USDT', 'BTC', 'DOT'),
+            ('USDT', 'ETH', 'DOT'),
+            ('USDT', 'BNB', 'DOT'),
+            ('USDT', 'RON', 'EGLD'),  # Your specific example
+            ('USDT', 'DOGE', 'XRP'),
+            ('USDT', 'MATIC', 'AVAX'),
+            ('USDT', 'LINK', 'ATOM'),
+            ('USDT', 'LTC', 'TRX'),
+            ('USDT', 'FIL', 'UNI'),
+            ('USDT', 'NEAR', 'ALGO'),
+            ('USDT', 'VET', 'HBAR'),
         ]
         
         print(f"🔍 Checking {len(triangular_paths)} triangular paths...")
         
-        for base, intermediate, quote in triangular_paths:
+        for usdt, curr1, curr2 in triangular_paths:
             try:
-                # Build the three pairs needed
-                pair1 = f"{base}{intermediate}"      # BTC + ETH = BTCETH
-                pair2 = f"{intermediate}{quote}"     # ETH + USDT = ETHUSDT  
-                pair3 = f"{base}{quote}"             # BTC + USDT = BTCUSDT
+                # Build USDT triangle pairs
+                pair1 = f"{curr1}USDT"      # USDT → curr1 (e.g., BTCUSDT)
+                pair2 = f"{curr1}{curr2}"   # curr1 → curr2 (e.g., BTCETH)
+                pair3 = f"{curr2}USDT"      # curr2 → USDT (e.g., ETHUSDT)
+                
+                # Alternative if curr1→curr2 doesn't exist
+                alt_pair2 = f"{curr2}{curr1}"
                 
                 # Check if all pairs exist in prices
-                if pair1 in prices and pair2 in prices and pair3 in prices:
+                if (pair1 in prices and pair3 in prices and 
+                    (pair2 in prices or alt_pair2 in prices)):
+                    
                     profit_pct = self.calculate_triangle_profit(
-                        prices, base, intermediate, quote, pair1, pair2, pair3
+                        prices, usdt, curr1, curr2, pair1, pair2, pair3, alt_pair2
                     )
                     
                     if profit_pct >= self.min_profit_pct:
                         profit_usd = self.max_trade_amount * (profit_pct / 100)
                         
                         opportunity = {
-                            'path': f"{base} → {intermediate} → {quote} → {base}",
-                            'pairs': [pair1, pair2, pair3],
+                            'path': f"USDT → {curr1} → {curr2} → USDT",
+                            'pairs': [pair1, pair2 if pair2 in prices else alt_pair2, pair3],
                             'profit_pct': profit_pct,
                             'profit_usd': profit_usd,
                             'trade_amount': self.max_trade_amount,
@@ -112,46 +115,55 @@ class SimpleTriangularArbitrage:
                         print(f"💰 OPPORTUNITY FOUND!")
                         print(f"   Path: {opportunity['path']}")
                         print(f"   Profit: {profit_pct:.4f}% (${profit_usd:.2f})")
-                        print(f"   Trade Amount: ${self.max_trade_amount}")
+                        print(f"   Trade Amount: ${self.max_trade_amount} USDT")
                         print()
                         
             except Exception as e:
-                print(f"❌ Error calculating {base}-{intermediate}-{quote}: {e}")
+                print(f"❌ Error calculating USDT-{curr1}-{curr2}: {e}")
                 continue
         
         return opportunities
     
     def calculate_triangle_profit(self, prices: Dict[str, float], 
-                                base: str, intermediate: str, quote: str,
-                                pair1: str, pair2: str, pair3: str) -> float:
-        """Calculate triangular arbitrage profit - EXACT YouTube method"""
+                                usdt: str, curr1: str, curr2: str,
+                                pair1: str, pair2: str, pair3: str, alt_pair2: str) -> float:
+        """Calculate USDT triangular arbitrage profit - USDT → curr1 → curr2 → USDT"""
         
         try:
-            # Get prices
-            price1 = prices[pair1]  # BTCETH price
-            price2 = prices[pair2]  # ETHUSDT price  
-            price3 = prices[pair3]  # BTCUSDT price
+            # Get prices for USDT triangle
+            price1 = prices[pair1]  # curr1/USDT price (e.g., BTCUSDT)
+            price3 = prices[pair3]  # curr2/USDT price (e.g., ETHUSDT)
             
-            # Start with $100 worth of base currency (BTC)
-            start_amount_usd = self.max_trade_amount
-            start_amount_base = start_amount_usd / price3  # Convert $100 to BTC
+            # Get curr1→curr2 price (try both directions)
+            if pair2 in prices:
+                price2 = prices[pair2]  # curr1/curr2 price (e.g., BTCETH)
+                use_direct = True
+            elif alt_pair2 in prices:
+                price2 = prices[alt_pair2]  # curr2/curr1 price (e.g., ETHBTC)
+                use_direct = False
+            else:
+                return -999.0
             
-            # Step 1: BTC → ETH (sell BTC for ETH)
-            # If BTCETH = 15, then 1 BTC = 15 ETH
-            eth_amount = start_amount_base * price1
+            # Start with $100 USDT
+            start_usdt = self.max_trade_amount
             
-            # Step 2: ETH → USDT (sell ETH for USDT)
-            # If ETHUSDT = 3000, then ETH amount * 3000 = USDT
-            usdt_amount = eth_amount * price2
+            # Step 1: USDT → curr1 (buy curr1 with USDT)
+            amount_curr1 = start_usdt / price1
             
-            # Step 3: USDT → BTC (buy BTC with USDT)
-            # If BTCUSDT = 45000, then USDT / 45000 = BTC
-            final_btc_amount = usdt_amount / price3
+            # Step 2: curr1 → curr2
+            if use_direct:
+                # Direct pair: curr1/curr2 (e.g., BTC/ETH)
+                amount_curr2 = amount_curr1 * price2
+            else:
+                # Inverse pair: curr2/curr1 (e.g., ETH/BTC)
+                amount_curr2 = amount_curr1 / price2
+            
+            # Step 3: curr2 → USDT (sell curr2 for USDT)
+            final_usdt = amount_curr2 * price3
             
             # Calculate profit
-            profit_btc = final_btc_amount - start_amount_base
-            profit_usd = profit_btc * price3
-            profit_pct = (profit_usd / start_amount_usd) * 100
+            profit_usdt = final_usdt - start_usdt
+            profit_pct = (profit_usdt / start_usdt) * 100
             
             # Apply trading fees (0.1% per trade = 0.3% total)
             total_fees_pct = 0.3
@@ -160,7 +172,7 @@ class SimpleTriangularArbitrage:
             return net_profit_pct
             
         except Exception as e:
-            print(f"❌ Calculation error: {e}")
+            print(f"❌ USDT triangle calculation error: {e}")
             return -999.0
     
     def run_continuous_scan(self):

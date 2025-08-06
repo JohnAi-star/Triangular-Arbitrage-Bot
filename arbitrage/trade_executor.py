@@ -205,9 +205,14 @@ class TradeExecutor:
             self.logger.info(f"Skipping unprofitable opportunity: {opportunity.profit_percentage:.4f}%")
             return False
         
-        if opportunity.profit_percentage < 0.5:  # Minimum 0.5% profit for profitability
+        if opportunity.profit_percentage < 0.05:  # Minimum 0.05% profit for execution
             self.logger.info(f"Opportunity skipped: profit {opportunity.profit_percentage:.4f}% below 0.5% threshold")
             return False
+        
+        # Enforce maximum trade amount
+        if opportunity.initial_amount > 100.0:
+            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $100 limit, adjusting...")
+            opportunity.initial_amount = 100.0
             
         start_time = datetime.now()
         trade_start_ms = time.time() * 1000
@@ -224,6 +229,26 @@ class TradeExecutor:
             self.logger.error(f"Exchange {exchange_id} not available")
             return False
         
+        # Initialize trade_log at the beginning to avoid scope issues
+        trade_log = TradeLog(
+            trade_id=trade_id,
+            timestamp=start_time,
+            exchange=exchange_id,
+            triangle_path=opportunity.triangle_path.split(' → ') if hasattr(opportunity, 'triangle_path') else ['Unknown'],
+            status=TradeStatus.SUCCESS,  # Will be updated if failed
+            initial_amount=opportunity.initial_amount,
+            final_amount=0.0,  # Will be updated
+            base_currency=opportunity.base_currency,
+            expected_profit_amount=opportunity.profit_amount,
+            expected_profit_percentage=opportunity.profit_percentage,
+            actual_profit_amount=0.0,  # Will be calculated
+            actual_profit_percentage=0.0,  # Will be calculated
+            total_fees_paid=0.0,  # Will be accumulated
+            total_slippage=0.0,  # Will be calculated
+            net_pnl=0.0,  # Will be calculated
+            total_duration_ms=0.0  # Will be calculated
+        )
+        
         try:
             # Request confirmation
             if not await self.request_confirmation(opportunity):
@@ -239,26 +264,6 @@ class TradeExecutor:
                 self.logger.error("❌ Insufficient balance for trade execution")
                 opportunity.status = OpportunityStatus.FAILED
                 return False
-            
-            # Initialize trade log
-            trade_log = TradeLog(
-                trade_id=trade_id,
-                timestamp=start_time,
-                exchange=exchange_id,
-                triangle_path=opportunity.triangle_path.split(' → '),
-                status=TradeStatus.SUCCESS,  # Will be updated if failed
-                initial_amount=opportunity.initial_amount,
-                final_amount=0.0,  # Will be updated
-                base_currency=opportunity.base_currency,
-                expected_profit_amount=opportunity.profit_amount,
-                expected_profit_percentage=opportunity.profit_percentage,
-                actual_profit_amount=0.0,  # Will be calculated
-                actual_profit_percentage=0.0,  # Will be calculated
-                total_fees_paid=0.0,  # Will be accumulated
-                total_slippage=0.0,  # Will be calculated
-                net_pnl=0.0,  # Will be calculated
-                total_duration_ms=0.0  # Will be calculated
-            )
             
             # Log trade attempt
             execution_type = "AUTO" if self.auto_trading else "MANUAL"

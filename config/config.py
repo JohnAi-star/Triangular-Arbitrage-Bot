@@ -26,15 +26,15 @@ class Config:
         }
 
     # Core Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.01'))   # 0.01% minimum for display
-    MIN_PROFIT_THRESHOLD: float = float(os.getenv('MIN_PROFIT_THRESHOLD', '0.01'))     # 0.01% threshold for GUI display
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '25'))               # $25 per trade
+    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.05'))   # 0.05% minimum for USDT-based trades
+    MIN_PROFIT_THRESHOLD: float = float(os.getenv('MIN_PROFIT_THRESHOLD', '0.05'))     # 0.05% threshold for USDT cycles
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '10'))               # $10 USDT per trade
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
 
     # Fee & Trading Mode
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
     PRIORITIZE_ZERO_FEE: bool = os.getenv('PRIORITIZE_ZERO_FEE', 'true').lower() == 'true'
-    SHOW_ALL_OPPORTUNITIES: bool = True  # Always show all market opportunities
+    SHOW_ALL_OPPORTUNITIES: bool = True  # Show all USDT-based opportunities
 
     # Runtime Feature Flags (defaulted to avoid crash)
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'

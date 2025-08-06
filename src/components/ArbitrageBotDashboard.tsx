@@ -433,19 +433,30 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 </td>
                                                 <td className="p-2 text-sm text-gray-300">
                                                     {o.trianglePath}
-                                                    <div className="text-xs text-blue-400">📊 Click to execute</div>
+                                                    <div className="text-xs text-blue-400">
+                                                        {o.trianglePath.includes('USDT →') && o.trianglePath.includes('→ USDT') ?
+                                                            '💰 USDT Triangle' :
+                                                            o.working_bot_opportunity ? '🚀 Working Bot' : '📊 Standard'
+                                                        }
+                                                    </div>
                                                 </td>
                                                 <td className="p-2 text-green-400">{o.profitPercentage.toFixed(4)}%</td>
                                                 <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
                                                 <td className="p-2 text-gray-300">${o.volume.toFixed(0)}</td>
                                                 <td className="p-2">
-                                                    {o.status === 'detected' && (
+                                                    {o.status === 'detected' && (o.trianglePath.includes('USDT →') || o.working_bot_opportunity) && (
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
+                                                            className={`px-3 py-1 text-white text-xs rounded-lg ${o.working_bot_opportunity ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'
+                                                                }`}
                                                         >
-                                                            EXECUTE
+                                                            {o.working_bot_opportunity ? 'EXECUTE (WORKING BOT)' : 'EXECUTE USDT'}
                                                         </button>
+                                                    )}
+                                                    {o.status === 'detected' && !o.trianglePath.includes('USDT →') && !o.working_bot_opportunity && (
+                                                        <span className="px-3 py-1 text-gray-400 text-xs">
+                                                            Not USDT Triangle
+                                                        </span>
                                                     )}
                                                 </td>
                                             </tr>
@@ -460,18 +471,18 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 <div className="text-sm mb-2">
                                                     Fetching ALL market opportunities regardless of balance
                                                 </div>
+                                                <div className="text-xs mt-2 text-yellow-400">
+                                                    💰 Looking for USDT-based cycles: USDT → Currency1 → Currency2 → USDT
+                                                </div>
                                                 <div className="text-xs mt-2 text-gray-500">
                                                     Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
                                                     Auto: {autoTrading ? 'ON' : 'OFF'}
-                                                </div>
-                                                <div className="text-xs mt-1 text-yellow-400">
-                                                    💰 Showing ALL market opportunities - choose any to execute
                                                 </div>
                                             </div>
                                         ) : (
                                             <div>
                                                 <div className="text-lg mb-2">Click "Start Bot" to begin</div>
-                                                <div className="text-sm">Will scan for ALL market opportunities</div>
+                                                <div className="text-sm">Will scan for USDT-based arbitrage opportunities</div>
                                             </div>
                                         )}
                                     </div>

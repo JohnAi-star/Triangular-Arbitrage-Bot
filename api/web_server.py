@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from utils.trade_logger import get_trade_logger
 from arbitrage.realtime_detector import RealtimeArbitrageDetector
+from simple_arbitrage_bot import SimpleTriangularArbitrage
 import uvicorn
 from dotenv import load_dotenv
 load_dotenv()
@@ -117,6 +118,7 @@ class ArbitrageWebServer:
         self.auto_trading = False
         self.opportunities: List[Dict[str, Any]] = []
         self.opportunities_cache: Dict[str, Any] = {}
+        self.simple_bot = SimpleTriangularArbitrage()  # Add working bot
         self.stats = {
             'opportunitiesFound': 0,
             'tradesExecuted': 0,
@@ -190,6 +192,10 @@ class ArbitrageWebServer:
                     asyncio.create_task(self.realtime_detector.start_websocket_stream())
                     self.logger.info("✅ Real-time WebSocket detector started")
                 
+                # Start the simple working bot for REAL opportunities
+                asyncio.create_task(self._simple_bot_scanning_loop())
+                self.logger.info("✅ Simple working bot started for REAL opportunities")
+                
                 try:
                     await self.detector.initialize()
                     self.logger.info("✅ Detector initialized successfully")
@@ -212,6 +218,7 @@ class ArbitrageWebServer:
                 # Force scan immediately to show opportunities
                 asyncio.create_task(self._immediate_scan())
                 asyncio.create_task(self._continuous_scanning_loop())
+                asyncio.create_task(self._usdt_triangle_scanner())  # Add USDT triangle scanner
                 self.stats['activeExchanges'] = len(config.selectedExchanges)
 
                 return {
@@ -237,6 +244,95 @@ class ArbitrageWebServer:
                 return {"status": "success", "message": "Bot stopped successfully"}
             except Exception as e:
                 self.logger.error(f"Error stopping bot: {str(e)}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @app.post("/api/opportunities/{opportunity_id}/execute")
+        async def execute_opportunity(opportunity_id: str):
+            try:
+                self.logger.info(f"🚀 EXECUTING REAL TRADE: {opportunity_id}")
+                
+                # Get opportunity from cache
+                if opportunity_id not in self.opportunities_cache:
+                    self.logger.error(f"❌ Opportunity {opportunity_id} not found in cache")
+                    raise HTTPException(status_code=404, detail="Opportunity not found")
+                
+                opportunity_data = self.opportunities_cache[opportunity_id]
+                self.logger.info(f"📊 Opportunity data: {opportunity_data}")
+                
+                # Create a proper opportunity object for execution
+                from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep
+                
+                # Extract data
+                exchange_id = opportunity_data.get('exchange', 'binance')
+                triangle_path = opportunity_data.get('triangle_path', [])
+                profit_percentage = opportunity_data.get('profit_percentage', 0)
+                profit_amount = opportunity_data.get('profit_amount', 0)
+                initial_amount = opportunity_data.get('initial_amount', 10)
+                
+                # Create trade steps for USDT-based triangle
+                if len(triangle_path) >= 3:
+                    base, intermediate, quote = triangle_path[0], triangle_path[1], triangle_path[2]
+                    
+                    # Create realistic trade steps
+                    steps = [
+                        TradeStep(f"{intermediate}/USDT", 'buy', initial_amount, 1.0, initial_amount),
+                        TradeStep(f"{intermediate}/{quote}", 'sell', initial_amount, 1.0, initial_amount),
+                        TradeStep(f"{quote}/USDT", 'sell', initial_amount, 1.0, initial_amount + profit_amount)
+                    ]
+                    
+                    # Create opportunity object
+                    opportunity = ArbitrageOpportunity(
+                        base_currency=base,
+                        intermediate_currency=intermediate,
+                        quote_currency=quote,
+                        pair1=f"{intermediate}/USDT",
+                        pair2=f"{intermediate}/{quote}",
+                        pair3=f"{quote}/USDT",
+                        steps=steps,
+                        initial_amount=initial_amount,
+                        final_amount=initial_amount + profit_amount,
+                        estimated_fees=initial_amount * 0.003,
+                        estimated_slippage=initial_amount * 0.001
+                    )
+                    
+                    # Set exchange for executor
+                    setattr(opportunity, 'exchange', exchange_id)
+                    
+                    self.logger.info(f"🔄 Executing REAL trade on {exchange_id}: {triangle_path}")
+                    
+                    # Execute the REAL trade
+                    if self.executor:
+                        success = await self.executor.execute_arbitrage(opportunity)
+                        
+                        if success:
+                            self.stats['tradesExecuted'] += 1
+                            self.stats['totalProfit'] += profit_amount
+                            
+                            # Broadcast successful execution
+                            await self.websocket_manager.broadcast('trade_executed', {
+                                'id': opportunity_id,
+                                'exchange': exchange_id,
+                                'trianglePath': " → ".join(triangle_path[:3]),
+                                'profitPercentage': profit_percentage,
+                                'profitAmount': profit_amount,
+                                'volume': initial_amount,
+                                'status': 'completed',
+                                'timestamp': datetime.now().isoformat(),
+                                'real_trade': True
+                            })
+                            
+                            self.logger.info(f"✅ REAL TRADE EXECUTED: {profit_percentage:.4f}% profit, ${profit_amount:.2f} earned!")
+                            return {"status": "success", "message": "REAL trade executed successfully", "profit": profit_amount}
+                        else:
+                            self.logger.error(f"❌ REAL TRADE FAILED for {exchange_id}")
+                            return {"status": "failed", "message": "Trade execution failed"}
+                    else:
+                        return {"status": "failed", "message": "No executor available"}
+                else:
+                    return {"status": "failed", "message": "Invalid triangle path"}
+                
+            except Exception as e:
+                self.logger.error(f"Error executing opportunity: {str(e)}", exc_info=True)
                 raise HTTPException(status_code=500, detail=str(e))
         
         async def _immediate_scan(self):
@@ -339,6 +435,208 @@ class ArbitrageWebServer:
             except Exception as e:
                 self.logger.error(f"Error in scanning loop: {str(e)}", exc_info=True)
                 await asyncio.sleep(10)
+    
+    async def _simple_bot_scanning_loop(self):
+        """Run the simple working bot continuously and broadcast to UI"""
+        self.logger.info("🚀 Starting simple bot scanning for REAL opportunities...")
+        
+        while self.running:
+            try:
+                # Get REAL prices from Binance
+                prices = self.simple_bot.get_binance_prices()
+                
+                if prices:
+                    # Find REAL triangular opportunities
+                    opportunities = self.simple_bot.find_triangular_opportunities(prices)
+                    
+                    if opportunities:
+                        # Convert to UI format
+                        ui_opportunities = []
+                        for i, opp in enumerate(opportunities):
+                            opp_id = f"simple_bot_{int(time.time()*1000)}_{i}"
+                            ui_opp = {
+                                "id": opp_id,
+                                "exchange": "binance",
+                                "trianglePath": opp['path'],
+                                "profitPercentage": round(opp['profit_pct'], 4),
+                                "profitAmount": round(opp['profit_usd'], 4),
+                                "volume": round(opp['trade_amount'], 2),
+                                "status": "detected",
+                                "dataType": "SIMPLE_BOT_REAL",
+                                "timestamp": datetime.now().isoformat(),
+                                "tradeable": True,
+                                "real_market_data": True,
+                                "working_bot_opportunity": True
+                            }
+                            ui_opportunities.append(ui_opp)
+                            
+                            # Add to cache for execution
+                            self.opportunities_cache[opp_id] = {
+                                'exchange': 'binance',
+                                'triangle_path': opp['path'].split(' → '),
+                                'profit_percentage': opp['profit_pct'],
+                                'profit_amount': opp['profit_usd'],
+                                'initial_amount': opp['trade_amount'],
+                                'pairs': opp['pairs']
+                            }
+                        
+                        # Broadcast REAL opportunities to UI
+                        await self.websocket_manager.broadcast("opportunities_update", ui_opportunities)
+                        self.logger.info(f"💎 Simple bot found {len(opportunities)} REAL opportunities - broadcasted to UI!")
+                        
+                        # Log top opportunities
+                        for i, opp in enumerate(opportunities[:3]):
+                            self.logger.info(f"   {i+1}. {opp['path']} = {opp['profit_pct']:.4f}% (${opp['profit_usd']:.2f})")
+                    else:
+                        self.logger.info("🔍 Simple bot: No opportunities found this scan")
+                else:
+                    self.logger.warning("❌ Simple bot: Failed to get prices")
+                
+                await asyncio.sleep(10)  # Scan every 10 seconds like YouTube method
+                
+            except Exception as e:
+                self.logger.error(f"Error in simple bot scanning: {str(e)}")
+                await asyncio.sleep(15)
+    
+    async def _usdt_triangle_scanner(self):
+        """Dedicated USDT triangle scanner for USDT→Currency→Currency→USDT opportunities"""
+        self.logger.info("💰 Starting USDT triangle scanner...")
+        
+        while self.running:
+            try:
+                # Get current Binance prices
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://api.binance.com/api/v3/ticker/price') as response:
+                        if response.status == 200:
+                            price_data = await response.json()
+                            prices = {item['symbol']: float(item['price']) for item in price_data}
+                            
+                            # Find USDT-based triangular opportunities
+                            usdt_opportunities = self._find_usdt_triangles(prices)
+                            
+                            if usdt_opportunities:
+                                # Convert to UI format
+                                ui_opportunities = []
+                                for i, opp in enumerate(usdt_opportunities):
+                                    opp_id = f"usdt_triangle_{int(time.time()*1000)}_{i}"
+                                    ui_opp = {
+                                        "id": opp_id,
+                                        "exchange": "binance",
+                                        "trianglePath": opp['path'],
+                                        "profitPercentage": round(opp['profit_pct'], 4),
+                                        "profitAmount": round(opp['profit_usd'], 4),
+                                        "volume": round(opp['trade_amount'], 2),
+                                        "status": "detected",
+                                        "dataType": "USDT_TRIANGLE",
+                                        "timestamp": datetime.now().isoformat(),
+                                        "tradeable": True,
+                                        "real_market_data": True,
+                                        "usdt_based": True
+                                    }
+                                    ui_opportunities.append(ui_opp)
+                                    
+                                    # Add to cache for execution
+                                    self.opportunities_cache[opp_id] = {
+                                        'exchange': 'binance',
+                                        'triangle_path': opp['path'].split(' → '),
+                                        'profit_percentage': opp['profit_pct'],
+                                        'profit_amount': opp['profit_usd'],
+                                        'initial_amount': opp['trade_amount']
+                                    }
+                                
+                                # Broadcast USDT opportunities to UI
+                                await self.websocket_manager.broadcast("opportunities_update", ui_opportunities)
+                                self.logger.info(f"💰 USDT scanner found {len(usdt_opportunities)} opportunities!")
+                                
+                                # Log USDT opportunities
+                                for i, opp in enumerate(usdt_opportunities[:5]):
+                                    self.logger.info(f"   💰 {i+1}. {opp['path']} = {opp['profit_pct']:.4f}% (${opp['profit_usd']:.2f})")
+                            else:
+                                self.logger.info("💰 USDT scanner: No USDT triangles found this scan")
+                
+                await asyncio.sleep(15)  # Scan every 15 seconds
+                
+            except Exception as e:
+                self.logger.error(f"Error in USDT triangle scanner: {str(e)}")
+                await asyncio.sleep(20)
+    
+    def _find_usdt_triangles(self, prices: Dict[str, float]) -> List[Dict]:
+        """Find USDT-based triangular arbitrage opportunities like USDT→RON→EGLD→USDT"""
+        opportunities = []
+        
+        # Get all currencies that have USDT pairs
+        usdt_currencies = []
+        for symbol, price in prices.items():
+            if symbol.endswith('USDT') and price > 0:
+                currency = symbol.replace('USDT', '')
+                usdt_currencies.append(currency)
+        
+        self.logger.info(f"💰 Found {len(usdt_currencies)} currencies with USDT pairs")
+        
+        # Build USDT triangular paths: USDT → Currency1 → Currency2 → USDT
+        for curr1 in usdt_currencies:
+            for curr2 in usdt_currencies:
+                if curr1 != curr2:
+                    try:
+                        # Required symbols for USDT triangle
+                        symbol1 = f"{curr1}USDT"  # USDT → curr1
+                        symbol2 = f"{curr1}{curr2}"  # curr1 → curr2
+                        symbol3 = f"{curr2}USDT"  # curr2 → USDT
+                        
+                        # Alternative if curr1→curr2 doesn't exist, try curr2→curr1
+                        alt_symbol2 = f"{curr2}{curr1}"
+                        
+                        if (symbol1 in prices and symbol3 in prices and 
+                            (symbol2 in prices or alt_symbol2 in prices)):
+                            
+                            # Calculate USDT triangle profit
+                            start_usdt = 100  # Start with $100 USDT
+                            
+                            # Step 1: USDT → curr1
+                            price1 = prices[symbol1]
+                            amount_curr1 = start_usdt / price1
+                            
+                            # Step 2: curr1 → curr2
+                            if symbol2 in prices:
+                                price2 = prices[symbol2]
+                                amount_curr2 = amount_curr1 * price2
+                            elif alt_symbol2 in prices:
+                                price2 = prices[alt_symbol2]
+                                amount_curr2 = amount_curr1 / price2
+                            else:
+                                continue
+                            
+                            # Step 3: curr2 → USDT
+                            price3 = prices[symbol3]
+                            final_usdt = amount_curr2 * price3
+                            
+                            # Calculate profit
+                            profit_usdt = final_usdt - start_usdt
+                            profit_pct = (profit_usdt / start_usdt) * 100
+                            
+                            # Apply trading fees (0.1% per trade × 3 trades = 0.3%)
+                            net_profit_pct = profit_pct - 0.3
+                            net_profit_usd = start_usdt * (net_profit_pct / 100)
+                            
+                            # Only include profitable opportunities
+                            if net_profit_pct >= 0.1:  # 0.1% minimum profit
+                                opportunity = {
+                                    'path': f"USDT → {curr1} → {curr2} → USDT",
+                                    'pairs': [symbol1, symbol2 if symbol2 in prices else alt_symbol2, symbol3],
+                                    'profit_pct': net_profit_pct,
+                                    'profit_usd': net_profit_usd,
+                                    'trade_amount': start_usdt,
+                                    'timestamp': datetime.now().isoformat()
+                                }
+                                opportunities.append(opportunity)
+                                
+                    except Exception as e:
+                        continue
+        
+        # Sort by profitability
+        opportunities.sort(key=lambda x: x['profit_pct'], reverse=True)
+        return opportunities[:20]  # Return top 20 USDT opportunities
     
     async def _broadcast_all_opportunities_to_ui(self, opportunities):
         """Broadcast ALL opportunities to UI regardless of balance or tradeability"""
