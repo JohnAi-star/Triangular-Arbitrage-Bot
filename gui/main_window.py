@@ -224,7 +224,14 @@ class ArbitrageBotGUI:
         # Configure columns
         for col in columns:
             self.opportunities_tree.heading(col, text=col)
-            self.opportunities_tree.column(col, width=120, anchor="center")
+        
+        # Set specific column widths and alignments
+        self.opportunities_tree.column("Exchange", width=80, anchor="center")
+        self.opportunities_tree.column("Triangle", width=250, anchor="w")  # Wider for paths
+        self.opportunities_tree.column("Profit %", width=80, anchor="e")
+        self.opportunities_tree.column("Profit Amount", width=100, anchor="e")
+        self.opportunities_tree.column("Volume", width=80, anchor="e")
+        self.opportunities_tree.column("Action", width=80, anchor="center")
         
         # Scrollbar for treeview
         scrollbar = ttk.Scrollbar(opportunities_frame, orient="vertical", command=self.opportunities_tree.yview)
@@ -453,7 +460,7 @@ class ArbitrageBotGUI:
         self.root.after(Config.GUI_UPDATE_INTERVAL, self.update_gui)
     
     def update_opportunities_display(self):
-        """Update the opportunities treeview."""
+        """Update the opportunities treeview with proper triangle path formatting."""
         try:
             # Clear existing items
             for item in self.opportunities_tree.get_children():
@@ -469,9 +476,17 @@ class ArbitrageBotGUI:
                 else:
                     exchange = 'Unknown'
                 
+                # Format the triangle path properly
                 if hasattr(opportunity, 'triangle_path'):
                     if isinstance(opportunity.triangle_path, list):
-                        path = ' → '.join(opportunity.triangle_path[:3])
+                        # For 3-currency triangles (A→B→C→A)
+                        if len(opportunity.triangle_path) == 3:
+                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[0]}"
+                        # For 4-currency quadrangles (A→B→C→D→A)
+                        elif len(opportunity.triangle_path) == 4:
+                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[3]} → {opportunity.triangle_path[0]}"
+                        else:
+                            path = ' → '.join(opportunity.triangle_path)
                     else:
                         path = str(opportunity.triangle_path)
                 else:
@@ -507,6 +522,7 @@ class ArbitrageBotGUI:
             # Configure tags
             self.opportunities_tree.tag_configure("profitable", background="lightgreen")
             self.opportunities_tree.tag_configure("unprofitable", background="lightcoral")
+            
         except Exception as e:
             self.logger.error(f"Error updating opportunities display: {e}")
     

@@ -51,7 +51,7 @@ class MultiExchangeDetector:
         
         # Trading Limits
         self.min_profit_pct = max(0.5, float(config.get('min_profit_percentage', 0.5)))
-        self.max_trade_amount = min(100.0, float(config.get('max_trade_amount', 100.0)))
+        self.max_trade_amount = min(100.0, float(config.get('max_trade_amount', 100)))
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
         # Initialize real-time detector
@@ -468,7 +468,7 @@ class MultiExchangeDetector:
             balance_available = 0.0
             
             result = ArbitrageResult(
-                exchange='DEMO',
+                exchange='REAL',
                 triangle_path=[base, intermediate, quote, base],
                 profit_percentage=profit_pct,
                 profit_amount=profit_amount,
@@ -872,3 +872,34 @@ class MultiExchangeDetector:
         # Log top opportunities for user
         for opp in payload[:5]:
             logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")
+    
+    async def _get_real_balance_for_currency(self, currency: str) -> float:
+        """Get REAL balance for a specific currency from Binance"""
+        try:
+            binance_ex = self.exchange_manager.exchanges.get('binance')
+            if binance_ex:
+                balance = await binance_ex.get_account_balance()
+                return balance.get(currency, 0.0)
+            return 0.0
+        except Exception as e:
+            logger.error(f"Error getting real balance for {currency}: {e}")
+            return 0.0
+    
+    async def _check_real_balance_for_trade(self, exchange, currency: str, required_amount: float) -> bool:
+        """Check if we have enough REAL balance for trading"""
+        try:
+            balance = await exchange.get_account_balance()
+            available = balance.get(currency, 0.0)
+            return available >= required_amount
+        except Exception as e:
+            logger.error(f"Error checking real balance: {e}")
+            return False
+    
+    async def _get_real_balance_for_currency_on_exchange(self, exchange, currency: str) -> float:
+        """Get REAL balance for currency on specific exchange"""
+        try:
+            balance = await exchange.get_account_balance()
+            return balance.get(currency, 0.0)
+        except Exception as e:
+            logger.error(f"Error getting balance for {currency}: {e}")
+            return 0.0

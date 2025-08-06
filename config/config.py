@@ -39,12 +39,12 @@ class Config:
     # Runtime Feature Flags (defaulted to avoid crash)
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
     ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'false').lower() == 'true'
-    PAPER_TRADING: bool = os.getenv('PAPER_TRADING', 'false').lower() == 'false'
+    PAPER_TRADING: bool = False  # ALWAYS LIVE TRADING - NO PAPER MODE
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'false'
     
     # Scanning Configuration - Show ALL opportunities
-    SCAN_ALL_OPPORTUNITIES: bool = True   # Scan all market opportunities
-    IGNORE_BALANCE_CHECK: bool = True     # Don't check balance when scanning
+    SCAN_ALL_OPPORTUNITIES: bool = True   # Scan REAL market opportunities
+    IGNORE_BALANCE_CHECK: bool = False    # CHECK REAL BALANCE for trading
     MANUAL_EXECUTION_MODE: bool = True    # Allow manual execution of any opportunity
 
     # Slippage and Order Risk

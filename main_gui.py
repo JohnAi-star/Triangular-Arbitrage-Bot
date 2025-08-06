@@ -74,16 +74,16 @@ def check_configuration():
 def main():
     """Main entry point."""
     print("""
-    🔺 🔴 LIVE TRADING Multi-Exchange Triangular Arbitrage Bot
+    🔺 🔴 REAL MONEY Multi-Exchange Triangular Arbitrage Bot
     ==========================================
-    🔴 LIVE TRADING bot for detecting and executing triangular arbitrage
+    🔴 REAL MONEY bot for detecting and executing triangular arbitrage
     opportunities across multiple cryptocurrency exchanges.
     
     Features:
     - Real-time opportunity detection
     - Multi-exchange support (Binance, Bybit, KuCoin, etc.)
-    - Manual and automatic 🔴 LIVE trading modes
-    - 🔴 LIVE TRADING ONLY - NO PAPER MODE
+    - Manual and automatic 🔴 REAL MONEY trading modes
+    - 🔴 REAL MONEY TRADING ONLY - NO SIMULATION
     - Zero-fee pair prioritization
     - Comprehensive logging and statistics
     - Real-time WebSocket updates in GUI

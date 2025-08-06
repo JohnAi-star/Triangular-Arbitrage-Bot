@@ -475,7 +475,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                     💰 Looking for USDT-based cycles: USDT → Currency1 → Currency2 → USDT
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
-                                                    Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
+                                                    Mode: 🔴 LIVE TRADING (REAL MONEY) |
                                                     Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
                                             </div>

@@ -41,6 +41,9 @@ class UnifiedExchange(BaseExchange):
         self.maker_fee = config.get('maker_fee', 0.001)
         self.taker_fee = config.get('taker_fee', 0.001)
         self.trading_pairs: Dict[str, Any] = {}
+        
+        # FORCE REAL TRADING ONLY
+        self.logger.info(f"🔴 LIVE TRADING MODE ENABLED - REAL MONEY TRADES ON {self.exchange_id.upper()}")
 
     async def connect(self) -> bool:
         try:

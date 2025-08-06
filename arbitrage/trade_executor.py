@@ -43,8 +43,7 @@ class TradeExecutor:
         self.trade_logger = setup_trade_logger()
         self.detailed_trade_logger = get_trade_logger()
         self.auto_trading = config.get('auto_trading', False)
-        # ALWAYS LIVE TRADING - NO PAPER MODE
-        self.paper_trading = False
+        self.paper_trading = False  # ALWAYS LIVE TRADING WITH REAL MONEY
     
     def set_websocket_manager(self, websocket_manager):
         """Set WebSocket manager for trade broadcasting."""
@@ -210,9 +209,9 @@ class TradeExecutor:
             return False
         
         # Enforce maximum trade amount
-        if opportunity.initial_amount > 100.0:
+        if opportunity.initial_amount > 100:
             self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $100 limit, adjusting...")
-            opportunity.initial_amount = 100.0
+            opportunity.initial_amount = 100
             
         start_time = datetime.now()
         trade_start_ms = time.time() * 1000

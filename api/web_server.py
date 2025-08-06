@@ -142,25 +142,25 @@ class ArbitrageWebServer:
         async def start_bot(config: BotConfig):
             try:
                 from config.config import Config
-                Config.PAPER_TRADING = False
+                Config.PAPER_TRADING = False  # FORCE LIVE TRADING
                 Config.AUTO_TRADING_MODE = config.autoTradingMode
                 
-                # ENFORCE STRICT LIMITS
-                enforced_min_profit = max(0.5, config.minProfitPercentage)
-                enforced_max_trade = min(100.0, config.maxTradeAmount)
+                # Use user settings for REAL trading
+                enforced_min_profit = max(0.1, config.minProfitPercentage)  # Minimum 0.1%
+                enforced_max_trade = min(1000.0, config.maxTradeAmount)     # Maximum $1000
                 
                 Config.MIN_PROFIT_PERCENTAGE = enforced_min_profit
                 Config.MAX_TRADE_AMOUNT = enforced_max_trade
 
                 self.auto_trading = config.autoTradingMode
-                trading_mode = "🔴 LIVE"
+                trading_mode = "🔴 LIVE TRADING WITH REAL MONEY"
                 
-                self.logger.info(f"🚀 Starting bot with ENFORCED config:")
-                self.logger.info(f"   Requested: minProfit={config.minProfitPercentage}%, maxTrade=${config.maxTradeAmount}")
-                self.logger.info(f"   ENFORCED: minProfit={enforced_min_profit}%, maxTrade=${enforced_max_trade}")
+                self.logger.info(f"🚀 Starting REAL MONEY bot:")
+                self.logger.info(f"   Min Profit: {enforced_min_profit}%")
+                self.logger.info(f"   Max Trade: ${enforced_max_trade}")
                 self.logger.info(f"   Settings: "
                                  f"autoTrade={config.autoTradingMode}, "
-                                 f"liveTrading=TRUE, "
+                                 f"REAL_MONEY_TRADING=TRUE, "
                                  f"mode={trading_mode}, "
                                  f"exchanges={config.selectedExchanges}")
 
@@ -740,7 +740,7 @@ class ArbitrageWebServer:
             for i, opportunity in enumerate(sorted_opportunities[:3]):
                 try:
                     # ENFORCE LIMITS AGAIN
-                    trade_amount = min(opportunity.initial_amount, 100.0)
+                    trade_amount = min(opportunity.initial_amount, 100)
                     expected_profit_usd = trade_amount * (opportunity.profit_percentage / 100)
                     
                     self.logger.info(f"🤖 AUTO-EXECUTING TRADE #{i+1}:")
