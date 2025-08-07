@@ -434,9 +434,9 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 <td className="p-2 text-sm text-gray-300">
                                                     {o.trianglePath}
                                                     <div className="text-xs text-blue-400">
-                                                        {o.trianglePath.includes('USDT →') && o.trianglePath.includes('→ USDT') ?
-                                                            '💰 USDT Triangle' :
-                                                            o.working_bot_opportunity ? '🚀 Working Bot' : '📊 Standard'
+                                                        {o.trianglePath.startsWith('USDT') && o.trianglePath.endsWith('USDT') ?
+                                                            '✅ USDT-based cycle' :
+                                                            '⚠️ Not USDT-based'
                                                         }
                                                     </div>
                                                 </td>
@@ -444,18 +444,17 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
                                                 <td className="p-2 text-gray-300">${o.volume.toFixed(0)}</td>
                                                 <td className="p-2">
-                                                    {o.status === 'detected' && (o.trianglePath.includes('USDT →') || o.working_bot_opportunity) && (
+                                                    {o.status === 'detected' && o.trianglePath.startsWith('USDT') && o.trianglePath.endsWith('USDT') && (
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className={`px-3 py-1 text-white text-xs rounded-lg ${o.working_bot_opportunity ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'
-                                                                }`}
+                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
                                                         >
-                                                            {o.working_bot_opportunity ? 'EXECUTE (WORKING BOT)' : 'EXECUTE USDT'}
+                                                            EXECUTE
                                                         </button>
                                                     )}
-                                                    {o.status === 'detected' && !o.trianglePath.includes('USDT →') && !o.working_bot_opportunity && (
+                                                    {o.status === 'detected' && (!o.trianglePath.startsWith('USDT') || !o.trianglePath.endsWith('USDT')) && (
                                                         <span className="px-3 py-1 text-gray-400 text-xs">
-                                                            Not USDT Triangle
+                                                            Not USDT-based
                                                         </span>
                                                     )}
                                                 </td>
@@ -475,7 +474,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                     💰 Looking for USDT-based cycles: USDT → Currency1 → Currency2 → USDT
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
-                                                    Mode: 🔴 LIVE TRADING (REAL MONEY) |
+                                                    Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
                                                     Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
                                             </div>

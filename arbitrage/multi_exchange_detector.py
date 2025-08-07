@@ -51,7 +51,7 @@ class MultiExchangeDetector:
         
         # Trading Limits
         self.min_profit_pct = max(0.5, float(config.get('min_profit_percentage', 0.5)))
-        self.max_trade_amount = min(100.0, float(config.get('max_trade_amount', 100)))
+        self.max_trade_amount = min(100.0, float(config.get('max_trade_amount', 100.0)))
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
         # Initialize real-time detector
@@ -263,71 +263,48 @@ class MultiExchangeDetector:
         logger.info(f"Major currencies available: {sorted(major_found)}")
         
         triangles = []
+        major_list = list(major_found)
         
-        # Focus on USDT-based triangles like USDT→RON→EGLD→USDT
-        usdt_triangles = []
-        
-        # Get all currencies that have USDT pairs
-        usdt_currencies = []
-        for pair in available_pairs:
-            if '/USDT' in pair:
-                base = pair.split('/')[0]
-                usdt_currencies.append(base)
-        
-        logger.info(f"Found {len(usdt_currencies)} currencies with USDT pairs")
-        
-        # Build USDT-based triangles: USDT → Currency1 → Currency2 → USDT
-        for curr1 in usdt_currencies:
-            for curr2 in usdt_currencies:
-                if curr1 != curr2:
-                    # Check if we can build: USDT → curr1 → curr2 → USDT
-                    pair1 = f"{curr1}/USDT"  # USDT buys curr1
-                    pair2 = f"{curr1}/{curr2}"  # curr1 buys curr2
-                    pair3 = f"{curr2}/USDT"  # curr2 sells for USDT
+        for i, curr_a in enumerate(major_list):
+            for j, curr_b in enumerate(major_list):
+                if i >= j:
+                    continue
+                for k, curr_c in enumerate(major_list):
+                    if k >= j or k == i:
+                        continue
                     
-                    # Alternative: curr1 → USDT → curr2
-                    alt_pair2 = f"{curr2}/USDT"  # USDT buys curr2
+                    possible_pairs = [
+                        f"{curr_a}/{curr_b}", f"{curr_b}/{curr_a}",
+                        f"{curr_b}/{curr_c}", f"{curr_c}/{curr_b}",
+                        f"{curr_a}/{curr_c}", f"{curr_c}/{curr_a}"
+                    ]
                     
-                    if (pair1 in available_pairs and pair3 in available_pairs and 
-                        (pair2 in available_pairs or alt_pair2 in available_pairs)):
-                        
-                        triangle = ['USDT', curr1, curr2, 'USDT']
-                        usdt_triangles.append(triangle)
-                        
-                        if len(usdt_triangles) <= 20:
-                            logger.info(f"💰 USDT Triangle: USDT → {curr1} → {curr2} → USDT")
+                    existing_pairs = [p for p in possible_pairs if p in available_pairs]
+                    
+                    if len(existing_pairs) >= 3:
+                        triangle = self._try_build_triangle_path(curr_a, curr_b, curr_c, available_pairs)
+                        if triangle:
+                            triangles.append(triangle)
+                            if len(triangles) <= 20:
+                                logger.info(f"💰 Triangle: {' → '.join(triangle[:3])}")
         
-        # Add specific high-volume USDT triangles
-        priority_usdt_triangles = [
-            ['USDT', 'BTC', 'ETH', 'USDT'],
-            ['USDT', 'BTC', 'BNB', 'USDT'], 
-            ['USDT', 'ETH', 'BNB', 'USDT'],
-            ['USDT', 'BTC', 'ADA', 'USDT'],
-            ['USDT', 'ETH', 'ADA', 'USDT'],
-            ['USDT', 'BTC', 'SOL', 'USDT'],
-            ['USDT', 'ETH', 'SOL', 'USDT'],
-            ['USDT', 'BNB', 'ADA', 'USDT'],
-            ['USDT', 'BNB', 'SOL', 'USDT'],
-            ['USDT', 'RON', 'EGLD', 'USDT'],  # Your specific example
-            ['USDT', 'DOGE', 'XRP', 'USDT'],
-            ['USDT', 'MATIC', 'AVAX', 'USDT'],
-            ['USDT', 'LINK', 'DOT', 'USDT'],
-            ['USDT', 'LTC', 'TRX', 'USDT'],
-            ['USDT', 'ATOM', 'FIL', 'USDT']
+        specific_triangles = [
+            ('BTC', 'ETH', 'USDT'), ('BTC', 'BNB', 'USDT'), ('ETH', 'BNB', 'USDT'),
+            ('BTC', 'ADA', 'USDT'), ('ETH', 'ADA', 'USDT'), ('BTC', 'SOL', 'USDT'),
+            ('ETH', 'SOL', 'USDT'), ('BNB', 'ADA', 'USDT'), ('BNB', 'SOL', 'USDT'),
+            ('BTC', 'ETH', 'USDC'), ('BTC', 'BNB', 'USDC'), ('ETH', 'BNB', 'USDC'),
+            ('BTC', 'ETH', 'BUSD'), ('BTC', 'BNB', 'BUSD'), ('ETH', 'BNB', 'BUSD'),
         ]
         
-        for triangle in priority_usdt_triangles:
-            if triangle not in usdt_triangles:
-                # Check if all required pairs exist
-                curr1, curr2 = triangle[1], triangle[2]
-                if (f"{curr1}/USDT" in available_pairs and 
-                    f"{curr2}/USDT" in available_pairs and
-                    (f"{curr1}/{curr2}" in available_pairs or f"{curr2}/{curr1}" in available_pairs)):
-                    usdt_triangles.append(triangle)
-                    logger.info(f"💎 Added priority USDT triangle: {' → '.join(triangle[:3])}")
+        for a, b, c in specific_triangles:
+            if a in currencies and b in currencies and c in currencies:
+                triangle = self._try_build_triangle_path(a, b, c, available_pairs)
+                if triangle and triangle not in triangles:
+                    triangles.append(triangle)
+                    logger.info(f"💎 Added specific triangle: {' → '.join(triangle[:3])}")
         
-        logger.info(f"✅ Built {len(usdt_triangles)} USDT-based triangles for {exchange_name}")
-        return usdt_triangles if usdt_triangles else []
+        logger.info(f"✅ Built {len(triangles)} total triangles for {exchange_name}")
+        return triangles if triangles else []
 
     def _try_build_triangle_path(self, a: str, b: str, c: str, available_pairs: set) -> List[str]:
         """Try to build a valid triangle path using available pairs"""
@@ -409,13 +386,8 @@ class MultiExchangeDetector:
         # STEP 4: Sort all results by profitability
         all_results.sort(key=lambda x: x.profit_percentage, reverse=True)
         
-        # Always show opportunities - add demo ones if needed
-        if len(all_results) < 5:
-            demo_opportunities = self._generate_usdt_demo_opportunities()
-            all_results.extend(demo_opportunities)
-            logger.info(f"✅ Added {len(demo_opportunities)} USDT demo opportunities for UI display")
-        
-        filtered_results = all_results[:50]  # Show top 50
+        # Show ALL opportunities (let user decide what to execute)
+        filtered_results = all_results
         
         # STEP 5: Log comprehensive results
         scan_duration = (time.time() - scan_start_time) * 1000  # Convert to milliseconds
@@ -468,7 +440,7 @@ class MultiExchangeDetector:
             balance_available = 0.0
             
             result = ArbitrageResult(
-                exchange='REAL',
+                exchange='DEMO',
                 triangle_path=[base, intermediate, quote, base],
                 profit_percentage=profit_pct,
                 profit_amount=profit_amount,
@@ -573,129 +545,69 @@ class MultiExchangeDetector:
             return self._last_tickers.get(ex.name, {})
 
     async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
-        """Calculate REAL profit percentage for triangular arbitrage"""
+        """Calculate REAL profit percentage for USDT-based triangular arbitrage"""
         
-        # Handle both USDT-based and other triangles
-        if a == 'USDT':
-            return await self._calculate_usdt_triangle_profit(ex, ticker, a, b, c)
-        else:
-            return await self._calculate_general_triangle_profit(ex, ticker, a, b, c)
-    
-    async def _calculate_usdt_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
-        """Calculate USDT-based triangle profit: USDT → B → C → USDT"""
+        # Ensure this is a USDT-based triangle
+        if a != 'USDT':
+            logger.debug(f"Skipping non-USDT triangle: {a}-{b}-{c}")
+            return 0.0
         
         try:
-            # USDT → B → C → USDT triangle
+            # For USDT → b → c → USDT triangle
+            # Step 1: USDT → b (buy b with USDT)
+            # Step 2: b → c (buy c with b or sell b for c)  
+            # Step 3: c → USDT (sell c for USDT)
             
             start_amount = self.max_trade_amount  # Start with USDT
             
-            # Step 1: USDT → B (buy B with USDT)
-            pair1 = f"{b}/USDT"
-            if pair1 not in ticker:
-                return 0.0
+            # Try different pair combinations for USDT-based arbitrage
+            possible_paths = [
+                # Path 1: USDT/b, b/c, c/USDT
+                {
+                    'pairs': [f"{b}/USDT", f"{b}/{c}", f"{c}/USDT"],
+                    'steps': ['buy_b_with_usdt', 'sell_b_for_c', 'sell_c_for_usdt']
+                },
+                # Path 2: USDT/b, c/b, c/USDT  
+                {
+                    'pairs': [f"{b}/USDT", f"{c}/{b}", f"{c}/USDT"],
+                    'steps': ['buy_b_with_usdt', 'buy_c_with_b', 'sell_c_for_usdt']
+                },
+                # Path 3: b/USDT, b/c, USDT/c
+                {
+                    'pairs': [f"{b}/USDT", f"{b}/{c}", f"USDT/{c}"],
+                    'steps': ['sell_usdt_for_b', 'sell_b_for_c', 'buy_usdt_with_c']
+                },
+                # Path 4: b/USDT, c/b, USDT/c
+                {
+                    'pairs': [f"{b}/USDT", f"{c}/{b}", f"USDT/{c}"],
+                    'steps': ['sell_usdt_for_b', 'buy_c_with_b', 'buy_usdt_with_c']
+                }
+            ]
             
-            price1 = float(ticker[pair1]['ask'])  # Buy B with USDT at ask price
-            amount_b = start_amount / price1
+            best_profit = -999.0
             
-            # Step 2: B → C (convert B to C)
-            pair2 = f"{b}/{c}"
-            if pair2 in ticker:
-                price2 = float(ticker[pair2]['bid'])  # Sell B for C at bid price
-                amount_c = amount_b * price2
-            elif f"{c}/{b}" in ticker:
-                price2 = float(ticker[f"{c}/{b}"]["ask"])  # Buy C with B at ask price
-                amount_c = amount_b / price2
+            for path in possible_paths:
+                pairs = path['pairs']
+                steps = path['steps']
+                
+                if all(pair in ticker for pair in pairs):
+                    try:
+                        profit = self._calculate_usdt_path_profit(ticker, pairs, steps, start_amount, b, c)
+                        if profit > best_profit:
+                            best_profit = profit
+                            logger.debug(f"Found better USDT path for USDT-{b}-{c}: {profit:.6f}% using {pairs}")
+                    except Exception as e:
+                        logger.debug(f"Path calculation failed for {pairs}: {e}")
+                        continue
+            
+            if best_profit > -999.0:
+                return best_profit
             else:
+                logger.debug(f"No valid USDT paths found for triangle USDT-{b}-{c}")
                 return 0.0
-            
-            # Step 3: C → USDT (sell C for USDT)
-            pair3 = f"{c}/USDT"
-            if pair3 not in ticker:
-                return 0.0
-            
-            price3 = float(ticker[pair3]['bid'])  # Sell C for USDT at bid price
-            final_usdt = amount_c * price3
-            
-            # Calculate profit
-            gross_profit = final_usdt - start_amount
-            profit_pct = (gross_profit / start_amount) * 100
-            
-            # Apply realistic costs (0.1% per trade × 3 trades + slippage)
-            total_costs = 0.4  # 0.4% total costs
-            net_profit_pct = profit_pct - total_costs
-            
-            # Sanity check
-            if net_profit_pct > 5.0:
-                logger.warning(f"⚠️ Unrealistic profit detected, capping: {net_profit_pct:.4f}%")
-                return 0.0
-            
-            if net_profit_pct < -10.0:
-                logger.warning(f"⚠️ Unrealistic loss detected, skipping: {net_profit_pct:.4f}%")
-                return 0.0
-            
-            logger.debug(f"USDT Triangle: {start_amount:.2f} USDT → {amount_b:.6f} {b} → {amount_c:.6f} {c} → {final_usdt:.2f} USDT = {net_profit_pct:.4f}%")
-            
-            return net_profit_pct
-            
+                
         except Exception as e:
-            logger.debug(f"USDT calculation failed for USDT-{b}-{c}: {str(e)}")
-            return 0.0
-    
-    async def _calculate_general_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
-        """Calculate general triangle profit for non-USDT triangles"""
-        try:
-            # General triangle: A → B → C → A
-            start_amount = self.max_trade_amount
-            
-            # Step 1: A → B
-            pair1 = f"{a}/{b}"
-            if pair1 in ticker:
-                price1 = float(ticker[pair1]['bid'])  # Sell A for B
-                amount_b = start_amount * price1
-            elif f"{b}/{a}" in ticker:
-                price1 = float(ticker[f"{b}/{a}"]["ask"])  # Buy B with A
-                amount_b = start_amount / price1
-            else:
-                return 0.0
-            
-            # Step 2: B → C
-            pair2 = f"{b}/{c}"
-            if pair2 in ticker:
-                price2 = float(ticker[pair2]['bid'])  # Sell B for C
-                amount_c = amount_b * price2
-            elif f"{c}/{b}" in ticker:
-                price2 = float(ticker[f"{c}/{b}"]["ask"])  # Buy C with B
-                amount_c = amount_b / price2
-            else:
-                return 0.0
-            
-            # Step 3: C → A
-            pair3 = f"{c}/{a}"
-            if pair3 in ticker:
-                price3 = float(ticker[pair3]['bid'])  # Sell C for A
-                final_amount = amount_c * price3
-            elif f"{a}/{c}" in ticker:
-                price3 = float(ticker[f"{a}/{c}"]["ask"])  # Buy A with C
-                final_amount = amount_c / price3
-            else:
-                return 0.0
-            
-            # Calculate profit
-            gross_profit = final_amount - start_amount
-            profit_pct = (gross_profit / start_amount) * 100
-            
-            # Apply costs
-            total_costs = 0.4  # 0.4% total costs
-            net_profit_pct = profit_pct - total_costs
-            
-            # Sanity check
-            if net_profit_pct > 5.0 or net_profit_pct < -10.0:
-                return 0.0
-            
-            return net_profit_pct
-            
-        except Exception as e:
-            logger.debug(f"General calculation failed for {a}-{b}-{c}: {str(e)}")
+            logger.error(f"USDT calculation failed for USDT-{b}-{c}: {str(e)}", exc_info=True)
             return 0.0
 
     def _calculate_usdt_path_profit(self, ticker, pairs: List[str], steps: List[str], start_amount: float, b: str, c: str) -> float:
@@ -755,51 +667,6 @@ class MultiExchangeDetector:
                     f"Gross={profit_pct:.6f}%, Net={net_profit_pct:.6f}% (after {total_costs}% costs)")
         
         return net_profit_pct
-    
-    def _generate_usdt_demo_opportunities(self) -> List[ArbitrageResult]:
-        """Generate USDT-based demo opportunities for UI display"""
-        import random
-        
-        demo_opportunities = []
-        
-        # USDT-based triangle paths for demonstration
-        usdt_triangles = [
-            ('USDT', 'BTC', 'ETH'),
-            ('USDT', 'BTC', 'BNB'),
-            ('USDT', 'ETH', 'BNB'),
-            ('USDT', 'BTC', 'ADA'),
-            ('USDT', 'ETH', 'ADA'),
-            ('USDT', 'BTC', 'SOL'),
-            ('USDT', 'ETH', 'SOL'),
-            ('USDT', 'BNB', 'ADA'),
-            ('USDT', 'RON', 'EGLD'),  # Your specific example
-            ('USDT', 'DOGE', 'XRP'),
-            ('USDT', 'MATIC', 'AVAX'),
-            ('USDT', 'LINK', 'DOT')
-        ]
-        
-        for i, (base, intermediate, quote) in enumerate(usdt_triangles):
-            # Generate realistic profit percentages for USDT triangles
-            profit_pct = random.uniform(0.05, 0.8)  # 0.05% to 0.8% (realistic for USDT)
-            trade_amount = random.uniform(10, 50)  # $10 to $50 for demo
-            profit_amount = trade_amount * (profit_pct / 100)
-            
-            result = ArbitrageResult(
-                exchange='DEMO',
-                triangle_path=[base, intermediate, quote, base],
-                profit_percentage=profit_pct,
-                profit_amount=profit_amount,
-                initial_amount=trade_amount,
-                net_profit_percent=profit_pct,
-                min_profit_threshold=0.05,
-                is_tradeable=False,  # Demo opportunities are not tradeable
-                balance_available=0.0,
-                required_balance=trade_amount,
-                is_demo=True
-            )
-            demo_opportunities.append(result)
-        
-        return demo_opportunities
 
     async def _get_ticker_data(self, ex):
         """Get ticker data with smart caching"""
@@ -872,34 +739,3 @@ class MultiExchangeDetector:
         # Log top opportunities for user
         for opp in payload[:5]:
             logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")
-    
-    async def _get_real_balance_for_currency(self, currency: str) -> float:
-        """Get REAL balance for a specific currency from Binance"""
-        try:
-            binance_ex = self.exchange_manager.exchanges.get('binance')
-            if binance_ex:
-                balance = await binance_ex.get_account_balance()
-                return balance.get(currency, 0.0)
-            return 0.0
-        except Exception as e:
-            logger.error(f"Error getting real balance for {currency}: {e}")
-            return 0.0
-    
-    async def _check_real_balance_for_trade(self, exchange, currency: str, required_amount: float) -> bool:
-        """Check if we have enough REAL balance for trading"""
-        try:
-            balance = await exchange.get_account_balance()
-            available = balance.get(currency, 0.0)
-            return available >= required_amount
-        except Exception as e:
-            logger.error(f"Error checking real balance: {e}")
-            return False
-    
-    async def _get_real_balance_for_currency_on_exchange(self, exchange, currency: str) -> float:
-        """Get REAL balance for currency on specific exchange"""
-        try:
-            balance = await exchange.get_account_balance()
-            return balance.get(currency, 0.0)
-        except Exception as e:
-            logger.error(f"Error getting balance for {currency}: {e}")
-            return 0.0
