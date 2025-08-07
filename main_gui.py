@@ -74,19 +74,19 @@ def check_configuration():
 def main():
     """Main entry point."""
     print("""
-    🔺 🔴 REAL MONEY Multi-Exchange Triangular Arbitrage Bot
+    🔺 🔴 REAL MONEY USDT Triangular Arbitrage Bot
     ==========================================
-    🔴 REAL MONEY bot for detecting and executing triangular arbitrage
-    opportunities across multiple cryptocurrency exchanges.
+    🔴 REAL MONEY bot for detecting and executing USDT triangular arbitrage
+    opportunities: USDT → Currency1 → Currency2 → USDT
     
     Features:
-    - Real-time opportunity detection
-    - Multi-exchange support (Binance, Bybit, KuCoin, etc.)
+    - Real-time USDT triangle detection
+    - Binance integration with real balance
     - Manual and automatic 🔴 REAL MONEY trading modes
     - 🔴 REAL MONEY TRADING ONLY - NO SIMULATION
-    - Zero-fee pair prioritization
+    - USDT-based triangular arbitrage only
     - Comprehensive logging and statistics
-    - Real-time WebSocket updates in GUI
+    - All trades visible in Binance Spot Orders
     
     Starting GUI...
     """)

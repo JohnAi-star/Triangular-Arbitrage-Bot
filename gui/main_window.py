@@ -479,12 +479,13 @@ class ArbitrageBotGUI:
                 # Format the triangle path properly
                 if hasattr(opportunity, 'triangle_path'):
                     if isinstance(opportunity.triangle_path, list):
-                        # For 3-currency triangles (A→B→C→A)
+                        # For USDT-based triangles: USDT → Currency1 → Currency2 → USDT
                         if len(opportunity.triangle_path) == 3:
+                            # 3 currencies: USDT, Currency1, Currency2
                             path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[0]}"
-                        # For 4-currency quadrangles (A→B→C→D→A)
                         elif len(opportunity.triangle_path) == 4:
-                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[3]} → {opportunity.triangle_path[0]}"
+                            # Already includes return to USDT
+                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[3]}"
                         else:
                             path = ' → '.join(opportunity.triangle_path)
                     else:

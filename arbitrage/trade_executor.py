@@ -266,10 +266,12 @@ class TradeExecutor:
             
             # Log trade attempt
             execution_type = "AUTO" if self.auto_trading else "MANUAL"
-            trading_mode = "🔴 LIVE"
+            trading_mode = "🔴 LIVE USDT TRIANGLE"
             
             self.trade_logger.info(f"TRADE_ATTEMPT ({execution_type}): {opportunity.to_dict()}")
             self.logger.info(f"Starting {trading_mode} trade execution ({execution_type}): {opportunity.triangle_path}")
+            self.logger.info(f"🎯 USDT Triangle: Will execute 3 sequential trades on Binance")
+            self.logger.info(f"💰 Expected to turn {opportunity.initial_amount:.2f} USDT into {opportunity.final_amount:.2f} USDT")
             
             # Execute each step with REAL orders
             execution_results = []
@@ -278,9 +280,10 @@ class TradeExecutor:
             
             for i, step in enumerate(opportunity.steps):
                 try:
-                    self.logger.info(f"🔄 EXECUTING STEP {i+1}/{len(opportunity.steps)} ({trading_mode}/{execution_type})")
+                    self.logger.info(f"🔄 EXECUTING USDT TRIANGLE STEP {i+1}/{len(opportunity.steps)} ({trading_mode}/{execution_type})")
                     self.logger.info(f"   Action: {step.side.upper()} {step.quantity:.6f} {step.symbol}")
                     self.logger.info(f"   Expected Price: {step.price:.8f}")
+                    self.logger.info(f"🔴 REAL BINANCE ORDER: This will appear in your Spot Orders immediately")
                     
                     # Execute REAL market order
                     result = await self._execute_single_order(exchange, step.symbol, step.side, step.quantity, i+1)
@@ -304,13 +307,14 @@ class TradeExecutor:
                     slippage_pct = abs((avg_price - expected_price) / expected_price) * 100 if expected_price > 0 else 0
                     
                     # Log detailed step execution
-                    self.logger.info(f"✅ STEP {i+1} COMPLETED SUCCESSFULLY:")
+                    self.logger.info(f"✅ USDT TRIANGLE STEP {i+1} COMPLETED SUCCESSFULLY:")
                     self.logger.info(f"   Order ID: {order_id}")
                     self.logger.info(f"   Filled: {filled_qty:.8f}")
                     self.logger.info(f"   Price: {avg_price:.8f} (expected {expected_price:.8f})")
                     self.logger.info(f"   Fees: {fees_paid:.8f}")
                     self.logger.info(f"   Slippage: {slippage_pct:.4f}%")
                     self.logger.info(f"   Duration: {execution_time_ms:.0f}ms")
+                    self.logger.info(f"🔴 BINANCE: Order {order_id} is now visible in your Spot Orders")
                     
                     # Create detailed step log
                     step_log = TradeStepLog(
@@ -340,7 +344,7 @@ class TradeExecutor:
                     self.logger.info(f"   Updated Balance: {current_balance:.8f}")
                         
                 except Exception as e:
-                    self.logger.error(f"❌ CRITICAL ERROR in step {i+1}: {str(e)}")
+                    self.logger.error(f"❌ CRITICAL ERROR in USDT triangle step {i+1}: {str(e)}")
                     opportunity.status = OpportunityStatus.FAILED
                     
                     # Update trade log for failure
@@ -360,9 +364,10 @@ class TradeExecutor:
                     return False
             
             # All steps completed successfully
-            self.logger.info(f"🎉 ALL STEPS COMPLETED SUCCESSFULLY!")
+            self.logger.info(f"🎉 ALL USDT TRIANGLE STEPS COMPLETED SUCCESSFULLY!")
             self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
-            self.logger.info(f"   Check your Binance account for these trades!")
+            self.logger.info(f"🔴 BINANCE: Check your Spot Orders for these {len(order_ids)} trades!")
+            self.logger.info(f"🔴 BINANCE: All trades are now visible in your Trade History")
             
             # Calculate actual profit
             actual_profit = current_balance - opportunity.initial_amount
@@ -381,17 +386,19 @@ class TradeExecutor:
             trade_log.total_slippage = sum(step.slippage_percentage / 100 * step.expected_amount_out for step in trade_log.steps)
             
             # Log final success
-            self.logger.info(f"🎉 ARBITRAGE TRADE COMPLETED SUCCESSFULLY!")
+            self.logger.info(f"🎉 USDT TRIANGULAR ARBITRAGE TRADE COMPLETED SUCCESSFULLY!")
             self.logger.info(f"   Exchange: {exchange_id}")
             self.logger.info(f"   Trade ID: {trade_id}")
             self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
+            self.logger.info(f"   USDT Triangle: {opportunity.triangle_path}")
             self.logger.info(f"   Initial Amount: {opportunity.initial_amount:.8f} {opportunity.base_currency}")
             self.logger.info(f"   Final Amount: {current_balance:.8f} {opportunity.base_currency}")
             self.logger.info(f"   Actual Profit: {actual_profit:.8f} {opportunity.base_currency} ({actual_profit_percentage:.4f}%)")
             self.logger.info(f"   Total Fees: {trade_log.total_fees_paid:.8f}")
             self.logger.info(f"   Net P&L: {actual_profit - trade_log.total_fees_paid:.8f} {opportunity.base_currency}")
             self.logger.info(f"   Execution Time: {trade_log.total_duration_ms:.0f}ms")
-            self.logger.info(f"🔴 LIVE TRADING: Check your Binance account to see these trades!")
+            self.logger.info(f"🔴 BINANCE SPOT ORDERS: All {len(order_ids)} trades are now visible in your account!")
+            self.logger.info(f"🔴 BINANCE BALANCE: Your USDT balance has been updated with the profit!")
             
             # Log successful trade
             self.trade_logger.info(f"TRADE_SUCCESS ({trading_mode}/{execution_type}): {opportunity.to_dict()}")

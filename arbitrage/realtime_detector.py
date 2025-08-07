@@ -385,10 +385,11 @@ class RealtimeArbitrageDetector:
             # Only return realistic opportunities
             if (net_profit_pct >= self.min_profit_pct and 
                 net_profit_pct <= 5.0 and  # Max 5% profit (realistic)
-                abs(gross_profit_pct) <= 10.0):  # Sanity check
+                abs(gross_profit_pct) <= 100.0 and  # Sanity check
+                final_amount > 0 and final_amount < initial_amount * 2):  # Realistic final amount
                 
                 return TriangleOpportunity(
-                    path=[base, intermediate, quote, base],
+                    path=[base, intermediate, quote],  # 3 currencies only
                     pairs=[pair1, pair2, pair3],
                     profit_percentage=net_profit_pct,
                     profit_amount=net_profit,

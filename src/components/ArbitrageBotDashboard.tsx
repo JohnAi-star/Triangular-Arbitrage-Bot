@@ -434,9 +434,9 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 <td className="p-2 text-sm text-gray-300">
                                                     {o.trianglePath}
                                                     <div className="text-xs text-blue-400">
-                                                        {o.trianglePath.startsWith('USDT') && o.trianglePath.endsWith('USDT') ?
-                                                            '✅ USDT-based cycle' :
-                                                            '⚠️ Not USDT-based'
+                                                        {o.trianglePath.includes('USDT →') && o.trianglePath.includes('→ USDT') ?
+                                                            '✅ USDT Triangle (4-step cycle)' :
+                                                            '⚠️ Not USDT triangle'
                                                         }
                                                     </div>
                                                 </td>
@@ -444,17 +444,17 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
                                                 <td className="p-2 text-gray-300">${o.volume.toFixed(0)}</td>
                                                 <td className="p-2">
-                                                    {o.status === 'detected' && o.trianglePath.startsWith('USDT') && o.trianglePath.endsWith('USDT') && (
+                                                    {o.status === 'detected' && o.trianglePath.startsWith('USDT →') && o.trianglePath.endsWith('→ USDT') && (
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
                                                             className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
                                                         >
-                                                            EXECUTE
+                                                            EXECUTE USDT
                                                         </button>
                                                     )}
-                                                    {o.status === 'detected' && (!o.trianglePath.startsWith('USDT') || !o.trianglePath.endsWith('USDT')) && (
+                                                    {o.status === 'detected' && (!o.trianglePath.startsWith('USDT →') || !o.trianglePath.endsWith('→ USDT')) && (
                                                         <span className="px-3 py-1 text-gray-400 text-xs">
-                                                            Not USDT-based
+                                                            Not USDT triangle
                                                         </span>
                                                     )}
                                                 </td>
@@ -471,7 +471,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                     Fetching ALL market opportunities regardless of balance
                                                 </div>
                                                 <div className="text-xs mt-2 text-yellow-400">
-                                                    💰 Looking for USDT-based cycles: USDT → Currency1 → Currency2 → USDT
+                                                    💰 Looking for USDT triangles: USDT → Currency1 → Currency2 → USDT
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
                                                     Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
@@ -481,7 +481,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                         ) : (
                                             <div>
                                                 <div className="text-lg mb-2">Click "Start Bot" to begin</div>
-                                                <div className="text-sm">Will scan for USDT-based arbitrage opportunities</div>
+                                                <div className="text-sm">Will scan for USDT triangular arbitrage opportunities</div>
                                             </div>
                                         )}
                                     </div>
