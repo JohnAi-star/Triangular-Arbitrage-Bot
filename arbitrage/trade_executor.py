@@ -43,7 +43,13 @@ class TradeExecutor:
         self.trade_logger = setup_trade_logger()
         self.detailed_trade_logger = get_trade_logger()
         self.auto_trading = config.get('auto_trading', False)
-        self.paper_trading = False  # ALWAYS LIVE TRADING WITH REAL MONEY
+        self.paper_trading = False  # ALWAYS REAL TRADING WITH REAL MONEY
+        
+        # Log trading mode clearly
+        trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
+        self.logger.info(f"TradeExecutor initialized: {trading_mode}")
+        self.logger.info(f"Auto-trading: {'ENABLED' if self.auto_trading else 'DISABLED'}")
+        self.logger.info(f"All trades will be executed with REAL money on your exchange account!")
     
     def set_websocket_manager(self, websocket_manager):
         """Set WebSocket manager for trade broadcasting."""
@@ -233,7 +239,7 @@ class TradeExecutor:
             trade_id=trade_id,
             timestamp=start_time,
             exchange=exchange_id,
-            triangle_path=opportunity.triangle_path.split(' → ') if hasattr(opportunity, 'triangle_path') else ['Unknown'],
+            triangle_path=opportunity.triangle_path.split(' → ') if isinstance(getattr(opportunity, 'triangle_path', None), str) else getattr(opportunity, 'triangle_path', ['Unknown']),
             status=TradeStatus.SUCCESS,  # Will be updated if failed
             initial_amount=opportunity.initial_amount,
             final_amount=0.0,  # Will be updated

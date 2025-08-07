@@ -276,16 +276,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                 onChange={(e) => toggleAutoTrading(e.target.checked)}
                                 disabled={!isRunning}
                             />
-                            Auto Trading (LIVE)
-                        </label>
-                        <label className="flex items-center gap-3 text-sm text-gray-300 mb-3">
-                            <input
-                                type="checkbox"
-                                checked={paperTrading}
-                                onChange={(e) => setPaperTrading(e.target.checked)}
-                                disabled={isRunning}
-                            />
-                            Paper Trading (Simulation)
+                            🔴 Auto Trading (REAL MONEY)
                         </label>
                         {pausedAutoTrading && (
                             <button
@@ -361,9 +352,9 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         </div>
                         <div className="mt-6 text-gray-300">
                             <p>Auto-Trades: {autoStats.autoTradesExecuted} | Auto-Profit: ${autoStats.autoProfit.toFixed(2)} | Success Rate: {autoStats.autoSuccessRate.toFixed(1)}%</p>
-                            <p className="text-xs text-gray-400 mt-2">
-                                ENFORCED LIMITS: ≤$100 per trade | ≥0.5% profit | Mode: {paperTrading ? 'Paper' : 'LIVE'}
-                            </p>
+                            <div className="text-xs text-gray-400 mt-2">
+                                🔴 REAL TRADING: ≤$100 per trade | ≥0.5% profit | LIVE MODE ONLY
+                            </div>
                         </div>
                     </div>
                 </div>

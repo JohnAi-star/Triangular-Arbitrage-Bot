@@ -182,16 +182,6 @@ class ArbitrageBotGUI:
         )
         self.auto_trading_checkbox.pack(pady=5)
         
-        # Paper trading toggle
-        self.paper_trading_var = tk.BooleanVar(value=Config.PAPER_TRADING)
-        self.paper_trading_checkbox = ctk.CTkCheckBox(
-            trading_frame,
-            text="Paper Trading",
-            variable=self.paper_trading_var,
-            command=self.toggle_paper_trading
-        )
-        self.paper_trading_checkbox.pack(pady=5)
-        
         # Settings frame
         settings_frame = ctk.CTkFrame(control_frame)
         settings_frame.pack(side="left", fill="y", padx=5, pady=5)
@@ -386,7 +376,7 @@ class ArbitrageBotGUI:
             # Initialize executor
             self.executor = TradeExecutor(self.exchange_manager, {
                 'auto_trading': self.auto_trading_var.get(),
-                'paper_trading': self.paper_trading_var.get()
+                'paper_trading': False  # ALWAYS REAL TRADING
             })
             
             # Set WebSocket manager for trade executor
@@ -415,10 +405,36 @@ class ArbitrageBotGUI:
                 
                 # Auto-execute if enabled
                 if self.auto_trading_var.get():
-                    for opportunity in opportunities[:3]:  # Limit to top 3
-                        if hasattr(opportunity, 'is_profitable') and opportunity.is_profitable:
-                            await self.executor.execute_arbitrage(opportunity)
-                            self.add_to_trading_history(f"Auto-executed: {opportunity}")
+                    # Filter for profitable opportunities only
+                    profitable_opportunities = [
+                        opp for opp in opportunities[:5]  # Top 5 opportunities
+                        if (hasattr(opp, 'is_profitable') and opp.is_profitable and 
+                            opp.profit_percentage >= 0.5)  # Minimum 0.5% profit
+                    ]
+                    
+                    if profitable_opportunities:
+                        self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable opportunities")
+                        
+                        for i, opportunity in enumerate(profitable_opportunities[:2]):  # Execute top 2
+                            try:
+                                self.logger.info(f"🚀 AUTO-EXECUTING Trade #{i+1}: {opportunity}")
+                                success = await self.executor.execute_arbitrage(opportunity)
+                                
+                                if success:
+                                    self.add_to_trading_history(f"✅ AUTO-TRADE SUCCESS: {opportunity}")
+                                    self.logger.info(f"✅ Auto-trade #{i+1} completed successfully!")
+                                else:
+                                    self.add_to_trading_history(f"❌ AUTO-TRADE FAILED: {opportunity}")
+                                    self.logger.error(f"❌ Auto-trade #{i+1} failed")
+                                    
+                                # Wait between trades
+                                await asyncio.sleep(2)
+                                
+                            except Exception as e:
+                                self.logger.error(f"❌ Error in auto-execution #{i+1}: {e}")
+                                self.add_to_trading_history(f"❌ AUTO-TRADE ERROR: {str(e)}")
+                    else:
+                        self.logger.info("🤖 AUTO-TRADING: No profitable opportunities found (need ≥0.5% profit)")
                 
                 await asyncio.sleep(1)  # Scan every second
                 
@@ -551,20 +567,11 @@ class ArbitrageBotGUI:
         if self.auto_trading:
             result = messagebox.askyesno(
                 "Confirm Auto Trading",
-                "Are you sure you want to enable auto trading? This will execute trades automatically."
+                "Are you sure you want to enable auto trading? This will execute REAL trades automatically with REAL money on your exchange account!"
             )
             if not result:
                 self.auto_trading_var.set(False)
                 self.auto_trading = False
-    
-    def toggle_paper_trading(self):
-        """Toggle paper trading mode."""
-        if self.running:
-            messagebox.showwarning("Warning", "Stop the bot before changing paper trading mode")
-            self.paper_trading_var.set(Config.PAPER_TRADING)
-            return
-        
-        Config.PAPER_TRADING = self.paper_trading_var.get()
     
     def on_opportunity_double_click(self, event):
         """Handle double-click on opportunity."""
