@@ -40,10 +40,13 @@ class UnifiedExchange(BaseExchange):
         self.zero_fee_pairs = config.get('zero_fee_pairs', [])
         self.maker_fee = config.get('maker_fee', 0.001)
         self.taker_fee = config.get('taker_fee', 0.001)
+        self.live_trading = True  # 🔴 FORCE LIVE TRADING
+        self.dry_run = False      # 🔴 NO DRY RUN MODE
         self.trading_pairs: Dict[str, Any] = {}
         
         # FORCE REAL TRADING ONLY
         self.logger.info(f"🔴 LIVE TRADING MODE ENABLED - REAL MONEY TRADES ON {self.exchange_id.upper()}")
+        self.logger.info(f"✅ READY: Real-money trading enabled with enforced profit/amount limits.")
 
     async def connect(self) -> bool:
         try:
@@ -51,7 +54,12 @@ class UnifiedExchange(BaseExchange):
                 self.logger.error(f"No internet connection for {self.exchange_id}")
                 return False
 
-            exchange_class = getattr(ccxt, self.exchange_id)
+            # Handle Gate.io special case
+            if self.exchange_id == 'gate':
+                exchange_class = getattr(ccxt, 'gateio')
+            else:
+                exchange_class = getattr(ccxt, self.exchange_id)
+                
             exchange_config = {
                 'enableRateLimit': True,
                 'options': {'defaultType': 'spot'},

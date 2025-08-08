@@ -271,6 +271,142 @@ class ArbitrageWebServer:
             except WebSocketDisconnect:
                 await self.websocket_manager.disconnect(websocket)
 
+    async def _immediate_scan(self):
+        """Perform immediate scan on startup to show opportunities quickly"""
+        try:
+            await asyncio.sleep(3)  # Wait for initialization
+            self.logger.info("🚀 Performing immediate scan for ALL opportunities...")
+            if self.detector and self.exchange_manager:
+                opportunities = await self.detector.scan_all_opportunities()
+                self.logger.info(f"✅ Immediate scan found {len(opportunities)} ALL opportunities")
+        except Exception as e:
+            self.logger.error(f"Error in immediate scan: {e}")
+
+    async def _continuous_scanning_loop(self):
+        self.logger.info("🚀 Starting continuous scanning for ALL opportunities...")
+        while self.running:
+            try:
+                if self.detector and self.exchange_manager:
+                    scan_start = time.time()
+                    opportunities = await self.detector.scan_all_opportunities()
+                    scan_duration = (time.time() - scan_start) * 1000
+
+                    # Convert ALL opportunities to UI format
+                    ui_opportunities = []
+                    for i, opp in enumerate(opportunities):
+                        opp_id = f"real_opp_{int(time.time()*1000)}_{i}"
+                        ui_opp = {
+                            "id": opp_id,
+                            "exchange": opp.exchange,
+                            "trianglePath": " → ".join(opp.triangle_path[:3]),
+                            "profitPercentage": round(opp.profit_percentage, 4),
+                            "profitAmount": round(opp.profit_amount, 4),
+                            "volume": round(opp.initial_amount, 2),
+                            "status": "detected",
+                            "dataType": "ALL_OPPORTUNITIES",
+                            "timestamp": datetime.now().isoformat(),
+                            "tradeable": getattr(opp, 'is_tradeable', False),
+                            "balanceAvailable": getattr(opp, 'balance_available', 0.0),
+                            "balanceRequired": getattr(opp, 'required_balance', 0.0),
+                            "real_market_data": True,
+                            "manual_execution": True
+                        }
+                        ui_opportunities.append(ui_opp)
+                        self.opportunities_cache[opp_id] = {
+                            'opportunity': opp,
+                            'ui_data': ui_opp
+                        }
+
+                    self.opportunities = ui_opportunities[:100]  # Show up to 100 opportunities
+
+                    if len(self.opportunities_cache) > 500:
+                        old_keys = list(self.opportunities_cache.keys())[:-500]
+                        for key in old_keys:
+                            del self.opportunities_cache[key]
+
+                    total_count = len(self.opportunities)
+                    
+                    self.stats['opportunitiesFound'] = total_count
+                    await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
+
+                    if self.opportunities:
+                        self.logger.info(f"💎 Scan complete ({scan_duration:.0f}ms): {total_count} ALL opportunities found")
+                        
+                        # Show top 5 opportunities
+                        for i, opp in enumerate(self.opportunities[:3]):
+                            self.logger.info(f"   {i+1}. {opp['exchange']}: {opp['trianglePath']} = {opp['profitPercentage']:.4f}% | Available for execution")
+                    else:
+                        self.logger.info(f"💎 Scan complete ({scan_duration:.0f}ms): No opportunities found in current market")
+
+                    if self.auto_trading and self.executor:
+                        # Auto-execute profitable opportunities
+                        profitable_opportunities = [opp for opp in opportunities if opp.profit_percentage >= 0.1]
+                        if profitable_opportunities:
+                            await self._auto_execute_opportunities(profitable_opportunities)
+                        else:
+                            self.logger.info("🤖 Auto-trading enabled but no profitable opportunities found")
+                
+                await asyncio.sleep(5)  # Scan every 5 seconds
+            except Exception as e:
+                self.logger.error(f"Error in scanning loop: {str(e)}", exc_info=True)
+                await asyncio.sleep(10)
+                return {
+                    "status": "success",
+                    "message": "🚀 🔴 LIVE TRADING Bot started successfully",
+                    'min_profit_percentage': enforced_min_profit,
+                    'max_trade_amount': enforced_max_trade,
+                    'limits_enforced': True,
+                    'auto_trading': config.autoTradingMode
+                }
+            except Exception as e:
+                self.logger.error(f"Error starting bot: {str(e)}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @app.post("/api/bot/stop")
+        async def stop_bot():
+            try:
+                self.running = False
+                self.auto_trading = False
+                if self.exchange_manager:
+                    await self.exchange_manager.disconnect_all()
+                self.stats['activeExchanges'] = 0
+                return {"status": "success", "message": "Bot stopped successfully"}
+            except Exception as e:
+                self.logger.error(f"Error stopping bot: {str(e)}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        async def _immediate_scan(self):
+            """Perform immediate scan on startup to show opportunities quickly"""
+            try:
+                await asyncio.sleep(3)  # Wait for initialization
+                self.logger.info("🚀 Performing immediate scan for ALL opportunities...")
+                if self.detector and self.exchange_manager:
+                    opportunities = await self.detector.scan_all_opportunities()
+                    self.logger.info(f"✅ Immediate scan found {len(opportunities)} ALL opportunities")
+            except Exception as e:
+                self.logger.error(f"Error in immediate scan: {e}")
+
+        @app.get("/api/opportunities")
+        async def get_opportunities():
+            return self.opportunities
+
+        @app.get("/api/trades")
+        async def get_trades():
+            return self.trade_logger.get_recent_trades(50)
+
+        @app.get("/api/trade-stats")
+        async def get_trade_stats():
+            return self.trade_logger.get_trade_statistics()
+
+        @app.websocket("/ws")
+        async def websocket_endpoint(websocket: WebSocket):
+            await self.websocket_manager.connect(websocket)
+            try:
+                while True:
+                    await websocket.receive_text()
+            except WebSocketDisconnect:
+                await self.websocket_manager.disconnect(websocket)
+
     async def _continuous_scanning_loop(self):
         self.logger.info("🚀 Starting continuous scanning for ALL opportunities...")
         while self.running:

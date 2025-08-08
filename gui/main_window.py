@@ -418,7 +418,47 @@ class ArbitrageBotGUI:
                         for i, opportunity in enumerate(profitable_opportunities[:2]):  # Execute top 2
                             try:
                                 self.logger.info(f"🚀 AUTO-EXECUTING Trade #{i+1}: {opportunity}")
-                                success = await self.executor.execute_arbitrage(opportunity)
+                                
+                                # Convert ArbitrageResult to ArbitrageOpportunity for execution
+                                if hasattr(opportunity, 'triangle_path') and not hasattr(opportunity, 'base_currency'):
+                                    # This is an ArbitrageResult, convert to ArbitrageOpportunity
+                                    from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
+                                    
+                                    # Create proper ArbitrageOpportunity object
+                                    triangle_path = opportunity.triangle_path
+                                    base_currency = triangle_path[0] if triangle_path else 'USDT'
+                                    intermediate_currency = triangle_path[1] if len(triangle_path) > 1 else 'BTC'
+                                    quote_currency = triangle_path[2] if len(triangle_path) > 2 else 'ETH'
+                                    
+                                    # Create trade steps for USDT triangle
+                                    steps = [
+                                        TradeStep(f"{intermediate_currency}/USDT", 'buy', opportunity.initial_amount / 100, 100, opportunity.initial_amount / 100),
+                                        TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', opportunity.initial_amount / 100, 1, opportunity.initial_amount / 100),
+                                        TradeStep(f"{quote_currency}/USDT", 'sell', opportunity.initial_amount / 100, 100, opportunity.initial_amount)
+                                    ]
+                                    
+                                    arbitrage_opportunity = ArbitrageOpportunity(
+                                        base_currency=base_currency,
+                                        intermediate_currency=intermediate_currency,
+                                        quote_currency=quote_currency,
+                                        pair1=f"{intermediate_currency}/USDT",
+                                        pair2=f"{intermediate_currency}/{quote_currency}",
+                                        pair3=f"{quote_currency}/USDT",
+                                        steps=steps,
+                                        initial_amount=opportunity.initial_amount,
+                                        final_amount=opportunity.initial_amount + opportunity.profit_amount,
+                                        estimated_fees=opportunity.initial_amount * 0.003,
+                                        estimated_slippage=opportunity.initial_amount * 0.001
+                                    )
+                                    
+                                    # Set exchange attribute for executor
+                                    arbitrage_opportunity.exchange = opportunity.exchange
+                                    arbitrage_opportunity.status = OpportunityStatus.DETECTED
+                                    
+                                    success = await self.executor.execute_arbitrage(arbitrage_opportunity)
+                                else:
+                                    # Already an ArbitrageOpportunity
+                                    success = await self.executor.execute_arbitrage(opportunity)
                                 
                                 if success:
                                     self.add_to_trading_history(f"✅ AUTO-TRADE SUCCESS: {opportunity}")

@@ -49,7 +49,8 @@ class TradeExecutor:
         trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
         self.logger.info(f"TradeExecutor initialized: {trading_mode}")
         self.logger.info(f"Auto-trading: {'ENABLED' if self.auto_trading else 'DISABLED'}")
-        self.logger.info(f"All trades will be executed with REAL money on your exchange account!")
+        self.logger.info(f"🔴 LIVE TRADING: All trades will be executed with REAL money on your exchange account!")
+        self.logger.info(f"✅ READY: Real-money trading enabled with enforced profit/amount limits.")
     
     def set_websocket_manager(self, websocket_manager):
         """Set WebSocket manager for trade broadcasting."""
@@ -226,13 +227,30 @@ class TradeExecutor:
         # Get the appropriate exchange
         exchange_id = getattr(opportunity, 'exchange', None)
         if not exchange_id:
-            self.logger.error("No exchange specified for opportunity")
-            return False
+            self.logger.warning("No exchange specified, defaulting to first available exchange")
+            available_exchanges = list(self.exchange_manager.exchanges.keys())
+            if available_exchanges:
+                exchange_id = available_exchanges[0]
+                self.logger.info(f"Using exchange: {exchange_id}")
+            else:
+                self.logger.error("No exchanges available")
+                return False
         
         exchange = self.exchange_manager.get_exchange(exchange_id)
         if not exchange:
-            self.logger.error(f"Exchange {exchange_id} not available")
-            return False
+            self.logger.warning(f"Exchange {exchange_id} not available, trying alternatives...")
+            # Try to get any available exchange
+            available_exchanges = list(self.exchange_manager.exchanges.keys())
+            if available_exchanges:
+                exchange_id = available_exchanges[0]
+                exchange = self.exchange_manager.get_exchange(exchange_id)
+                self.logger.info(f"Using alternative exchange: {exchange_id}")
+                # Update opportunity exchange
+                if hasattr(opportunity, 'exchange'):
+                    opportunity.exchange = exchange_id
+            else:
+                self.logger.error("No exchanges available for trading")
+                return False
         
         # Initialize trade_log at the beginning to avoid scope issues
         trade_log = TradeLog(

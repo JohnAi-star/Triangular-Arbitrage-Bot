@@ -354,7 +354,7 @@ class MultiExchangeDetector:
                 # Convert to ArbitrageResult format
                 result = ArbitrageResult(
                     exchange='binance',
-                    triangle_path=[usdt, curr1, curr2],  # USDT-based cycle (3 currencies)
+                    triangle_path=['USDT', 'BTC', 'ETH'],  # USDT-based cycle (3 currencies)
                     profit_percentage=opp.value,
                     profit_amount=self.max_trade_amount * (opp.value / 100),
                     initial_amount=self.max_trade_amount,

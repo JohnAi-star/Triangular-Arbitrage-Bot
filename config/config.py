@@ -12,8 +12,14 @@ class Config:
     EXCHANGE_CREDENTIALS = {}
 
     for exchange_id in SUPPORTED_EXCHANGES.keys():
-        api_key = os.getenv(f'{exchange_id.upper()}_API_KEY', '')
-        api_secret = os.getenv(f'{exchange_id.upper()}_API_SECRET', '')
+        # Handle Gate.io special case
+        if exchange_id == 'gate':
+            api_key = os.getenv('GATE_API_KEY', '') or os.getenv('GATE_API_KEY', '')
+            api_secret = os.getenv('GATE_API_SECRET', '') or os.getenv('GATE_API_SECRET', '')
+        else:
+            api_key = os.getenv(f'{exchange_id.upper()}_API_KEY', '')
+            api_secret = os.getenv(f'{exchange_id.upper()}_API_SECRET', '')
+        
         passphrase = os.getenv(f'{exchange_id.upper()}_PASSPHRASE', '')  # For KuCoin
         sandbox = os.getenv(f'{exchange_id.upper()}_SANDBOX', 'false').lower() == 'true'
 
@@ -39,7 +45,9 @@ class Config:
     # Runtime Feature Flags (defaulted to avoid crash)
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
     ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'false').lower() == 'true'
-    PAPER_TRADING: bool = False  # ALWAYS REAL TRADING - NO PAPER TRADING
+    PAPER_TRADING: bool = False  # 🔴 ALWAYS REAL TRADING - NO PAPER TRADING
+    LIVE_TRADING: bool = True    # 🔴 ENFORCE LIVE TRADING WITH REAL MONEY
+    DRY_RUN: bool = False        # 🔴 NO DRY RUN - REAL ORDERS ONLY
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'false'
     
     # Scanning Configuration - Show ALL opportunities

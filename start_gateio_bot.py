@@ -35,8 +35,8 @@ def main():
     """)
     
     # Check Gate.io credentials
-    api_key = os.getenv('GATEIO_API_KEY', '').strip()
-    api_secret = os.getenv('GATEIO_API_SECRET', '').strip()
+    api_key = os.getenv('GATE_API_KEY', '').strip()
+    api_secret = os.getenv('GATE_API_SECRET', '').strip()
     
     if not api_key or not api_secret:
         print("⚠️ WARNING: No Gate.io API credentials found!")

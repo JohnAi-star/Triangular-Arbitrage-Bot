@@ -105,6 +105,8 @@ def main():
         
         print("✅ GUI initialized with WebSocket manager")
         print("✅ Real-time opportunity updates enabled")
+        print("🔴 LIVE TRADING MODE: Real money trades will be executed")
+        print("✅ READY: Real-money trading enabled with enforced profit/amount limits.")
         
         app.run()
         return 0

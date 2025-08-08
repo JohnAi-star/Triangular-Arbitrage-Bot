@@ -63,14 +63,15 @@ SUPPORTED_EXCHANGES = {
     },
     'gate': {
         'name': 'Gate.io',
-        'class_name': 'gateio',
+        'class_name': 'gate',
         'fee_token': 'GT',
         'fee_discount': 0.15,
         'websocket_url': 'wss://api.gateio.ws/ws/v4/',
         'zero_fee_pairs': [],
         'maker_fee': 0.002,
         'taker_fee': 0.002,
-        'enabled': True
+        'enabled': True,
+        'requires_passphrase': False
     },
     'coinex': {
         'name': 'CoinEx',
