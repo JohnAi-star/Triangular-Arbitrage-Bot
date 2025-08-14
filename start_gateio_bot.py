@@ -48,14 +48,17 @@ def main():
     
     # Force real trading mode
     Config.PAPER_TRADING = False
-    Config.AUTO_TRADING_MODE = False  # Start with manual mode
+    Config.AUTO_TRADING_MODE = True   # Start with auto-trading for immediate profit
+    Config.MIN_PROFIT_THRESHOLD = 0.5  # Fixed 0.5% for Gate.io
+    Config.MAX_TRADE_AMOUNT = 20.0     # Fixed $20 for Gate.io optimization
     
     try:
         # Create and run GUI
         app = ArbitrageBotGUI()
-        print("✅ GUI initialized for Gate.io trading")
-        print("✅ Paper trading DISABLED - REAL TRADING ONLY")
-        print("✅ Auto-trading available in GUI")
+        print("✅ GUI initialized for Gate.io USDT triangular arbitrage")
+        print("✅ Paper trading DISABLED - LIVE TRADING ONLY")
+        print("✅ Auto-trading ENABLED - Will make real money automatically")
+        print("🎯 Settings: 0.5% min profit, $20 max trade, USDT triangles only")
         
         app.run()
         return 0

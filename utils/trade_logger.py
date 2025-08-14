@@ -43,8 +43,24 @@ class TradeLogger:
         """Save trade logs to file."""
         try:
             log_file = Path('logs/detailed_trades.json')
-            with open(log_file, 'w') as f:
-                json.dump([log.to_dict() for log in self.trade_logs], f, indent=2)
+            with open(log_file, 'w', encoding='utf-8') as f:
+                # Convert trade logs to dict format safely
+                trade_data = []
+                for log in self.trade_logs:
+                    if hasattr(log, 'to_dict'):
+                        trade_data.append(log.to_dict())
+                    elif isinstance(log, dict):
+                        trade_data.append(log)
+                    else:
+                        # Convert object to dict manually
+                        trade_data.append({
+                            'trade_id': getattr(log, 'trade_id', 'unknown'),
+                            'timestamp': getattr(log, 'timestamp', datetime.now()).isoformat() if hasattr(getattr(log, 'timestamp', None), 'isoformat') else str(getattr(log, 'timestamp', datetime.now())),
+                            'exchange': getattr(log, 'exchange', 'unknown'),
+                            'status': getattr(log, 'status', 'unknown'),
+                            'net_pnl': getattr(log, 'net_pnl', 0.0)
+                        })
+                json.dump(trade_data, f, indent=2)
         except Exception as e:
             self.logger.error(f"Error saving trade logs: {e}")
     

@@ -32,9 +32,9 @@ class Config:
         }
 
     # Core Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = float(os.getenv('MIN_PROFIT_PERCENTAGE', '0.05'))   # 0.05% minimum for USDT-based trades
-    MIN_PROFIT_THRESHOLD: float = float(os.getenv('MIN_PROFIT_THRESHOLD', '0.05'))     # 0.05% threshold for USDT cycles
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '10'))               # $10 USDT per trade
+    MIN_PROFIT_PERCENTAGE: float = 0.5    # 0.5% minimum profit threshold
+    MIN_PROFIT_THRESHOLD: float = 0.5      # 0.5% threshold for execution (SINGLE SOURCE OF TRUTH)
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '15'))               # $15 USDT per trade (safer for Gate.io)
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
 
     # Fee & Trading Mode
@@ -87,6 +87,10 @@ class Config:
         if cls.MAX_TRADE_AMOUNT <= 0:
             print("❌ ERROR: MAX_TRADE_AMOUNT must be greater than 0")
             return False
+
+        # Log the actual thresholds being used
+        print(f"✅ Profit threshold: {cls.MIN_PROFIT_PERCENTAGE}%")
+        print(f"✅ Max trade amount: ${cls.MAX_TRADE_AMOUNT}")
 
         return True
 

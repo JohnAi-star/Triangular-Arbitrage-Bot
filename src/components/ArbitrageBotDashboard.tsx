@@ -42,7 +42,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
     const [isRunning, setIsRunning] = useState(false);
     const [autoTrading, setAutoTrading] = useState(false);
     const [paperTrading, setPaperTrading] = useState(false);  // Default to LIVE trading
-    const [minProfit, setMinProfit] = useState(0.5);
+    const [minProfit, setMinProfit] = useState(0.5);  // Updated to 0.5%
     const [maxTradeAmount, setMaxTradeAmount] = useState(10);
     const [maxConsecutiveFails, setMaxConsecutiveFails] = useState(3);
     const [consecutiveFails, setConsecutiveFails] = useState(0);
@@ -294,29 +294,30 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <input
                             type="number"
                             value={minProfit}
-                            onChange={(e) => setMinProfit(Math.max(0.1, Math.min(5.0, parseFloat(e.target.value))))}
-                            min="0.1"
-                            max="5.0"
+                            onChange={(e) => setMinProfit(Math.max(0.5, Math.min(3.0, parseFloat(e.target.value))))}
+                            min="0.5"
+                            max="3.0"
                             step="0.1"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
-                            title="ENFORCED: Minimum 0.1% profit required"
+                            title="ENFORCED: Minimum 0.5% profit required"
                         />
                         <label className="block text-sm text-gray-300 mb-2">Max Trade Amount</label>
                         <input
                             type="number"
                             value={maxTradeAmount}
-                            onChange={(e) => setMaxTradeAmount(Math.max(1, Math.min(100, parseFloat(e.target.value))))}
-                            min="10"
-                            max="100"
+                            onChange={(e) => setMaxTradeAmount(Math.max(5, Math.min(20, parseFloat(e.target.value))))}
+                            min="5"
+                            max="20"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
-                            title="ENFORCED: Maximum $100 per trade"
+                            title="ENFORCED: Maximum $20 per trade"
                         />
                         <div className="text-xs text-yellow-400 mt-2 p-2 bg-yellow-900/20 rounded">
                             🚫 ENFORCED LIMITS:<br />
-                            • Min Profit: 0.1%<br />
-                            • Max Trade: $100<br />
-                            • Trades over $100 rejected<br />
-                            • Profits under 0.1% rejected
+                            • Min Profit: 0.5%<br />
+                            • Max Trade: $20<br />
+                            • Trades over $20 rejected<br />
+                            • Profits under 0.5% rejected<br />
+                            • Only USDT triangles allowed
                         </div>
                         <label className="block text-sm text-gray-300 mb-2">Max Consecutive Fails</label>
                         <input
@@ -353,7 +354,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <div className="mt-6 text-gray-300">
                             <p>Auto-Trades: {autoStats.autoTradesExecuted} | Auto-Profit: ${autoStats.autoProfit.toFixed(2)} | Success Rate: {autoStats.autoSuccessRate.toFixed(1)}%</p>
                             <div className="text-xs text-gray-400 mt-2">
-                                🔴 REAL TRADING: ≤$100 per trade | ≥0.5% profit | LIVE MODE ONLY
+                                🔴 GATE.IO AUTO-TRADING: $5-$20 per trade | ≥0.8% profit | LIVE MODE ONLY
                             </div>
                         </div>
                     </div>
@@ -524,54 +525,59 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-700">
-                                            {detailedTrades.map(trade => (
-                                                <tr key={trade.trade_id} className="hover:bg-slate-700/30">
-                                                    <td className="p-2">
-                                                        <span className="text-lg">{trade.status_emoji}</span>
-                                                    </td>
-                                                    <td className="p-2 text-gray-300">
-                                                        {new Date(trade.timestamp).toLocaleTimeString()}
-                                                    </td>
-                                                    <td className="p-2 text-white">{trade.exchange}</td>
-                                                    <td className="p-2 text-gray-300 text-xs">
-                                                        {trade.triangle_path.join(' → ')}
-                                                    </td>
-                                                    <td className="p-2 text-blue-400">
-                                                        {trade.initial_amount.toFixed(4)} {trade.base_currency}
-                                                    </td>
-                                                    <td className="p-2 text-blue-400">
-                                                        {trade.final_amount.toFixed(4)} {trade.base_currency}
-                                                    </td>
-                                                    <td className={`p-2 font-medium ${trade.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                                        {trade.net_pnl >= 0 ? '+' : ''}{trade.net_pnl.toFixed(6)}
-                                                        <div className="text-xs text-gray-400">
-                                                            ({trade.actual_profit_percentage.toFixed(4)}%)
-                                                        </div>
-                                                    </td>
-                                                    <td className="p-2 text-yellow-400">
-                                                        {trade.total_fees_paid.toFixed(6)}
-                                                    </td>
-                                                    <td className="p-2 text-gray-300">
-                                                        <div className="flex items-center gap-1">
-                                                            <Clock className="w-3 h-3" />
-                                                            {trade.total_duration_ms.toFixed(0)}ms
-                                                        </div>
-                                                    </td>
-                                                    <td className="p-2 text-gray-400">
-                                                        {trade.steps.length} steps
-                                                        {trade.error_message && (
-                                                            <div className="text-red-400 text-xs mt-1">
-                                                                Failed at step {trade.failed_at_step}
+                                            {detailedTrades.length > 0 ? (
+                                                detailedTrades.map(trade => (
+                                                    <tr key={trade.trade_id} className="hover:bg-slate-700/30">
+                                                        <td className="p-2">
+                                                            <span className="text-lg">{trade.status_emoji}</span>
+                                                        </td>
+                                                        <td className="p-2 text-gray-300">
+                                                            {new Date(trade.timestamp).toLocaleTimeString()}
+                                                        </td>
+                                                        <td className="p-2 text-white">{trade.exchange}</td>
+                                                        <td className="p-2 text-gray-300 text-xs">
+                                                            {trade.triangle_path.join(' → ')}
+                                                        </td>
+                                                        <td className="p-2 text-blue-400">
+                                                            {trade.initial_amount.toFixed(4)} {trade.base_currency}
+                                                        </td>
+                                                        <td className="p-2 text-blue-400">
+                                                            {trade.final_amount.toFixed(4)} {trade.base_currency}
+                                                        </td>
+                                                        <td className={`p-2 font-medium ${trade.net_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                            {trade.net_pnl >= 0 ? '+' : ''}{trade.net_pnl.toFixed(6)}
+                                                            <div className="text-xs text-gray-400">
+                                                                ({trade.actual_profit_percentage.toFixed(4)}%)
                                                             </div>
-                                                        )}
+                                                        </td>
+                                                        <td className="p-2 text-yellow-400">
+                                                            {trade.total_fees_paid.toFixed(6)}
+                                                        </td>
+                                                        <td className="p-2 text-gray-300">
+                                                            <div className="flex items-center gap-1">
+                                                                <Clock className="w-3 h-3" />
+                                                                {trade.total_duration_ms.toFixed(0)}ms
+                                                            </div>
+                                                        </td>
+                                                        <td className="p-2 text-gray-400">
+                                                            {trade.steps.length} steps
+                                                            {trade.error_message && (
+                                                                <div className="text-red-400 text-xs mt-1">
+                                                                    Failed at step {trade.failed_at_step}
+                                                                </div>
+                                                            )}
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            ) : (
+                                                <tr>
+                                                    <td colSpan={10}>
+                                                        <div className="text-center text-gray-400 py-8">No trades executed yet</div>
                                                     </td>
                                                 </tr>
-                                            ))}
+                                            )}
                                         </tbody>
                                     </table>
-                                    {detailedTrades.length === 0 && (
-                                        <div className="text-center text-gray-400 py-8">No trades executed yet</div>
-                                    )}
                                 </div>
                             </div>
                         )}

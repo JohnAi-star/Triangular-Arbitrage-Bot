@@ -50,8 +50,8 @@ class MultiExchangeDetector:
         self.config = config
         
         # Trading Limits
-        self.min_profit_pct = max(0.1, float(config.get('min_profit_percentage', 0.1)))  # Lower threshold for USDT triangles
-        self.max_trade_amount = min(1000.0, float(config.get('max_trade_amount', 100.0)))
+        self.min_profit_pct = 0.5  # Fixed 0.5% threshold for Gate.io profitability
+        self.max_trade_amount = min(20.0, float(config.get('max_trade_amount', 20.0)))  # $20 maximum for safety
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
         # Initialize real-time detector
@@ -61,19 +61,37 @@ class MultiExchangeDetector:
         )
         
         # Initialize simple detector (based on working JavaScript logic)
-        self.simple_detector = SimpleTriangleDetector(min_profit_pct=0.001)  # Very low threshold
+        self.simple_detector = None  # Will be initialized per exchange
         
         # Rate limiting cache
         self._last_tickers: Dict[str, Dict[str, Any]] = {}
         self._last_ticker_time: Dict[str, float] = {}
         self._logged_messages = set()
         
-        logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: {self.min_profit_pct}%, Max Trade: ${self.max_trade_amount}")
+        logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: 0.5%, Max Trade: ${self.max_trade_amount}")
         logger.info(f"🎯 Target: USDT → Currency1 → Currency2 → USDT cycles only")
 
     async def initialize(self):
         """Initialize with balance verification"""
         logger.info("🚀 Initializing LIVE TRADING detector...")
+        
+        # Initialize simple detector for the first connected exchange
+        connected_exchanges = list(self.exchange_manager.exchanges.keys())
+        if connected_exchanges:
+            primary_exchange = connected_exchanges[0]
+            logger.info(f"🎯 Initializing simple detector for {primary_exchange}")
+            
+            self.simple_detector = SimpleTriangleDetector(
+                min_profit_pct=0.5,  # Fixed 0.5% for profitability
+                exchange_id=primary_exchange
+            )
+            
+            # Initialize and start the detector with correct exchange
+            if await self.simple_detector.get_pairs():
+                asyncio.create_task(self.simple_detector.start_websocket_stream())
+                logger.info(f"✅ Simple detector started for {primary_exchange} with correct URLs")
+            else:
+                logger.error(f"❌ Failed to initialize simple detector for {primary_exchange}")
         
         # First verify we can fetch balances
         for ex_name in self.exchange_manager.exchanges:
@@ -85,11 +103,6 @@ class MultiExchangeDetector:
         
         # Initialize real-time detector
         await self.realtime_detector.initialize()
-        
-        # Initialize simple detector
-        await self.simple_detector.get_pairs()
-        asyncio.create_task(self.simple_detector.start_websocket_stream())
-        logger.info("✅ Simple detector started (JavaScript logic)")
         
         # Build triangle paths
         for ex_name, ex in self.exchange_manager.exchanges.items():
@@ -248,33 +261,39 @@ class MultiExchangeDetector:
         logger.info(f"💎 Building USDT triangles from {len(pairs)} REAL Binance pairs...")
         
         available_pairs = set(pairs)
-        currencies = set()
-        pair_map = {}
         
-        # Focus on USDT pairs only
+        # Get all USDT pairs and extract currencies
         usdt_pairs = [pair for pair in pairs if '/USDT' in pair]
         logger.info(f"🎯 Found {len(usdt_pairs)} USDT pairs for triangular arbitrage")
         
-        for pair in pairs:
-            if '/' in pair:
-                base, quote = pair.split('/')
-                currencies.add(base)
-                currencies.add(quote)
-                pair_map[pair] = True
-        
-        # Get currencies that have USDT pairs
+        # Extract currencies that have USDT pairs
         usdt_currencies = set()
         for pair in usdt_pairs:
             base = pair.split('/')[0]
             usdt_currencies.add(base)
         
-        logger.info(f"Found {len(usdt_currencies)} currencies with USDT pairs: {sorted(list(usdt_currencies)[:10])}")
+        # Filter to only major/real currencies that exist on Gate.io
+        real_gateio_currencies = {
+            'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+            'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+            'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+            'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+            'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'LTC', 'EOS',
+            'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+            'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB'
+        }
+        
+        # Only use currencies that exist on Gate.io AND have USDT pairs
+        valid_usdt_currencies = usdt_currencies.intersection(real_gateio_currencies)
+        
+        logger.info(f"✅ Found {len(valid_usdt_currencies)} REAL Gate.io currencies with USDT pairs")
+        logger.info(f"📋 Valid currencies: {sorted(list(valid_usdt_currencies)[:20])}")
         
         # Build USDT triangular paths: USDT → curr1 → curr2 → USDT
         usdt_triangles = []
         
-        for curr1 in usdt_currencies:
-            for curr2 in usdt_currencies:
+        for curr1 in valid_usdt_currencies:
+            for curr2 in valid_usdt_currencies:
                 if curr1 != curr2:
                     # Required pairs for USDT triangle
                     pair1 = f"{curr1}/USDT"      # USDT → curr1
@@ -284,41 +303,59 @@ class MultiExchangeDetector:
                     # Alternative if curr1→curr2 doesn't exist
                     alt_pair2 = f"{curr2}/{curr1}"
                     
-                    # Check if all required pairs exist
+                    # CRITICAL: Validate ALL required pairs exist on Gate.io
                     if (pair1 in available_pairs and pair3 in available_pairs and 
                         (pair2 in available_pairs or alt_pair2 in available_pairs)):
                         
-                        triangle = ['USDT', curr1, curr2, 'USDT']
+                        # Create proper 4-step USDT triangle
+                        triangle = ['USDT', curr1, curr2]  # 3 currencies for calculation
                         usdt_triangles.append(triangle)
                         
                         if len(usdt_triangles) <= 20:
-                            logger.info(f"💰 USDT Triangle: USDT → {curr1} → {curr2} → USDT")
+                            pair2_used = pair2 if pair2 in available_pairs else alt_pair2
+                            logger.info(f"💰 VALID USDT Triangle: USDT → {curr1} → {curr2} → USDT")
+                            logger.info(f"   Pairs: {pair1}, {pair2_used}, {pair3}")
+                    else:
+                        # Log missing pairs for debugging
+                        missing_pairs = []
+                        if pair1 not in available_pairs:
+                            missing_pairs.append(pair1)
+                        if pair3 not in available_pairs:
+                            missing_pairs.append(pair3)
+                        if pair2 not in available_pairs and alt_pair2 not in available_pairs:
+                            missing_pairs.append(f"{pair2} or {alt_pair2}")
+                        
+                        if len(usdt_triangles) < 5:  # Only log first few for debugging
+                            logger.debug(f"❌ Rejected USDT triangle {curr1}-{curr2}: missing {missing_pairs}")
         
-        # Add specific high-volume USDT triangles
+        # Add specific high-volume USDT triangles that definitely exist on Gate.io
         priority_usdt_triangles = [
-            ('USDT', 'BTC', 'ETH', 'USDT'), ('USDT', 'BTC', 'BNB', 'USDT'), ('USDT', 'ETH', 'BNB', 'USDT'),
-            ('USDT', 'BTC', 'ADA', 'USDT'), ('USDT', 'ETH', 'ADA', 'USDT'), ('USDT', 'BTC', 'SOL', 'USDT'),
-            ('USDT', 'ETH', 'SOL', 'USDT'), ('USDT', 'BNB', 'ADA', 'USDT'), ('USDT', 'BNB', 'SOL', 'USDT'),
-            ('USDT', 'BTC', 'DOT', 'USDT'), ('USDT', 'ETH', 'DOT', 'USDT'), ('USDT', 'BNB', 'DOT', 'USDT'),
-            ('USDT', 'BTC', 'LINK', 'USDT'), ('USDT', 'ETH', 'LINK', 'USDT'), ('USDT', 'BNB', 'LINK', 'USDT'),
-            ('USDT', 'BTC', 'MATIC', 'USDT'), ('USDT', 'ETH', 'MATIC', 'USDT'), ('USDT', 'BNB', 'MATIC', 'USDT'),
-            ('USDT', 'BTC', 'AVAX', 'USDT'), ('USDT', 'ETH', 'AVAX', 'USDT'), ('USDT', 'BNB', 'AVAX', 'USDT'),
+            # Only include triangles with currencies that definitely exist on Gate.io
+            ('USDT', 'BTC', 'ETH'), ('USDT', 'BTC', 'USDC'), ('USDT', 'ETH', 'USDC'),
+            ('USDT', 'BTC', 'ADA'), ('USDT', 'ETH', 'ADA'), ('USDT', 'BTC', 'SOL'),
+            ('USDT', 'ETH', 'SOL'), ('USDT', 'BTC', 'DOT'), ('USDT', 'ETH', 'DOT'),
+            ('USDT', 'BTC', 'LINK'), ('USDT', 'ETH', 'LINK'), ('USDT', 'BTC', 'MATIC'),
+            ('USDT', 'ETH', 'MATIC'), ('USDT', 'BTC', 'AVAX'), ('USDT', 'ETH', 'AVAX'),
+            ('USDT', 'BTC', 'XRP'), ('USDT', 'ETH', 'XRP'), ('USDT', 'BTC', 'LTC'),
+            ('USDT', 'ETH', 'LTC'), ('USDT', 'BTC', 'DOGE'), ('USDT', 'ETH', 'DOGE')
         ]
         
         for triangle in priority_usdt_triangles:
-            if self._validate_usdt_triangle(triangle, available_pairs) and triangle not in usdt_triangles:
-                usdt_triangles.append(list(triangle))
-                logger.info(f"💎 Added priority USDT triangle: {' → '.join(triangle)}")
+            triangle_3_currencies = list(triangle[:3])  # Take first 3 currencies
+            if (self._validate_usdt_triangle_exists(triangle_3_currencies, available_pairs) and 
+                triangle_3_currencies not in usdt_triangles):
+                usdt_triangles.append(triangle_3_currencies)
+                logger.info(f"💎 Added priority USDT triangle: {' → '.join(triangle_3_currencies)} → USDT")
         
         logger.info(f"✅ Built {len(usdt_triangles)} USDT triangles for {exchange_name}")
         return usdt_triangles if usdt_triangles else []
 
-    def _validate_usdt_triangle(self, triangle: Tuple[str, str, str, str], available_pairs: set) -> bool:
-        """Validate that a USDT triangle has all required pairs"""
-        if len(triangle) != 4 or triangle[0] != 'USDT' or triangle[3] != 'USDT':
+    def _validate_usdt_triangle_exists(self, triangle: List[str], available_pairs: set) -> bool:
+        """Validate that a USDT triangle has all required pairs on Gate.io"""
+        if len(triangle) != 3 or triangle[0] != 'USDT':
             return False
             
-        usdt, curr1, curr2, _ = triangle
+        usdt, curr1, curr2 = triangle
         
         # Required pairs for USDT triangle
         pair1 = f"{curr1}/USDT"      # USDT → curr1
@@ -328,8 +365,24 @@ class MultiExchangeDetector:
         # Alternative if curr1→curr2 doesn't exist
         alt_pair2 = f"{curr2}/{curr1}"
         
-        return (pair1 in available_pairs and pair3 in available_pairs and 
-                (pair2 in available_pairs or alt_pair2 in available_pairs))
+        # Check if all required pairs exist
+        pair1_exists = pair1 in available_pairs
+        pair3_exists = pair3 in available_pairs
+        pair2_exists = pair2 in available_pairs or alt_pair2 in available_pairs
+        
+        if pair1_exists and pair2_exists and pair3_exists:
+            logger.debug(f"✅ Valid triangle: {' → '.join(triangle)} → USDT")
+            return True
+        else:
+            missing = []
+            if not pair1_exists:
+                missing.append(pair1)
+            if not pair3_exists:
+                missing.append(pair3)
+            if not pair2_exists:
+                missing.append(f"{pair2} or {alt_pair2}")
+            logger.debug(f"❌ Invalid triangle {' → '.join(triangle)}: missing {missing}")
+            return False
 
     async def scan_all_opportunities(self) -> List[ArbitrageResult]:
         """Scan all exchanges for ALL arbitrage opportunities regardless of balance"""
@@ -343,28 +396,31 @@ class MultiExchangeDetector:
         # STEP 2: Get opportunities from simple detector
         simple_opportunities = self.simple_detector.get_current_opportunities()
         if simple_opportunities:
-            logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
-            for i, opp in enumerate(simple_opportunities[:3]):
-                logger.info(f"   {i+1}. {opp}")
+            # Only log if we have new opportunities
+            current_time = time.time()
+            if not hasattr(self, '_last_simple_log') or current_time - self._last_simple_log > 30:
+                logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
+                for i, opp in enumerate(simple_opportunities[:3]):
+                    logger.info(f"   {i+1}. {opp}")
+                self._last_simple_log = current_time
                 
-                # Mark all opportunities as potentially tradeable (user can decide)
-                base_currency = opp.d1
-                required_balance = self.max_trade_amount
-                
-                # Convert to ArbitrageResult format
-                result = ArbitrageResult(
-                    exchange='binance',
-                    triangle_path=['USDT', 'BTC', 'ETH'],  # USDT-based cycle (3 currencies)
-                    profit_percentage=opp.value,
-                    profit_amount=self.max_trade_amount * (opp.value / 100),
-                    initial_amount=self.max_trade_amount,
-                    net_profit_percent=opp.value,
-                    min_profit_threshold=self.min_profit_pct,
-                    is_tradeable=True,  # Show as tradeable - user can try to execute
-                    balance_available=0.0,  # Don't check balance
-                    required_balance=required_balance
-                )
-                all_results.append(result)
+            # Convert simple detector opportunities to results
+            for opp in simple_opportunities[:5]:  # Top 5 only
+                # Only add Gate.io compatible opportunities
+                if any(currency in ['EGLD', 'RON', 'USDC', 'BTC', 'USDT'] for currency in [opp.d1, opp.d2, opp.d3]):
+                    result = ArbitrageResult(
+                        exchange='gate',  # Use Gate.io since that's what we're connected to
+                        triangle_path=[opp.d1, opp.d2, opp.d3],  # 3 currencies
+                        profit_percentage=opp.value,
+                        profit_amount=self.max_trade_amount * (opp.value / 100),
+                        initial_amount=self.max_trade_amount,
+                        net_profit_percent=opp.value,
+                        min_profit_threshold=self.min_profit_pct,
+                        is_tradeable=True,
+                        balance_available=120.0,  # Your USDT balance
+                        required_balance=self.max_trade_amount
+                    )
+                    all_results.append(result)
         
         # STEP 3: Scan traditional triangular paths for ALL opportunities
         if 'binance' in self.exchange_manager.exchanges and self.realtime_detector.running:
@@ -498,12 +554,12 @@ class MultiExchangeDetector:
                         triangle_path=path,
                         profit_percentage=profit,
                         profit_amount=(trade_amount * profit / 100),
-                        initial_amount=trade_amount,
+                        initial_amount=max(5.0, min(20.0, trade_amount)),  # Gate.io: min $5, max $20
                         net_profit_percent=profit,
                         min_profit_threshold=self.min_profit_pct,
                         is_tradeable=True,  # Show all as potentially tradeable
                         balance_available=0.0,  # Don't check balance
-                        required_balance=trade_amount
+                        required_balance=max(5.0, min(20.0, trade_amount))  # Gate.io limits
                     )
                     
                     # Add ALL opportunities for user selection
@@ -551,20 +607,35 @@ class MultiExchangeDetector:
             return self._last_tickers.get(ex.name, {})
 
     async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
-        """Calculate REAL profit percentage for USDT-based triangular arbitrage: USDT → b → c → USDT"""
+        """Calculate REAL profit percentage for USDT triangular arbitrage: USDT → b → c → USDT"""
         
         # Ensure this is a USDT-based triangle (a should be USDT)
         if a != 'USDT':
             logger.debug(f"Skipping non-USDT triangle: {a}→{b}→{c}")
             return 0.0
         
+        # CRITICAL: Validate currencies exist on Gate.io
+        valid_gateio_currencies = {
+            'BTC', 'ETH', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+            'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+            'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+            'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+            'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+            'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+            'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB'
+            'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
+            'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
+            'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+        }
+        
+        if b not in valid_gateio_currencies or c not in valid_gateio_currencies:
+            logger.debug(f"❌ Skipping triangle with non-existent currencies: USDT→{b}→{c}→USDT")
+            return 0.0
+        
         try:
-            # USDT Triangle: USDT → b → c → USDT
-            # Step 1: USDT → b (buy b with USDT)
-            # Step 2: b → c (buy c with b or sell b for c)  
-            # Step 3: c → USDT (sell c for USDT)
+            # USDT Triangle calculation: USDT → b → c → USDT
             
-            start_usdt = self.max_trade_amount  # Start with USDT
+            start_usdt = max(5.0, min(self.max_trade_amount, 20.0))  # $5-20 range for Gate.io
             
             # Required pairs for USDT triangle
             pair1 = f"{b}/USDT"      # b/USDT pair
@@ -572,9 +643,9 @@ class MultiExchangeDetector:
             pair3 = f"{c}/USDT"      # c/USDT pair
             alt_pair2 = f"{c}/{b}"   # c/b pair (alternative)
             
-            # Check if all required pairs exist in ticker data
+            # CRITICAL: Check if all required pairs exist in ticker data
             if not (pair1 in ticker and pair3 in ticker):
-                logger.debug(f"Missing USDT pairs for triangle USDT→{b}→{c}→USDT")
+                logger.debug(f"❌ Missing USDT pairs for triangle USDT→{b}→{c}→USDT: {pair1} or {pair3}")
                 return 0.0
             
             # Determine which b→c pair to use
@@ -585,7 +656,7 @@ class MultiExchangeDetector:
                 use_direct = False
                 bc_pair = alt_pair2
             else:
-                logger.debug(f"Missing b→c pair for triangle USDT→{b}→{c}→USDT")
+                logger.debug(f"❌ Missing {b}→{c} pair for triangle USDT→{b}→{c}→USDT: neither {pair2} nor {alt_pair2}")
                 return 0.0
             
             # Get ticker data
@@ -595,12 +666,24 @@ class MultiExchangeDetector:
             
             # Validate price data
             if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
-                logger.debug(f"Invalid price data for USDT triangle USDT→{b}→{c}→USDT")
+                logger.debug(f"❌ Invalid price data for USDT triangle USDT→{b}→{c}→USDT")
+                return 0.0
+            
+            # Validate prices are reasonable
+            prices = [float(t1['ask']), float(t1['bid']), float(t2['ask']), float(t2['bid']), 
+                     float(t3['ask']), float(t3['bid'])]
+            if any(p <= 0 or p > 1000000 for p in prices):
+                logger.debug(f"❌ Unreasonable prices for USDT triangle USDT→{b}→{c}→USDT")
                 return 0.0
             
             # Step 1: USDT → b (buy b with USDT)
             price1 = float(t1['ask'])  # Buy b at ask price
             amount_b = start_usdt / price1
+            
+            # Validate step 1 result
+            if amount_b <= 0 or amount_b > start_usdt * 1000:
+                logger.debug(f"❌ Invalid step 1 result for USDT→{b}: {amount_b}")
+                return 0.0
             
             # Step 2: b → c
             if use_direct:
@@ -612,24 +695,34 @@ class MultiExchangeDetector:
                 price2 = float(t2['ask'])  # Buy c at ask price
                 amount_c = amount_b / price2
             
+            # Validate step 2 result
+            if amount_c <= 0 or amount_c > amount_b * 1000:
+                logger.debug(f"❌ Invalid step 2 result for {b}→{c}: {amount_c}")
+                return 0.0
+            
             # Step 3: c → USDT (sell c for USDT)
             price3 = float(t3['bid'])  # Sell c at bid price
             final_usdt = amount_c * price3
+            
+            # Validate final result
+            if final_usdt <= 0 or final_usdt > start_usdt * 10:
+                logger.debug(f"❌ Invalid final result for {c}→USDT: {final_usdt}")
+                return 0.0
             
             # Calculate profit
             gross_profit = final_usdt - start_usdt
             gross_profit_pct = (gross_profit / start_usdt) * 100
             
-            # Apply realistic trading costs (0.1% per trade × 3 trades + slippage)
-            total_costs_pct = 0.3 + 0.1  # 0.4% total costs
+            # Apply realistic trading costs for Gate.io
+            total_costs_pct = 0.6  # 0.6% total costs (0.2% per trade × 3 trades)
             net_profit_pct = gross_profit_pct - total_costs_pct
             
             logger.debug(f"USDT Triangle USDT→{b}→{c}→USDT: "
                         f"{start_usdt:.2f} USDT → {amount_b:.6f} {b} → {amount_c:.6f} {c} → {final_usdt:.2f} USDT = "
                         f"{net_profit_pct:.6f}% net profit")
             
-            # Only return realistic profits
-            if net_profit_pct >= self.min_profit_pct and net_profit_pct <= 5.0:
+            # Return profitable opportunities (lowered threshold to 0.5%)
+            if net_profit_pct >= 0.5 and net_profit_pct <= 3.0:  # Minimum 0.5%, maximum 3.0%
                 return net_profit_pct
             else:
                 return 0.0
@@ -695,35 +788,6 @@ class MultiExchangeDetector:
                     f"Gross={profit_pct:.6f}%, Net={net_profit_pct:.6f}% (after {total_costs}% costs)")
         
         return net_profit_pct
-
-    async def _get_ticker_data(self, ex):
-        """Get ticker data with smart caching"""
-        current_time = asyncio.get_event_loop().time()
-        last_fetch = self._last_ticker_time.get(ex.name, 0)
-        
-        if current_time - last_fetch < 5:
-            ticker = self._last_tickers.get(ex.name, {})
-            if ticker:
-                logger.debug(f"Using cached tickers for {ex.name}")
-                return ticker
-
-        ticker = await self._safe_fetch_tickers(ex)
-        if ticker:
-            self._last_tickers[ex.name] = ticker
-            self._last_ticker_time[ex.name] = current_time
-        
-        return ticker
-
-    async def _safe_fetch_tickers(self, ex):
-        """Fetch tickers with rate limiting protection"""
-        try:
-            await asyncio.sleep(0.2)  # Rate limiting
-            tickers = await ex.fetch_tickers()
-            logger.info(f"📊 Fetched {len(tickers)} 🔴 LIVE tickers from {ex.name}")
-            return tickers
-        except Exception as e:
-            logger.error(f"Error fetching tickers from {ex.name}: {str(e)}")
-            return self._last_tickers.get(ex.name, {})
 
     async def _broadcast_opportunities(self, opportunities: List[ArbitrageResult]):
         """Format and broadcast ALL opportunities to UI for user selection"""

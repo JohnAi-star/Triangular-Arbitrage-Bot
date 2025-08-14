@@ -260,9 +260,9 @@ class UnifiedExchange(BaseExchange):
                 await asyncio.sleep(5)
 
     async def place_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
-        """Execute REAL market order on Binance that will appear in your account."""
+        """Execute REAL market order on exchange that will appear in your account."""
         try:
-            self.logger.info(f"🔴 EXECUTING REAL BINANCE ORDER:")
+            self.logger.info(f"🔴 EXECUTING REAL {self.exchange_id.upper()} ORDER:")
             self.logger.info(f"   Symbol: {symbol}")
             self.logger.info(f"   Side: {side.upper()}")
             self.logger.info(f"   Quantity: {qty:.8f}")
@@ -281,12 +281,47 @@ class UnifiedExchange(BaseExchange):
             except Exception:
                 pass  # Continue even if ticker fails
             
-            # Execute the REAL market order
-            self.logger.info(f"🚀 Sending order to Binance...")
-            order = await self.exchange.create_market_order(symbol, side, qty)
+            # Execute the REAL market order with exchange-specific handling
+            self.logger.info(f"🚀 Sending order to {self.exchange_id}...")
+            
+            # Gate.io specific order handling
+            if self.exchange_id == 'gate':
+                self.logger.info("🔧 Using Gate.io specific order format...")
+                
+                # Gate.io requires special handling for market buy orders
+                if side.lower() == 'buy':
+                    # For market BUY orders, Gate.io needs the USDT amount to spend (quote quantity)
+                    # Set the option to use quote quantity for market buy orders
+                    self.logger.info(f"🔧 Gate.io MARKET BUY: Spending {qty:.2f} USDT to buy {symbol}")
+                    
+                    # Use Gate.io specific parameters for market buy
+                    order = await self.exchange.create_order(
+                        symbol=symbol,
+                        type='market',
+                        side='buy',
+                        amount=qty,  # This is the USDT amount to spend
+                        price=None,
+                        params={'createMarketBuyOrderRequiresPrice': False}
+                    )
+                else:
+                    # For market SELL orders, use standard format
+                    self.logger.info(f"🔧 Gate.io MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
+                    order = await self.exchange.create_market_order(symbol, side, qty)
+            else:
+                # Standard order for other exchanges
+                order = await self.exchange.create_market_order(symbol, side, qty)
+            
             
             if not order:
-                raise Exception("No response from exchange")
+                self.logger.error("❌ No response from exchange")
+                return {
+                    'success': False,
+                    'status': 'failed',
+                    'error': 'No response from exchange',
+                    'symbol': symbol,
+                    'side': side,
+                    'amount': qty
+                }
             
             # Extract order details
             order_id = order.get('id', 'Unknown')
@@ -297,11 +332,15 @@ class UnifiedExchange(BaseExchange):
             
             # Extract fee information
             fee_info = order.get('fee', {})
-            fee_cost = float(fee_info.get('cost', 0)) if fee_info else 0
-            fee_currency = fee_info.get('currency', 'Unknown') if fee_info else 'Unknown'
+            fee_cost = 0
+            fee_currency = 'Unknown'
+            
+            if fee_info and isinstance(fee_info, dict):
+                fee_cost = float(fee_info.get('cost', 0))
+                fee_currency = fee_info.get('currency', 'Unknown')
             
             # Log comprehensive order details
-            self.logger.info(f"✅ BINANCE ORDER RESPONSE RECEIVED:")
+            self.logger.info(f"✅ {self.exchange_id.upper()} ORDER RESPONSE RECEIVED:")
             self.logger.info(f"   Order ID: {order_id}")
             self.logger.info(f"   Status: {status}")
             self.logger.info(f"   Filled Quantity: {filled_qty:.8f}")
@@ -311,8 +350,8 @@ class UnifiedExchange(BaseExchange):
             
             # Verify order was executed successfully
             if status in ['closed', 'filled'] and filled_qty > 0:
-                self.logger.info(f"🎉 ORDER SUCCESSFULLY EXECUTED ON BINANCE!")
-                self.logger.info(f"   ✅ This trade is now visible in your Binance account")
+                self.logger.info(f"🎉 ORDER SUCCESSFULLY EXECUTED ON {self.exchange_id.upper()}!")
+                self.logger.info(f"   ✅ This trade is now visible in your {self.exchange_id} account")
                 self.logger.info(f"   ✅ Order ID {order_id} can be found in your trade history")
                 self.logger.info(f"   ✅ Profit/Loss will be reflected in your balance")
                 
@@ -335,7 +374,7 @@ class UnifiedExchange(BaseExchange):
             else:
                 # Order not filled or failed
                 error_msg = f"Order not executed: status={status}, filled={filled_qty}"
-                self.logger.error(f"❌ BINANCE ORDER FAILED: {error_msg}")
+                self.logger.error(f"❌ {self.exchange_id.upper()} ORDER FAILED: {error_msg}")
                 return {
                     'success': False,
                     'status': 'failed',
@@ -345,7 +384,7 @@ class UnifiedExchange(BaseExchange):
                 }
             
         except Exception as e:
-            error_msg = f"Binance order execution failed: {str(e)}"
+            error_msg = f"{self.exchange_id} order execution failed: {str(e)}"
             self.logger.error(f"❌ CRITICAL ERROR: {error_msg}")
             self.logger.error(f"   Symbol: {symbol}")
             self.logger.error(f"   Side: {side}")

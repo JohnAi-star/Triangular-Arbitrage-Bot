@@ -39,8 +39,10 @@ class TriangleOpportunity:
 class SimpleTriangleDetector:
     """Simple triangular arbitrage detector using Binance WebSocket - Based on JavaScript logic"""
     
-    def __init__(self, min_profit_pct: float = 0.01):
+    def __init__(self, min_profit_pct: float = 0.5, exchange_id: str = 'binance'):
         self.min_profit_pct = min_profit_pct
+        self.exchange_id = exchange_id
+        self.exchange_config = self._get_exchange_config(exchange_id)
         self.pairs: List[Dict] = []
         self.sym_val_j: Dict[str, Dict[str, float]] = {}
         self.websocket = None
@@ -48,13 +50,22 @@ class SimpleTriangleDetector:
         self.opportunities_found = 0
         self.current_opportunities: List[TriangleOpportunity] = []
         
-        logger.info(f"🚀 Simple Triangle Detector initialized - Min Profit: {min_profit_pct}%")
+        logger.info(f"🚀 Simple Triangle Detector initialized for {self.exchange_config['name']}")
+        logger.info(f"   Exchange: {self.exchange_config['name']}")
+        logger.info(f"   API URL: {self.exchange_config['api_url']}")
+        logger.info(f"   WebSocket URL: {self.exchange_config['websocket_url']}")
+        logger.info(f"   Min Profit: {min_profit_pct}%")
+    
+    def _get_exchange_config(self, exchange_id: str) -> Dict[str, Any]:
+        """Get exchange configuration"""
+        from config.exchanges_config import SUPPORTED_EXCHANGES
+        return SUPPORTED_EXCHANGES.get(exchange_id, SUPPORTED_EXCHANGES['binance'])
     
     async def get_pairs(self):
         """Get trading pairs and build triangular paths - Exact JavaScript logic"""
         import aiohttp
         
-        logger.info("📡 Fetching Binance exchange info...")
+        logger.info("📡 Fetching exchange info...")
         
         async with aiohttp.ClientSession() as session:
             async with session.get('https://api.binance.com/api/v3/exchangeInfo') as response:
@@ -130,40 +141,118 @@ class SimpleTriangleDetector:
                     return False
     
     def process_data(self, data: str):
-        """Process WebSocket ticker data - EXACT JavaScript logic"""
+        """Process WebSocket data from the selected exchange"""
         try:
             data = json.loads(data)
             
-            # Handle subscription confirmation message
-            if isinstance(data, dict) and data.get('result') is None:
-                logger.info("WebSocket subscription confirmed")
-                return
+            # Process based on exchange format
+            if self.exchange_id == 'binance':
+                self._process_binance_data(data)
+            elif self.exchange_id == 'kucoin':
+                self._process_kucoin_data(data)
+            elif self.exchange_id == 'gate':
+                self._process_gate_data(data)
+            elif self.exchange_id == 'bybit':
+                self._process_bybit_data(data)
+            else:
+                # Fallback to Binance format
+                self._process_binance_data(data)
+                
+        except Exception as e:
+            # Only log debug info if it's a real error, not just data format issues
+            if "has no attribute 'get'" not in str(e):
+                logger.debug(f"Problematic data type: {type(data)}")
+                logger.debug(f"Data content: {str(data)[:200]}...")
+            logger.error(f"Error processing {self.exchange_config['name']} WebSocket data: {e}")
+    
+    def _process_binance_data(self, data):
+        """Process Binance WebSocket ticker data"""
+        if isinstance(data, list):
+            updates_processed = 0
+            for ticker in data:
+                if isinstance(ticker, dict):
+                    symbol = ticker.get('s', '')
+                    bid_price = ticker.get('b', 0)
+                    ask_price = ticker.get('a', 0)
+                    
+                    if symbol and bid_price and ask_price and symbol in self.sym_val_j:
+                        try:
+                            self.sym_val_j[symbol]['bidPrice'] = float(bid_price)
+                            self.sym_val_j[symbol]['askPrice'] = float(ask_price)
+                            updates_processed += 1
+                        except (ValueError, TypeError):
+                            continue
             
-            # Handle ticker array data
-            if isinstance(data, list):
+            if updates_processed >= 50:
+                self._calculate_opportunities()
+    
+    def _process_kucoin_data(self, data):
+        """Process KuCoin WebSocket ticker data"""
+        if data.get('type') == 'message' and data.get('topic') == '/market/ticker:all':
+            ticker_data = data.get('data', {})
+            symbol = ticker_data.get('symbol', '').replace('-', '')  # Convert BTC-USDT to BTCUSDT
+            
+            if symbol and symbol in self.sym_val_j:
+                try:
+                    self.sym_val_j[symbol]['bidPrice'] = float(ticker_data.get('buy', 0))
+                    self.sym_val_j[symbol]['askPrice'] = float(ticker_data.get('sell', 0))
+                    self._calculate_opportunities()
+                except (ValueError, TypeError):
+                    pass
+    
+    def _process_gate_data(self, data):
+        """Process Gate.io WebSocket ticker data"""
+        if data.get('method') == 'ticker.update':
+            params = data.get('params', [])
+            if len(params) >= 2:
+                symbol = params[0].replace('_', '')  # Convert BTC_USDT to BTCUSDT
+                ticker_data = params[1]
                 
-                # Update price data
-                for d in data:
-                    if isinstance(d, dict) and 's' in d:
-                        symbol = d.get('s')
-                        if symbol and symbol in self.sym_val_j:
-                            bid_price = d.get('b', 0)
-                            ask_price = d.get('a', 0)
-                            
-                            if bid_price and ask_price:
-                                try:
-                                    self.sym_val_j[symbol]['bidPrice'] = float(bid_price)
-                                    self.sym_val_j[symbol]['askPrice'] = float(ask_price)
-                                except (ValueError, TypeError):
-                                    continue
-                    else:
-                        # Skip non-dict items or items without symbol
-                        continue
+                if symbol and symbol in self.sym_val_j:
+                    try:
+                        # Gate.io ticker format: [change_percentage, last_price, quote_volume, base_volume, high_24h, low_24h, bid, ask]
+                        if len(ticker_data) >= 8:
+                            self.sym_val_j[symbol]['bidPrice'] = float(ticker_data[6])
+                            self.sym_val_j[symbol]['askPrice'] = float(ticker_data[7])
+                            self._calculate_opportunities()
+                    except (ValueError, TypeError, IndexError):
+                        pass
+    
+    def _process_bybit_data(self, data):
+        """Process Bybit WebSocket ticker data"""
+        if data.get('topic') == 'tickers.spot':
+            ticker_data = data.get('data', {})
+            symbol = ticker_data.get('symbol', '')  # Already in BTCUSDT format
+            
+            if symbol and symbol in self.sym_val_j:
+                try:
+                    self.sym_val_j[symbol]['bidPrice'] = float(ticker_data.get('bid1Price', 0))
+                    self.sym_val_j[symbol]['askPrice'] = float(ticker_data.get('ask1Price', 0))
+                    self._calculate_opportunities()
+                except (ValueError, TypeError):
+                    pass
+    
+    def _calculate_opportunities(self):
+        """Calculate arbitrage opportunities - EXACT JavaScript logic"""
+        try:
                 
-                # Calculate arbitrage opportunities
                 profitable_opportunities = []
                 
+                # Define valid currencies for the selected exchange
+                valid_currencies = self._get_valid_currencies_for_exchange()
+                
                 for pair_data in self.pairs:
+                    # CRITICAL: Filter out triangles with invalid currencies
+                    d1, d2, d3 = pair_data['d1'], pair_data['d2'], pair_data['d3']
+                    
+                    # Skip triangles with invalid currencies for this exchange
+                    if not all(currency in valid_currencies for currency in [d1, d2, d3]):
+                        continue
+                    
+                    # CRITICAL: Only process USDT-based triangles for profitability
+                    if d1 != 'USDT':
+                        continue
+                    
                     # Check if all prices are available
                     lv1_data = self.sym_val_j.get(pair_data['lv1'], {})
                     lv2_data = self.sym_val_j.get(pair_data['lv2'], {})
@@ -206,8 +295,9 @@ class SimpleTriangleDetector:
                                 pair_data['tpath'] = lv_str
                                 gross_profit_pct = (lv_calc - 1) * 100
                                 
-                                # Apply trading costs (0.3% total)
-                                net_profit_pct = gross_profit_pct - 0.3
+                                # Apply exchange-specific trading costs
+                                trading_costs = self._get_trading_costs_for_exchange()
+                                net_profit_pct = gross_profit_pct - trading_costs
                                 pair_data['value'] = round(net_profit_pct, 6)
                                 
                                 # Add to profitable opportunities if above threshold and realistic
@@ -226,6 +316,7 @@ class SimpleTriangleDetector:
                                         tpath=pair_data['tpath']
                                     )
                                     profitable_opportunities.append(opportunity)
+                                    self.opportunities_found += 1
                         except (ZeroDivisionError, OverflowError, ValueError):
                             continue
                 
@@ -236,42 +327,77 @@ class SimpleTriangleDetector:
                 self.current_opportunities = profitable_opportunities[:10]  # Top 10
                 
                 if profitable_opportunities:
-                    self.opportunities_found += len(profitable_opportunities)
-                    logger.info(f"💎 Found {len(profitable_opportunities)} REAL opportunities!")
-                    
-                    # Show top 5 opportunities
-                    for i, opp in enumerate(profitable_opportunities[:5]):
-                        logger.info(f"   {i+1}. {opp}")
-            # Handle single ticker object (not in array)
-            elif isinstance(data, dict) and 's' in data:
-                symbol = data.get('s')
-                if symbol and symbol in self.sym_val_j:
-                    bid_price = data.get('b', 0)
-                    ask_price = data.get('a', 0)
-                    
-                    if bid_price and ask_price:
-                        try:
-                            self.sym_val_j[symbol]['bidPrice'] = float(bid_price)
-                            self.sym_val_j[symbol]['askPrice'] = float(ask_price)
-                        except (ValueError, TypeError):
-                            pass
-            else:
-                # Handle other message types (like subscription confirmations)
-                logger.debug(f"Received non-array WebSocket message: {type(data)}")
+                    # Only log if opportunities changed significantly
+                    current_time = time.time()
+                    if not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 10:
+                        logger.info(f"💎 Found {len(profitable_opportunities)} profitable opportunities on {self.exchange_config['name']}!")
+                        for i, opp in enumerate(profitable_opportunities[:3]):
+                            logger.info(f"   {i+1}. {opp}")
+                        self._last_log_time = current_time
                 
         except Exception as e:
-            logger.error(f"Error processing WebSocket data: {e}")
-            # Only log debug info if it's a real error, not just data format issues
-            if "has no attribute 'get'" not in str(e):
-                logger.debug(f"Problematic data type: {type(data)}")
-                if hasattr(data, '__len__') and len(str(data)) < 200:
-                    logger.debug(f"Data content: {data}")
+            logger.error(f"Error calculating opportunities for {self.exchange_config['name']}: {e}")
+    
+    def _get_valid_currencies_for_exchange(self) -> Set[str]:
+        """Get valid currencies for the selected exchange"""
+        if self.exchange_id == 'gate':
+            return {
+                    'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                    'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                    'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                    'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                    'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                    'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                    'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                    'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
+                    'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
+                    'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+            }
+        elif self.exchange_id == 'kucoin':
+            return {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'KCS'  # KuCoin's native token
+            }
+        elif self.exchange_id == 'binance':
+            return {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP'
+            }
+        elif self.exchange_id == 'bybit':
+            return {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'BIT'  # Bybit's native token
+            }
+        else:
+            # Default to major currencies
+            return {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
+            }
+    
+    def _get_trading_costs_for_exchange(self) -> float:
+        """Get trading costs percentage for the selected exchange"""
+        if self.exchange_id == 'gate':
+            return 0.6  # 0.6% total costs (0.2% per trade × 3 trades)
+        elif self.exchange_id == 'kucoin':
+            return 0.3  # 0.3% total costs (0.1% per trade × 3 trades)
+        elif self.exchange_id == 'binance':
+            return 0.3  # 0.3% total costs (0.1% per trade × 3 trades)
+        elif self.exchange_id == 'bybit':
+            return 0.3  # 0.3% total costs (0.1% per trade × 3 trades)
+        else:
+            return 0.4  # Default 0.4% total costs
     
     async def start_websocket_stream(self):
-        """Start Binance WebSocket stream - EXACT JavaScript logic"""
-        websocket_url = "wss://stream.binance.com:9443/ws"
+        """Start WebSocket stream for the selected exchange"""
+        websocket_url = self.exchange_config['websocket_url']
         
-        logger.info("🌐 Connecting to Binance WebSocket stream...")
+        logger.info(f"🌐 Connecting to {self.exchange_config['name']} WebSocket...")
+        logger.info(f"   URL: {websocket_url}")
         
         max_retries = 5
         retry_count = 0
@@ -281,7 +407,7 @@ class SimpleTriangleDetector:
                 async with websockets.connect(websocket_url) as websocket:
                     self.websocket = websocket
                     self.running = True
-                    logger.info("✅ Connected to Binance WebSocket")
+                    logger.info(f"✅ Connected to {self.exchange_config['name']} WebSocket")
                     
                     # Subscribe to all ticker data
                     subscribe_message = {
@@ -296,6 +422,9 @@ class SimpleTriangleDetector:
                     # Reset retry count on successful connection
                     retry_count = 0
                     
+                    # Send exchange-specific subscription message
+                    await self._send_subscription_message(websocket)
+                    
                     # Process incoming messages
                     async for message in websocket:
                         try:
@@ -307,18 +436,74 @@ class SimpleTriangleDetector:
                             
             except Exception as e:
                 retry_count += 1
-                logger.error(f"WebSocket connection failed (attempt {retry_count}): {e}")
+                logger.error(f"{self.exchange_config['name']} WebSocket connection failed (attempt {retry_count}): {e}")
                 
                 if retry_count < max_retries:
                     wait_time = min(2 ** retry_count, 30)
                     logger.info(f"Retrying in {wait_time} seconds...")
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error("Max WebSocket retry attempts reached")
+                    logger.error(f"Max {self.exchange_config['name']} WebSocket retry attempts reached")
                     break
         
         self.running = False
-        logger.info("WebSocket stream ended")
+        logger.info(f"{self.exchange_config['name']} WebSocket stream ended")
+    
+    async def _send_subscription_message(self, websocket):
+        """Send exchange-specific subscription message"""
+        try:
+            if self.exchange_id == 'binance':
+                # Binance: Subscribe to all ticker data
+                subscribe_message = {
+                    "method": "SUBSCRIBE",
+                    "params": ["!ticker@arr"],
+                    "id": 121212131
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                logger.info("📡 Subscribed to Binance all ticker data stream")
+                
+            elif self.exchange_id == 'kucoin':
+                # KuCoin: Subscribe to all ticker data
+                subscribe_message = {
+                    "id": int(time.time() * 1000),
+                    "type": "subscribe",
+                    "topic": "/market/ticker:all",
+                    "response": True
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                logger.info("📡 Subscribed to KuCoin all ticker data stream")
+                
+            elif self.exchange_id == 'gate':
+                # Gate.io: Subscribe to all ticker data
+                subscribe_message = {
+                    "method": "ticker.subscribe",
+                    "params": [],
+                    "id": 12345
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                logger.info("📡 Subscribed to Gate.io all ticker data stream")
+                
+            elif self.exchange_id == 'bybit':
+                # Bybit: Subscribe to all ticker data
+                subscribe_message = {
+                    "op": "subscribe",
+                    "args": ["tickers.spot"]
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                logger.info("📡 Subscribed to Bybit all ticker data stream")
+            
+            else:
+                # Default to Binance format for unknown exchanges
+                subscribe_message = {
+                    "method": "SUBSCRIBE",
+                    "params": ["!ticker@arr"],
+                    "id": 121212131
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                logger.info(f"📡 Subscribed to {self.exchange_config['name']} ticker data (using Binance format)")
+                
+        except Exception as e:
+            logger.error(f"Error sending subscription message to {self.exchange_config['name']}: {e}")
     
     def get_current_opportunities(self) -> List[TriangleOpportunity]:
         """Get current profitable opportunities"""

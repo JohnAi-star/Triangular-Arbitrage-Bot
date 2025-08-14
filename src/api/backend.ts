@@ -23,6 +23,7 @@ export interface ArbitrageOpportunity {
   ui_display_only?: boolean;
   real_market_data?: boolean;
   working_bot_opportunity?: boolean;
+  balanceAvailable?: number;
 }
 
 export interface DetailedTradeLog {

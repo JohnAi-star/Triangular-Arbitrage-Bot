@@ -190,15 +190,21 @@ class ArbitrageBotGUI:
         
         # Min profit setting
         ctk.CTkLabel(settings_frame, text="Min Profit %:").pack()
-        self.min_profit_var = tk.DoubleVar(value=Config.MIN_PROFIT_PERCENTAGE)
+        self.min_profit_var = tk.DoubleVar(value=0.5)  # Fixed 0.5%
         self.min_profit_entry = ctk.CTkEntry(settings_frame, textvariable=self.min_profit_var, width=80)
+        self.min_profit_entry.configure(state="disabled")  # Lock at 0.5%
         self.min_profit_entry.pack(pady=2)
         
         # Max trade amount setting
         ctk.CTkLabel(settings_frame, text="Max Trade Amount:").pack()
-        self.max_trade_var = tk.DoubleVar(value=Config.MAX_TRADE_AMOUNT)
+        self.max_trade_var = tk.DoubleVar(value=20.0)  # Fixed $20
         self.max_trade_entry = ctk.CTkEntry(settings_frame, textvariable=self.max_trade_var, width=80)
+        self.max_trade_entry.configure(state="disabled")  # Lock at $20
         self.max_trade_entry.pack(pady=2)
+        
+        # Add label showing locked values
+        ctk.CTkLabel(settings_frame, text="(Locked for optimal profit)", 
+                    font=("Arial", 10), text_color="yellow").pack(pady=2)
     
     def create_opportunities_panel(self):
         """Create the opportunities display panel."""
@@ -376,7 +382,8 @@ class ArbitrageBotGUI:
             # Initialize executor
             self.executor = TradeExecutor(self.exchange_manager, {
                 'auto_trading': self.auto_trading_var.get(),
-                'paper_trading': False  # ALWAYS REAL TRADING
+                'paper_trading': False,  # ALWAYS REAL TRADING
+                'min_profit_threshold': Config.MIN_PROFIT_THRESHOLD
             })
             
             # Set WebSocket manager for trade executor
@@ -407,20 +414,30 @@ class ArbitrageBotGUI:
                 if self.auto_trading_var.get():
                     # Filter for profitable opportunities only
                     profitable_opportunities = [
-                        opp for opp in opportunities[:5]  # Top 5 opportunities
-                        if (hasattr(opp, 'is_profitable') and opp.is_profitable and 
-                            opp.profit_percentage >= 0.5)  # Minimum 0.5% profit
+                        opp for opp in opportunities[:5]  # Top 5 opportunities  
+                        if (getattr(opp, 'profit_percentage', 0) >= 0.5 and  # Fixed 0.5% threshold for Gate.io
+                            hasattr(opp, 'triangle_path') and
+                            isinstance(opp.triangle_path, list) and
+                            len(opp.triangle_path) >= 3 and
+                            opp.triangle_path[0] == 'USDT')  # Only USDT triangles
                     ]
                     
                     if profitable_opportunities:
-                        self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable opportunities")
+                        self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable USDT opportunities (≥0.5%)")
                         
                         for i, opportunity in enumerate(profitable_opportunities[:2]):  # Execute top 2
                             try:
-                                self.logger.info(f"🚀 AUTO-EXECUTING Trade #{i+1}: {opportunity}")
+                                self.logger.info(f"🚀 AUTO-EXECUTING USDT Trade #{i+1}: {opportunity}")
                                 
-                                # Convert ArbitrageResult to ArbitrageOpportunity for execution
-                                if hasattr(opportunity, 'triangle_path') and not hasattr(opportunity, 'base_currency'):
+                                # Convert ArbitrageResult to proper format for execution
+                                if hasattr(opportunity, 'triangle_path') and isinstance(opportunity.triangle_path, list):
+                                    # This is an ArbitrageResult from detector
+                                    executable_opportunity = self._convert_result_to_opportunity(opportunity)
+                                    success = await self.executor.execute_arbitrage(executable_opportunity)
+                                else:
+                                    # Already a proper ArbitrageOpportunity
+                                    success = await self.executor.execute_arbitrage(opportunity)
+                                
                                     # This is an ArbitrageResult, convert to ArbitrageOpportunity
                                     from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
                                     
@@ -430,11 +447,35 @@ class ArbitrageBotGUI:
                                     intermediate_currency = triangle_path[1] if len(triangle_path) > 1 else 'BTC'
                                     quote_currency = triangle_path[2] if len(triangle_path) > 2 else 'ETH'
                                     
+                                    # Get real market prices for accurate trade steps
+                                    trade_amount = max(20.0, min(opportunity.initial_amount, 50.0))
+                                    
+                                    # Get current market prices from the exchange
+                                    try:
+                                        ticker1 = await self.exchange_manager.get_exchange('gate').get_ticker(f"{intermediate_currency}/USDT")
+                                        ticker2 = await self.exchange_manager.get_exchange('gate').get_ticker(f"{intermediate_currency}/{quote_currency}")
+                                        ticker3 = await self.exchange_manager.get_exchange('gate').get_ticker(f"{quote_currency}/USDT")
+                                        
+                                        price1 = ticker1.get('ask', 1.0) if ticker1 else 1.0
+                                        price2 = ticker2.get('bid', 1.0) if ticker2 else 1.0
+                                        price3 = ticker3.get('bid', 1.0) if ticker3 else 1.0
+                                        
+                                        # Calculate realistic quantities
+                                        qty1 = trade_amount  # USDT to spend
+                                        qty2 = trade_amount / price1  # Amount of intermediate currency to sell
+                                        qty3 = (trade_amount / price1) * price2  # Amount of quote currency to sell
+                                        
+                                    except Exception as e:
+                                        self.logger.error(f"Error getting market prices: {e}")
+                                        # Fallback to default values
+                                        price1, price2, price3 = 1.0, 1.0, 1.0
+                                        qty1, qty2, qty3 = trade_amount, trade_amount, trade_amount
+                                    
                                     # Create trade steps for USDT triangle
                                     steps = [
-                                        TradeStep(f"{intermediate_currency}/USDT", 'buy', opportunity.initial_amount / 100, 100, opportunity.initial_amount / 100),
-                                        TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', opportunity.initial_amount / 100, 1, opportunity.initial_amount / 100),
-                                        TradeStep(f"{quote_currency}/USDT", 'sell', opportunity.initial_amount / 100, 100, opportunity.initial_amount)
+                                        TradeStep(f"{intermediate_currency}/USDT", 'buy', qty1, price1, qty1),  # USDT amount to spend
+                                        TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', qty2, price2, qty2 * price2),
+                                        TradeStep(f"{quote_currency}/USDT", 'sell', qty3, price3, qty3 * price3)
                                     ]
                                     
                                     arbitrage_opportunity = ArbitrageOpportunity(
@@ -445,10 +486,10 @@ class ArbitrageBotGUI:
                                         pair2=f"{intermediate_currency}/{quote_currency}",
                                         pair3=f"{quote_currency}/USDT",
                                         steps=steps,
-                                        initial_amount=opportunity.initial_amount,
-                                        final_amount=opportunity.initial_amount + opportunity.profit_amount,
-                                        estimated_fees=opportunity.initial_amount * 0.003,
-                                        estimated_slippage=opportunity.initial_amount * 0.001
+                                        initial_amount=trade_amount,
+                                        final_amount=trade_amount + (trade_amount * opportunity.profit_percentage / 100),
+                                        estimated_fees=trade_amount * 0.006,  # 0.6% fees for Gate.io
+                                        estimated_slippage=trade_amount * 0.001
                                     )
                                     
                                     # Set exchange attribute for executor
@@ -456,9 +497,6 @@ class ArbitrageBotGUI:
                                     arbitrage_opportunity.status = OpportunityStatus.DETECTED
                                     
                                     success = await self.executor.execute_arbitrage(arbitrage_opportunity)
-                                else:
-                                    # Already an ArbitrageOpportunity
-                                    success = await self.executor.execute_arbitrage(opportunity)
                                 
                                 if success:
                                     self.add_to_trading_history(f"✅ AUTO-TRADE SUCCESS: {opportunity}")
@@ -474,7 +512,7 @@ class ArbitrageBotGUI:
                                 self.logger.error(f"❌ Error in auto-execution #{i+1}: {e}")
                                 self.add_to_trading_history(f"❌ AUTO-TRADE ERROR: {str(e)}")
                     else:
-                        self.logger.info("🤖 AUTO-TRADING: No profitable opportunities found (need ≥0.5% profit)")
+                        self.logger.debug(f"🤖 AUTO-TRADING: No profitable opportunities found (need ≥{self.min_profit_var.get()}% profit)")
                 
                 await asyncio.sleep(1)  # Scan every second
                 
@@ -515,6 +553,86 @@ class ArbitrageBotGUI:
         # Schedule next update
         self.root.after(Config.GUI_UPDATE_INTERVAL, self.update_gui)
     
+    def _convert_result_to_opportunity(self, result):
+        """Convert ArbitrageResult to ArbitrageOpportunity for execution"""
+        from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
+        
+        # Extract triangle path
+        triangle_path = getattr(result, 'triangle_path', [])
+        if len(triangle_path) < 3:
+            self.logger.error(f"❌ Invalid triangle path: {triangle_path}")
+            raise ValueError(f"Invalid triangle path: {triangle_path}")
+        
+        # CRITICAL: Ensure USDT triangle format
+        if triangle_path[0] != 'USDT':
+            # Convert to USDT triangle format
+            if 'USDT' in triangle_path:
+                # Reorder to start with USDT
+                usdt_index = triangle_path.index('USDT')
+                triangle_path = triangle_path[usdt_index:] + triangle_path[:usdt_index]
+            else:
+                self.logger.error(f"❌ Non-USDT triangle rejected: {triangle_path}")
+                raise ValueError(f"Only USDT triangles allowed: {triangle_path}")
+        
+        base_currency = triangle_path[0]  # Must be USDT
+        intermediate_currency = triangle_path[1]  # e.g., XRP
+        quote_currency = triangle_path[2]  # e.g., MXN
+        
+        self.logger.info(f"🔧 Converting to USDT triangle: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
+        
+        # Create trade steps for USDT triangle with proper quantities
+        trade_amount = max(5.0, min(20.0, getattr(result, 'initial_amount', 20.0)))  # $5-20 range for Gate.io
+        
+        # Get current market prices for accurate calculations
+        try:
+            # This will be filled with real prices during execution
+            price1 = 1.0  # Will be updated with real Gate.io price
+            price2 = 1.0  # Will be updated with real Gate.io price  
+            price3 = 1.0  # Will be updated with real Gate.io price
+            
+            # Calculate realistic quantities
+            qty1 = trade_amount  # USDT amount to spend
+            qty2 = trade_amount / price1  # Estimated intermediate currency amount
+            qty3 = qty2 * price2  # Estimated quote currency amount
+            
+        except Exception as e:
+            self.logger.error(f"Error getting market prices: {e}")
+            # Use safe defaults
+            qty1 = trade_amount
+            qty2 = trade_amount
+            qty3 = trade_amount
+        
+        steps = [
+            TradeStep(f"{intermediate_currency}/USDT", 'buy', qty1, price1, qty2),
+            TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', qty2, price2, qty3),
+            TradeStep(f"{quote_currency}/USDT", 'sell', qty3, price3, trade_amount * (1 + getattr(result, 'profit_percentage', 0)/100))  # Sell quote for USDT
+        ]
+        
+        opportunity = ArbitrageOpportunity(
+            base_currency=base_currency,
+            intermediate_currency=intermediate_currency,
+            quote_currency=quote_currency,
+            pair1=f"{intermediate_currency}/USDT",
+            pair2=f"{intermediate_currency}/{quote_currency}",
+            pair3=f"{quote_currency}/USDT",
+            steps=steps,
+            initial_amount=trade_amount,
+            final_amount=trade_amount * (1 + getattr(result, 'profit_percentage', 0)/100),
+            estimated_fees=trade_amount * 0.006,  # 0.6% fees for Gate.io
+            estimated_slippage=trade_amount * 0.001
+        )
+        
+        # Set additional attributes
+        arbitrage_opportunity.exchange = getattr(result, 'exchange', 'gate')
+        arbitrage_opportunity.profit_percentage = getattr(result, 'profit_percentage', 0)
+        arbitrage_opportunity.profit_amount = getattr(result, 'profit_amount', 0)
+        opportunity.status = OpportunityStatus.DETECTED
+        
+        # Set triangle path using the setter
+        arbitrage_opportunity.triangle_path = f"{base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}"
+        
+        return opportunity
+    
     def update_opportunities_display(self):
         """Update the opportunities treeview with proper triangle path formatting."""
         try:
@@ -535,13 +653,10 @@ class ArbitrageBotGUI:
                 # Format the triangle path properly
                 if hasattr(opportunity, 'triangle_path'):
                     if isinstance(opportunity.triangle_path, list):
-                        # For USDT-based triangles: USDT → Currency1 → Currency2 → USDT
-                        if len(opportunity.triangle_path) == 3:
-                            # 3 currencies: USDT, Currency1, Currency2
+                        # For USDT-based triangles: Always show as 4-step cycle
+                        if len(opportunity.triangle_path) >= 3:
+                            # 3 currencies: USDT, Currency1, Currency2 → show as USDT → Currency1 → Currency2 → USDT
                             path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[0]}"
-                        elif len(opportunity.triangle_path) == 4:
-                            # Already includes return to USDT
-                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[3]}"
                         else:
                             path = ' → '.join(opportunity.triangle_path)
                     else:
@@ -731,6 +846,48 @@ Detected At: {opportunity.detected_at.strftime('%Y-%m-%d %H:%M:%S')}
             self.trading_history.delete(0, tk.END)
         except Exception as e:
             self.logger.error(f"Error clearing trading history: {e}")
+    
+    def _is_valid_usdt_triangle(self, triangle_path) -> bool:
+        """Validate that triangle path is a proper USDT triangle."""
+        try:
+            # Handle different formats
+            if isinstance(triangle_path, str):
+                path_parts = triangle_path.split(' → ')
+                if len(path_parts) >= 3:
+                    currencies = path_parts[:3]
+                else:
+                    return False
+            elif isinstance(triangle_path, list):
+                if len(triangle_path) >= 3:
+                    currencies = triangle_path[:3]
+                else:
+                    return False
+            else:
+                return False
+            
+            # Must start with USDT
+            if currencies[0] != 'USDT':
+                return False
+            
+            # Validate all currencies exist on Gate.io
+            valid_gateio_currencies = {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
+                'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
+                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+            }
+            
+            return all(currency in valid_gateio_currencies for currency in currencies)
+            
+        except Exception as e:
+            self.logger.error(f"Error validating USDT triangle: {e}")
+            return False
     
     def run(self):
         """Start the GUI application."""

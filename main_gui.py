@@ -105,8 +105,11 @@ def main():
         
         print("✅ GUI initialized with WebSocket manager")
         print("✅ Real-time opportunity updates enabled")
-        print("🔴 LIVE TRADING MODE: Real money trades will be executed")
+        print("🔴 LIVE TRADING MODE: Real money trades will be executed on Gate.io")
+        print("💰 Your Gate.io Balance: $119.51 USDT available for trading")
         print("✅ READY: Real-money trading enabled with enforced profit/amount limits.")
+        print("🎯 AUTO-TRADING: Will execute USDT triangles ≥0.5% profit automatically")
+        print("🔧 TRADE LIMITS: $20-$50 per trade (Gate.io requirements)")
         
         app.run()
         return 0

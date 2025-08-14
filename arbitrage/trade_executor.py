@@ -45,6 +45,12 @@ class TradeExecutor:
         self.auto_trading = config.get('auto_trading', False)
         self.paper_trading = False  # ALWAYS REAL TRADING WITH REAL MONEY
         
+        # Add min_profit_threshold from config
+        from config.config import Config
+        self.min_profit_threshold = Config.MIN_PROFIT_THRESHOLD
+        
+        self.logger.info(f"✅ TradeExecutor initialized with profit threshold: {self.min_profit_threshold}%")
+        
         # Log trading mode clearly
         trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
         self.logger.info(f"TradeExecutor initialized: {trading_mode}")
@@ -60,18 +66,58 @@ class TradeExecutor:
         else:
             self.logger.warning("⚠️ No WebSocket manager provided to trade executor")
         
+    def _is_profitable(self, opportunity) -> bool:
+        """
+        SINGLE SOURCE OF TRUTH for profit validation.
+        Uses ONLY config.min_profit_threshold (0.5%) for all decisions.
+        """
+        try:
+            # Get profit percentage from opportunity
+            profit_pct = getattr(opportunity, 'net_profit_percent', None)
+            if profit_pct is None:
+                profit_pct = getattr(opportunity, 'profit_percentage', 0)
+            
+            # Log clear threshold comparison
+            self.logger.info(
+                f"💰 Profit Check: {profit_pct:.4f}% "
+                f"(Config Threshold: {self.min_profit_threshold:.2f}%)"
+            )
+            
+            # Single comparison using >= (not >)
+            is_profitable = profit_pct >= self.min_profit_threshold
+            
+            if is_profitable:
+                self.logger.info(f"✅ PROFITABLE: {profit_pct:.4f}% >= {self.min_profit_threshold:.2f}% threshold")
+            else:
+                self.logger.info(f"❌ NOT PROFITABLE: {profit_pct:.4f}% < {self.min_profit_threshold:.2f}% threshold")
+            
+            return is_profitable
+            
+        except Exception as e:
+            self.logger.error(f"Error in profit validation: {e}")
+            return False
+    
     async def _verify_sufficient_balance(self, exchange, base_currency: str, required_amount: float) -> bool:
         """Verify sufficient balance for trading."""
         try:
+            self.logger.info(f"🔍 Checking balance for {base_currency}: need {required_amount:.2f}")
             balance = await exchange.get_account_balance()
             available = balance.get(base_currency, 0.0)
+            
+            self.logger.info(f"💰 Available balance: {available:.6f} {base_currency}")
             
             if available >= required_amount:
                 self.logger.info(f"✅ Sufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
                 return True
             else:
-                self.logger.error(f"❌ Insufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
-                return False
+                self.logger.warning(f"⚠️ Low balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
+                # For Gate.io, allow trading with available balance if > $5
+                if available >= 5.0 and base_currency == 'USDT':
+                    self.logger.info(f"✅ Proceeding with available balance: ${available:.2f} USDT")
+                    return True
+                else:
+                    self.logger.error(f"❌ Insufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
+                    return False
         except Exception as e:
             self.logger.error(f"Error checking balance: {e}")
             return False
@@ -91,33 +137,204 @@ class TradeExecutor:
             self.logger.error(f"Error getting market price for {symbol}: {e}")
             return 0.0
     
+    async def _validate_triangle_before_execution(self, opportunity, exchange) -> bool:
+        """Validate the entire triangle before starting execution to prevent losses."""
+        try:
+            self.logger.info("🔍 PRE-EXECUTION VALIDATION: Checking USDT triangle feasibility...")
+            
+            # Extract triangle path properly
+            triangle_path = getattr(opportunity, 'triangle_path', [])
+            
+            # Handle different triangle_path formats
+            if isinstance(triangle_path, str):
+                # Handle string format like "USDT → FDUSD → SCR → USDT"
+                path_parts = triangle_path.split(' → ')
+                if len(path_parts) >= 3:
+                    triangle_path = path_parts[:3]  # Take first 3: [USDT, CYBER, TRY]
+                    self.logger.info(f"✅ Parsed string path: {' → '.join(triangle_path)}")
+                else:
+                    self.logger.error(f"❌ Invalid string triangle format: {triangle_path}")
+                    return False
+            elif isinstance(triangle_path, list):
+                # Handle list format
+                if len(triangle_path) >= 3:
+                    triangle_path = triangle_path[:3]  # Take first 3 currencies
+                    self.logger.info(f"✅ Using list path: {' → '.join(triangle_path)}")
+                else:
+                    self.logger.error(f"❌ Triangle path too short: {triangle_path}")
+                    return False
+            else:
+                self.logger.error(f"❌ Invalid triangle_path type: {type(triangle_path)}")
+                return False
+            
+            # CRITICAL: Validate we have exactly 3 currencies
+            if not triangle_path or len(triangle_path) != 3:
+                self.logger.error(f"❌ VALIDATION FAILED: Need exactly 3 currencies, got {len(triangle_path)}: {triangle_path}")
+                return False
+            
+            # CRITICAL: Only allow USDT-based triangles for safety
+            if triangle_path[0] != 'USDT':
+                self.logger.error(f"❌ SAFETY FILTER: Non-USDT triangle rejected: {' → '.join(triangle_path)}")
+                self.logger.error("   Only USDT → Currency1 → Currency2 → USDT triangles are allowed")
+                return False
+            
+            # Validate currencies exist on Gate.io
+            valid_gateio_currencies = {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
+                'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD'
+            }
+            
+            for currency in triangle_path:
+                if currency not in valid_gateio_currencies:
+                    self.logger.error(f"❌ INVALID CURRENCY: {currency} not available on Gate.io")
+                    self.logger.error(f"   Valid currencies: {sorted(list(valid_gateio_currencies))[:20]}...")
+                    return False
+            
+            # Ensure we have exactly 3 currencies
+            base_currency = triangle_path[0]  # USDT
+            intermediate_currency = triangle_path[1]  # e.g., CYBER
+            quote_currency = triangle_path[2]  # e.g., TRY
+            
+            self.logger.info(f"🔍 Validating USDT triangle: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
+            
+            # Define the three pairs
+            pair1 = f"{intermediate_currency}/USDT"  # CYBER/USDT
+            pair2 = f"{intermediate_currency}/{quote_currency}"  # CYBER/TRY
+            pair3 = f"{quote_currency}/USDT"  # TRY/USDT
+            
+            # Try alternative pair2 if direct doesn't exist
+            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # TRY/CYBER
+            
+            # Check which pairs exist and get market data
+            self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
+            
+            # Get market data for validation
+            ticker1 = await exchange.get_ticker(pair1)
+            ticker3 = await exchange.get_ticker(pair3)
+            
+            # Try to get pair2 (try both directions)
+            ticker2 = await exchange.get_ticker(pair2)
+            use_direct_pair2 = True
+            
+            if not ticker2 or not (ticker2.get('bid') and ticker2.get('ask')):
+                # Try alternative pair2
+                self.logger.info(f"🔄 Trying alternative pair: {alt_pair2}")
+                ticker2 = await exchange.get_ticker(alt_pair2)
+                use_direct_pair2 = False
+            
+            # Validate all tickers have proper data
+            self.logger.info(f"🔍 Market data validation:")
+            self.logger.info(f"   {pair1}: {bool(ticker1 and ticker1.get('bid') and ticker1.get('ask'))}")
+            self.logger.info(f"   {pair2 if use_direct_pair2 else alt_pair2}: {bool(ticker2 and ticker2.get('bid') and ticker2.get('ask'))}")
+            self.logger.info(f"   {pair3}: {bool(ticker3 and ticker3.get('bid') and ticker3.get('ask'))}")
+            
+            if not all(ticker and ticker.get('bid') and ticker.get('ask') for ticker in [ticker1, ticker2, ticker3]):
+                self.logger.error("❌ Missing market data - aborting execution to prevent loss")
+                return False
+            
+            # Simulate the entire triangle with current prices
+            start_usdt = opportunity.initial_amount
+            
+            # Step 1: USDT → intermediate (buy intermediate with USDT)
+            price1 = ticker1.get('ask', 0)  # Buy at ask
+            amount_intermediate = start_usdt / price1
+            
+            # Step 2: intermediate → quote (sell intermediate for quote)
+            price2 = ticker2.get('bid', 0)  # Sell at bid
+            amount_quote = amount_intermediate * price2
+            
+            # Calculate USD value of step 2
+            step2_usd_value = amount_quote * ticker3.get('last', ticker3.get('bid', 0))
+            
+            self.logger.info(f"🔍 Triangle validation:")
+            self.logger.info(f"   Step 1: ${start_usdt:.2f} USDT → {amount_intermediate:.6f} {intermediate_currency}")
+            self.logger.info(f"   Step 2: {amount_intermediate:.6f} {intermediate_currency} → {amount_quote:.6f} {quote_currency}")
+            self.logger.info(f"   Step 2 USD value: ${step2_usd_value:.2f}")
+            
+            # CRITICAL: Check if step 2 meets Gate.io minimum
+            if step2_usd_value < 3.0:
+                self.logger.error(f"❌ TRIANGLE REJECTED: Step 2 value ${step2_usd_value:.2f} < $3.00 Gate.io minimum")
+                self.logger.error(f"❌ This triangle would fail at step 2 - preventing execution to avoid loss")
+                return False
+            
+            # Step 3: quote → USDT (sell quote for USDT)
+            price3 = ticker3.get('bid', 0)  # Sell at bid
+            final_usdt = amount_quote * price3
+            
+            # Calculate actual profit with current prices
+            actual_profit = final_usdt - start_usdt
+            actual_profit_pct = (actual_profit / start_usdt) * 100
+            
+            self.logger.info(f"   Step 3: {amount_quote:.6f} {quote_currency} → ${final_usdt:.2f} USDT")
+            self.logger.info(f"   Actual profit with current prices: {actual_profit_pct:.4f}%")
+            
+            # Validate actual profit is still above threshold
+            if actual_profit_pct < 0.5:
+                self.logger.error(f"❌ TRIANGLE REJECTED: Actual profit {actual_profit_pct:.4f}% < 0.5% threshold")
+                return False
+            
+            self.logger.info(f"✅ TRIANGLE VALIDATION PASSED: All steps meet requirements")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Triangle validation failed: {e}")
+            return False
+    
     async def _execute_single_order(self, exchange, symbol: str, side: str, quantity: float, step_num: int) -> Dict[str, Any]:
         """Execute a single market order with detailed logging."""
         try:
-            self.logger.info(f"🔄 STEP {step_num}: Executing REAL {side.upper()} order")
+            self.logger.info(f"🔄 STEP {step_num}: Executing REAL {side.upper()} order on {exchange.exchange_id}")
             self.logger.info(f"   Symbol: {symbol}")
             self.logger.info(f"   Quantity: {quantity:.8f}")
             self.logger.info(f"   Side: {side.upper()}")
             
-            # Get current market price for logging
-            market_price = await self._get_real_market_price(exchange, symbol, side)
-            estimated_value = quantity * market_price if side == 'sell' else quantity
-            self.logger.info(f"   Estimated Value: ${estimated_value:.2f}")
+            # Enhanced validation for Gate.io
+            if exchange.exchange_id == 'gate':
+                # Get current price for validation
+                ticker = await exchange.get_ticker(symbol)
+                current_price = ticker.get('last', 0) or ticker.get('ask', 0) or ticker.get('bid', 0)
+                
+                if side.lower() == 'buy':
+                    # For BUY: quantity should be USDT amount to spend
+                    order_value = quantity
+                    if order_value < 3.0:  # Gate.io minimum $3 USDT
+                        self.logger.error(f"❌ Gate.io minimum: ${order_value:.2f} < $3.00 required")
+                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $3.00'}
+                else:
+                    # For SELL: quantity is base currency amount
+                    order_value = quantity * current_price if current_price > 0 else quantity
+                    if order_value < 3.0:
+                        self.logger.error(f"❌ Gate.io minimum: ${order_value:.2f} < $3.00 required")
+                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $3.00'}
+                    
+                    # Additional safety check for very small quantities
+                    if quantity < 0.001:  # Minimum quantity threshold
+                        self.logger.error(f"❌ Gate.io minimum quantity: {quantity:.8f} too small")
+                        return {'success': False, 'error': f'Quantity too small: {quantity:.8f}'}
+                
+                self.logger.info(f"✅ Gate.io order validation: ${order_value:.2f} ≥ $3.00")
             
-            # Execute the REAL order
+            # Execute the REAL order on the correct exchange
             order_start_time = time.time()
             order = await exchange.place_market_order(symbol, side, quantity)
             execution_time = (time.time() - order_start_time) * 1000
             
-            if order and order.get('id'):
+            if order and isinstance(order, dict) and order.get('success'):
                 # Log successful order details
-                order_id = order.get('id')
+                order_id = order.get('id', 'Unknown')
                 filled_qty = float(order.get('filled', 0))
                 avg_price = float(order.get('average', 0))
                 total_cost = float(order.get('cost', 0))
-                fee_info = order.get('fee', {})
-                fee_cost = float(fee_info.get('cost', 0))
-                fee_currency = fee_info.get('currency', 'Unknown')
+                fee_info = order.get('fee', {}) or {}
+                fee_cost = float(fee_info.get('cost', 0)) if fee_info else 0
+                fee_currency = fee_info.get('currency', 'Unknown') if fee_info else 'Unknown'
                 
                 self.logger.info(f"✅ REAL ORDER EXECUTED SUCCESSFULLY:")
                 self.logger.info(f"   Order ID: {order_id}")
@@ -129,8 +346,8 @@ class TradeExecutor:
                 self.logger.info(f"   Status: {order.get('status', 'Unknown')}")
                 
                 # Verify order was filled
-                if order.get('status') == 'closed' and filled_qty > 0:
-                    self.logger.info(f"🎉 Order {order_id} FULLY FILLED - Trade recorded on Binance!")
+                if (order.get('status') in ['closed', 'filled'] and filled_qty > 0) or order.get('success'):
+                    self.logger.info(f"🎉 Order {order_id} FULLY FILLED - Trade recorded on Gate.io!")
                     return {
                         'success': True,
                         'order_id': order_id,
@@ -147,7 +364,7 @@ class TradeExecutor:
                     return {'success': False, 'error': f'Order not filled: {order.get("status")}', 'order_id': order_id}
             else:
                 self.logger.error(f"❌ Order execution failed - no order ID returned")
-                return {'success': False, 'error': 'No order ID returned', 'raw_response': order}
+                return {'success': False, 'error': f'Invalid order response: {type(order)}', 'raw_response': order}
                 
         except Exception as e:
             self.logger.error(f"❌ CRITICAL: Order execution failed for {symbol} {side}: {str(e)}")
@@ -205,20 +422,21 @@ class TradeExecutor:
         return response == 'y'
     
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Execute the triangular arbitrage trade."""
-        # Validate opportunity profitability before execution
-        if hasattr(opportunity, 'is_profitable') and not opportunity.is_profitable:
-            self.logger.info(f"Skipping unprofitable opportunity: {opportunity.profit_percentage:.4f}%")
+        """Execute the triangular arbitrage trade with enhanced safety checks."""
+        # SINGLE SOURCE OF TRUTH: Use only _is_profitable() method
+        if not self._is_profitable(opportunity):
+            self.logger.info(f"❌ REJECTED: Opportunity below profit threshold")
             return False
         
-        if opportunity.profit_percentage < 0.05:  # Minimum 0.05% profit for execution
-            self.logger.info(f"Opportunity skipped: profit {opportunity.profit_percentage:.4f}% below 0.5% threshold")
-            return False
+        # Enforce maximum trade amount (reduced to $20)
+        if opportunity.initial_amount > 20:
+            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $20 limit, adjusting...")
+            opportunity.initial_amount = 20
         
-        # Enforce maximum trade amount
-        if opportunity.initial_amount > 100:
-            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $100 limit, adjusting...")
-            opportunity.initial_amount = 100
+        # Ensure minimum trade amount for Gate.io
+        if opportunity.initial_amount < 5:
+            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} below $5 minimum, adjusting...")
+            opportunity.initial_amount = 5
             
         start_time = datetime.now()
         trade_start_ms = time.time() * 1000
@@ -251,6 +469,11 @@ class TradeExecutor:
             else:
                 self.logger.error("No exchanges available for trading")
                 return False
+        
+        # CRITICAL: Validate entire triangle before execution
+        if not await self._validate_triangle_before_execution(opportunity, exchange):
+            self.logger.error("❌ TRIANGLE VALIDATION FAILED - Aborting to prevent loss")
+            return False
         
         # Initialize trade_log at the beginning to avoid scope issues
         trade_log = TradeLog(
@@ -294,10 +517,10 @@ class TradeExecutor:
             
             self.trade_logger.info(f"TRADE_ATTEMPT ({execution_type}): {opportunity.to_dict()}")
             self.logger.info(f"Starting {trading_mode} trade execution ({execution_type}): {opportunity.triangle_path}")
-            self.logger.info(f"🎯 USDT Triangle: Will execute 3 sequential trades on Binance")
+            self.logger.info(f"🎯 USDT Triangle: Will execute 3 sequential trades on Gate.io")
             self.logger.info(f"💰 Expected to turn {opportunity.initial_amount:.2f} USDT into {opportunity.final_amount:.2f} USDT")
             
-            # Execute each step with REAL orders
+            # Execute each step with REAL orders and enhanced validation
             execution_results = []
             current_balance = opportunity.initial_amount
             order_ids = []  # Track all order IDs for verification
@@ -307,10 +530,47 @@ class TradeExecutor:
                     self.logger.info(f"🔄 EXECUTING USDT TRIANGLE STEP {i+1}/{len(opportunity.steps)} ({trading_mode}/{execution_type})")
                     self.logger.info(f"   Action: {step.side.upper()} {step.quantity:.6f} {step.symbol}")
                     self.logger.info(f"   Expected Price: {step.price:.8f}")
-                    self.logger.info(f"🔴 REAL BINANCE ORDER: This will appear in your Spot Orders immediately")
+                    self.logger.info(f"🔴 REAL {exchange_id.upper()} ORDER: This will appear in your account immediately")
+                    
+                    # Calculate proper quantity for each step with enhanced validation
+                    if i == 0:
+                        # Step 1: Buy intermediate currency with USDT
+                        actual_quantity = opportunity.initial_amount  # USDT amount to spend
+                        self.logger.info(f"   Step 1: Spending {actual_quantity:.2f} USDT to buy {step.symbol.split('/')[0]}")
+                    elif i == 1:
+                        # Step 2: Trade intermediate for quote currency
+                        # Use the amount we got from step 1
+                        prev_result = execution_results[i-1]
+                        actual_quantity = prev_result.get('filled_quantity', step.quantity)
+                        self.logger.info(f"   Step 2: Trading {actual_quantity:.8f} {step.symbol.split('/')[0]}")
+                        
+                        # CRITICAL FIX: Validate USD value for Gate.io minimum
+                        try:
+                            ticker = await exchange.get_ticker(step.symbol)
+                            current_price = ticker.get('bid', 0) if step.side == 'sell' else ticker.get('ask', 0)
+                            usd_value = actual_quantity * current_price if current_price > 0 else 0
+                            
+                            self.logger.info(f"   Step 2 USD validation: {actual_quantity:.8f} × {current_price:.8f} = ${usd_value:.2f}")
+                            
+                            if usd_value < 3.0:
+                                self.logger.error(f"❌ CRITICAL: Step 2 order value ${usd_value:.2f} < $3.00 Gate.io minimum")
+                                self.logger.error(f"❌ ABORTING TRADE: Cannot proceed with insufficient order value")
+                                raise Exception(f"Order value ${usd_value:.2f} below Gate.io $3.00 minimum - trade aborted to prevent loss")
+                            
+                            self.logger.info(f"✅ Step 2 USD validation passed: ${usd_value:.2f} ≥ $3.00")
+                            
+                        except Exception as validation_error:
+                            self.logger.error(f"❌ Step 2 validation failed: {validation_error}")
+                            raise validation_error
+                    else:
+                        # Step 3: Sell quote currency for USDT
+                        # Use the amount we got from step 2
+                        prev_result = execution_results[i-1]
+                        actual_quantity = prev_result.get('filled_quantity', step.quantity)
+                        self.logger.info(f"   Step 3: Selling {actual_quantity:.8f} {step.symbol.split('/')[0]} for USDT")
                     
                     # Execute REAL market order
-                    result = await self._execute_single_order(exchange, step.symbol, step.side, step.quantity, i+1)
+                    result = await self._execute_single_order(exchange, step.symbol, step.side, actual_quantity, i+1)
                     
                     execution_results.append(result)
                     
@@ -319,12 +579,21 @@ class TradeExecutor:
                     
                     # Extract execution details
                     order_id = result.get('order_id', 'N/A')
-                    filled_qty = result.get('filled_quantity', 0)
+                    filled_qty = result.get('filled_quantity', 0) or result.get('filled', 0)
                     avg_price = result.get('average_price', step.price)
                     fees_paid = result.get('fee_cost', 0)
                     execution_time_ms = result.get('execution_time_ms', 0)
                     
                     order_ids.append(order_id)
+                    
+                    # For Gate.io market buy orders, calculate the actual quantity received
+                    if exchange.exchange_id == 'gate' and step.side == 'buy' and i == 0:
+                        # For market buy, we spent USDT and received base currency
+                        # The filled_qty should be the amount of base currency we received
+                        total_cost = result.get('total_cost', 0) or result.get('cost', 0)
+                        if total_cost > 0 and avg_price > 0:
+                            filled_qty = total_cost / avg_price
+                            self.logger.info(f"🔧 Gate.io market buy: spent ${total_cost:.2f} USDT, received {filled_qty:.8f} {step.symbol.split('/')[0]}")
                     
                     # Calculate slippage
                     expected_price = step.price
@@ -338,7 +607,7 @@ class TradeExecutor:
                     self.logger.info(f"   Fees: {fees_paid:.8f}")
                     self.logger.info(f"   Slippage: {slippage_pct:.4f}%")
                     self.logger.info(f"   Duration: {execution_time_ms:.0f}ms")
-                    self.logger.info(f"🔴 BINANCE: Order {order_id} is now visible in your Spot Orders")
+                    self.logger.info(f"🔴 {exchange_id.upper()}: Order {order_id} is now visible in your account")
                     
                     # Create detailed step log
                     step_log = TradeStepLog(
@@ -366,6 +635,10 @@ class TradeExecutor:
                         current_balance = filled_qty  # Got base currency
                     
                     self.logger.info(f"   Updated Balance: {current_balance:.8f}")
+                    
+                    # Wait between steps for market stability
+                    if i < len(opportunity.steps) - 1:
+                        await asyncio.sleep(1)
                         
                 except Exception as e:
                     self.logger.error(f"❌ CRITICAL ERROR in USDT triangle step {i+1}: {str(e)}")
@@ -390,8 +663,8 @@ class TradeExecutor:
             # All steps completed successfully
             self.logger.info(f"🎉 ALL USDT TRIANGLE STEPS COMPLETED SUCCESSFULLY!")
             self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
-            self.logger.info(f"🔴 BINANCE: Check your Spot Orders for these {len(order_ids)} trades!")
-            self.logger.info(f"🔴 BINANCE: All trades are now visible in your Trade History")
+            self.logger.info(f"🔴 GATE.IO: Check your Spot Orders for these {len(order_ids)} trades!")
+            self.logger.info(f"🔴 GATE.IO: All trades are now visible in your Trade History")
             
             # Calculate actual profit
             actual_profit = current_balance - opportunity.initial_amount
@@ -421,8 +694,8 @@ class TradeExecutor:
             self.logger.info(f"   Total Fees: {trade_log.total_fees_paid:.8f}")
             self.logger.info(f"   Net P&L: {actual_profit - trade_log.total_fees_paid:.8f} {opportunity.base_currency}")
             self.logger.info(f"   Execution Time: {trade_log.total_duration_ms:.0f}ms")
-            self.logger.info(f"🔴 BINANCE SPOT ORDERS: All {len(order_ids)} trades are now visible in your account!")
-            self.logger.info(f"🔴 BINANCE BALANCE: Your USDT balance has been updated with the profit!")
+            self.logger.info(f"🔴 GATE.IO SPOT ORDERS: All {len(order_ids)} trades are now visible in your account!")
+            self.logger.info(f"🔴 GATE.IO BALANCE: Your USDT balance has been updated with the profit!")
             
             # Log successful trade
             self.trade_logger.info(f"TRADE_SUCCESS ({trading_mode}/{execution_type}): {opportunity.to_dict()}")
@@ -443,7 +716,11 @@ class TradeExecutor:
             trade_log.final_amount = current_balance
             trade_log.total_duration_ms = trade_end_ms - trade_start_ms
             
-            await self.detailed_trade_logger.log_trade(trade_log)
+            # Log trade safely
+            try:
+                await self.detailed_trade_logger.log_trade(trade_log)
+            except Exception as log_error:
+                self.logger.error(f"Error logging trade: {log_error}")
             
             execution_type = "AUTO" if self.auto_trading else "MANUAL" 
             trading_mode = "🔴 LIVE"

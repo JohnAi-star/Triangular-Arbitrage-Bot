@@ -66,7 +66,7 @@ class ArbitrageOpportunity:
     steps: List[TradeStep] = field(default_factory=list)
     
     # Profitability analysis
-    initial_amount: float = 0.0
+    initial_amount: float = 10.0  # Default minimum for Gate.io
     final_amount: float = 0.0
     profit_percentage: float = 0.0
     profit_amount: float = 0.0
@@ -81,6 +81,22 @@ class ArbitrageOpportunity:
     status: OpportunityStatus = OpportunityStatus.DETECTED
     execution_time: float = 0.0
     
+    # Add triangle_path as a mutable field instead of property
+    _triangle_path: str = ""
+    
+    @property
+    def triangle_path(self) -> str:
+        """Return the triangle path as a string."""
+        if self._triangle_path:
+            return self._triangle_path
+        arrow = safe_unicode_text("→")
+        return f"{self.base_currency} {arrow} {self.intermediate_currency} {arrow} {self.quote_currency} {arrow} {self.base_currency}"
+    
+    @triangle_path.setter
+    def triangle_path(self, value: str) -> None:
+        """Set the triangle path."""
+        self._triangle_path = value
+    
     def __post_init__(self):
         """Calculate derived values after initialization."""
         if self.final_amount > 0 and self.initial_amount > 0:
@@ -92,12 +108,6 @@ class ArbitrageOpportunity:
     def is_profitable(self) -> bool:
         """Check if the opportunity is profitable after all costs."""
         return self.net_profit > 0
-    
-    @property
-    def triangle_path(self) -> str:
-        """Return the triangle path as a string."""
-        arrow = safe_unicode_text("→")
-        return f"{self.base_currency} {arrow} {self.intermediate_currency} {arrow} {self.quote_currency} {arrow} {self.base_currency}"
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert opportunity to dictionary for logging/serialization."""
