@@ -54,20 +54,20 @@ def check_configuration():
     fake_opportunity = getattr(Config, 'FORCE_FAKE_OPPORTUNITY', False)
 
     print(f"🔍 Configuration Check:")
-    print(f"   Binance API Key: {'✅ SET' if binance_creds.get('api_key') else '❌ MISSING'}")
-    print(f"   Binance API Secret: {'✅ SET' if binance_creds.get('api_secret') else '❌ MISSING'}")
+    print(f"   API Key: {'✅ SET' if binance_creds.get('api_key') else '❌ MISSING'}")
+    print(f"   API Secret: {'✅ SET' if binance_creds.get('api_secret') else '❌ MISSING'}")
     print(f"   Credentials Enabled: {'✅ YES' if has_binance_creds else '❌ NO'}")
     print(f"   Min Profit Threshold: {min_profit}%")
     print(f"   Force Fake Opportunity: {'✅ ENABLED' if fake_opportunity else '❌ DISABLED'}")
     print(f"   Paper Trading: {'✅ ENABLED' if Config.PAPER_TRADING else '❌ DISABLED (LIVE TRADING)'}")
     
     if not has_binance_creds:
-        print("⚠️  WARNING: No Binance credentials - limited functionality")
+        print("⚠️  WARNING: No credentials - limited functionality")
         print("   To access real balance, configure .env file with:")
         print("   BINANCE_API_KEY=your_key")
         print("   BINANCE_API_SECRET=your_secret")
     else:
-        print("✅ Real Binance credentials found - will access real balance")
+        print("✅ Real credentials found - will access real balance")
     
     return True  # Always allow GUI to start
 
@@ -81,12 +81,12 @@ def main():
     
     Features:
     - Real-time USDT triangle detection
-    - Binance integration with real balance
+    - integration with real balance
     - Manual and automatic 🔴 REAL MONEY trading modes
     - 🔴 REAL MONEY TRADING ONLY - NO SIMULATION
     - USDT-based triangular arbitrage only
     - Comprehensive logging and statistics
-    - All trades visible in Binance Spot Orders
+    - All trades visible in Spot Orders
     
     Starting GUI...
     """)
@@ -105,11 +105,11 @@ def main():
         
         print("✅ GUI initialized with WebSocket manager")
         print("✅ Real-time opportunity updates enabled")
-        print("🔴 LIVE TRADING MODE: Real money trades will be executed on Gate.io")
-        print("💰 Your Gate.io Balance: $119.51 USDT available for trading")
+        print("🔴 LIVE TRADING MODE: Real money trades will be executed")
+        print("💰 Your Balance available for trading")
         print("✅ READY: Real-money trading enabled with enforced profit/amount limits.")
         print("🎯 AUTO-TRADING: Will execute USDT triangles ≥0.5% profit automatically")
-        print("🔧 TRADE LIMITS: $20-$50 per trade (Gate.io requirements)")
+        print("🔧 TRADE LIMITS: $20-$50 per trade")
         
         app.run()
         return 0

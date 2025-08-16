@@ -354,7 +354,7 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <div className="mt-6 text-gray-300">
                             <p>Auto-Trades: {autoStats.autoTradesExecuted} | Auto-Profit: ${autoStats.autoProfit.toFixed(2)} | Success Rate: {autoStats.autoSuccessRate.toFixed(1)}%</p>
                             <div className="text-xs text-gray-400 mt-2">
-                                🔴 GATE.IO AUTO-TRADING: $5-$20 per trade | ≥0.8% profit | LIVE MODE ONLY
+                                🔴 MULTI-EXCHANGE AUTO-TRADING: Exchange-specific fees | USDT triangles | LIVE MODE
                             </div>
                         </div>
                     </div>

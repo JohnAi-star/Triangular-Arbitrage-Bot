@@ -10,6 +10,8 @@ from typing import Dict, List, Any, Set, Tuple
 from datetime import datetime
 import logging
 from dataclasses import dataclass
+
+from utils.logger import setup_logger
 from arbitrage.realtime_detector import RealtimeArbitrageDetector
 from arbitrage.simple_triangle_detector import SimpleTriangleDetector
 
@@ -19,7 +21,6 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-logger = logging.getLogger('MultiExchangeDetector')
 
 # Major currencies for display
 MAJOR_CURRENCIES = {'BTC', 'ETH', 'USDT', 'BNB', 'USDC', 'BUSD', 'ADA', 'DOT', 'LINK', 'LTC', 'XRP', 'SOL', 'MATIC', 'AVAX', 'DOGE', 'TRX', 'ATOM', 'FIL', 'UNI'}
@@ -45,6 +46,7 @@ class ArbitrageResult:
 
 class MultiExchangeDetector:
     def __init__(self, exchange_manager, websocket_manager, config: Dict[str, Any]):
+        self.logger = setup_logger('MultiExchangeDetector')
         self.exchange_manager = exchange_manager
         self.websocket_manager = websocket_manager
         self.config = config
@@ -68,18 +70,18 @@ class MultiExchangeDetector:
         self._last_ticker_time: Dict[str, float] = {}
         self._logged_messages = set()
         
-        logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: 0.5%, Max Trade: ${self.max_trade_amount}")
-        logger.info(f"🎯 Target: USDT → Currency1 → Currency2 → USDT cycles only")
+        self.logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: 0.5%, Max Trade: ${self.max_trade_amount}")
+        self.logger.info(f"🎯 Target: USDT → Currency1 → Currency2 → USDT cycles only")
 
     async def initialize(self):
         """Initialize with balance verification"""
-        logger.info("🚀 Initializing LIVE TRADING detector...")
+        self.logger.info("🚀 Initializing LIVE TRADING detector...")
         
         # Initialize simple detector for the first connected exchange
         connected_exchanges = list(self.exchange_manager.exchanges.keys())
         if connected_exchanges:
             primary_exchange = connected_exchanges[0]
-            logger.info(f"🎯 Initializing simple detector for {primary_exchange}")
+            self.logger.info(f"🎯 Initializing simple detector for {primary_exchange}")
             
             self.simple_detector = SimpleTriangleDetector(
                 min_profit_pct=0.5,  # Fixed 0.5% for profitability
@@ -89,17 +91,17 @@ class MultiExchangeDetector:
             # Initialize and start the detector with correct exchange
             if await self.simple_detector.get_pairs():
                 asyncio.create_task(self.simple_detector.start_websocket_stream())
-                logger.info(f"✅ Simple detector started for {primary_exchange} with correct URLs")
+                self.logger.info(f"✅ Simple detector started for {primary_exchange} with correct URLs")
             else:
-                logger.error(f"❌ Failed to initialize simple detector for {primary_exchange}")
+                self.logger.error(f"❌ Failed to initialize simple detector for {primary_exchange}")
         
         # First verify we can fetch balances
         for ex_name in self.exchange_manager.exchanges:
             balance = await self.show_account_balance(ex_name)
             if balance and balance.get('balances'):
-                logger.info(f"✅ Balance detected on {ex_name}: {len(balance['balances'])} currencies")
+                self.logger.info(f"✅ Balance detected on {ex_name}: {len(balance['balances'])} currencies")
             else:
-                logger.warning(f"⚠️ No balance detected on {ex_name} - continuing anyway")
+                self.logger.warning(f"⚠️ No balance detected on {ex_name} - continuing anyway")
         
         # Initialize real-time detector
         await self.realtime_detector.initialize()
@@ -108,35 +110,35 @@ class MultiExchangeDetector:
         for ex_name, ex in self.exchange_manager.exchanges.items():
             try:
                 pairs = list(ex.trading_pairs.keys())
-                logger.info(f"Processing {len(pairs)} pairs for {ex_name}")
+                self.logger.info(f"Processing {len(pairs)} pairs for {ex_name}")
                 
                 triangles = self._build_real_triangles_from_available_pairs(pairs, ex_name)
                 self.triangle_paths[ex_name] = triangles
                 
-                logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name}")
+                self.logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name}")
                 if triangles:
                     sample = " → ".join(triangles[0][:3])
-                    logger.info(f"Sample triangle: {sample}")
+                    self.logger.info(f"Sample triangle: {sample}")
                     
             except Exception as e:
-                logger.error(f"Error building triangles for {ex_name}: {str(e)}", exc_info=True)
+                self.logger.error(f"Error building triangles for {ex_name}: {str(e)}", exc_info=True)
                 self.triangle_paths[ex_name] = []
         
         total = sum(len(t) for t in self.triangle_paths.values())
-        logger.info(f"🎯 Total REAL triangles across all exchanges: {total}")
+        self.logger.info(f"🎯 Total REAL triangles across all exchanges: {total}")
 
     async def show_account_balance(self, exchange_name: str = "binance") -> Dict[str, Any]:
         """Display complete account balance with USD values"""
         ex = self.exchange_manager.exchanges.get(exchange_name)
         if not ex:
-            logger.error(f"Exchange {exchange_name} not found")
+            self.logger.error(f"Exchange {exchange_name} not found")
             return {}
 
         try:
             # Try to get balance using the correct method
             balance = await ex.get_account_balance()
             if not balance:
-                logger.error("❌ No balance data retrieved")
+                self.logger.error("❌ No balance data retrieved")
                 return {}
             
             # Calculate USD value
@@ -168,11 +170,11 @@ class MultiExchangeDetector:
                 else:
                     balance_text += f"  {currency}: {amount:.8f}\n"
             
-            logger.info(balance_text)
+            self.logger.info(balance_text)
             return balance_data
             
         except Exception as e:
-            logger.error(f"Failed to display balance: {str(e)}")
+            self.logger.error(f"Failed to display balance: {str(e)}")
             return {}
 
     def _get_usd_price(self, currency: str, exchange_name: str) -> float:
@@ -220,7 +222,7 @@ class MultiExchangeDetector:
                     await asyncio.sleep(1 * (attempt + 1))
                 continue
         
-        logger.error(f"Failed after {retries} attempts. Last error: {str(last_error)}")
+        self.logger.error(f"Failed after {retries} attempts. Last error: {str(last_error)}")
         return {}
 
     async def _fetch_balance_direct(self, exchange) -> Dict[str, float]:
@@ -235,7 +237,7 @@ class MultiExchangeDetector:
                 }
             return {}
         except Exception as e:
-            logger.error(f"Direct balance fetch failed: {str(e)}")
+            self.self.logger.error(f"Direct balance fetch failed: {str(e)}")
             return {}
 
     def _format_balance(self, balance: Dict[str, float]) -> str:
@@ -258,13 +260,13 @@ class MultiExchangeDetector:
 
     def _build_real_triangles_from_available_pairs(self, pairs: List[str], exchange_name: str) -> List[List[str]]:
         """Build USDT-based triangles using ONLY the actual available pairs from Binance"""
-        logger.info(f"💎 Building USDT triangles from {len(pairs)} REAL Binance pairs...")
+        self.logger.info(f"💎 Building USDT triangles from {len(pairs)} REAL Binance pairs...")
         
         available_pairs = set(pairs)
         
         # Get all USDT pairs and extract currencies
         usdt_pairs = [pair for pair in pairs if '/USDT' in pair]
-        logger.info(f"🎯 Found {len(usdt_pairs)} USDT pairs for triangular arbitrage")
+        self.logger.info(f"🎯 Found {len(usdt_pairs)} USDT pairs for triangular arbitrage")
         
         # Extract currencies that have USDT pairs
         usdt_currencies = set()
@@ -286,8 +288,8 @@ class MultiExchangeDetector:
         # Only use currencies that exist on Gate.io AND have USDT pairs
         valid_usdt_currencies = usdt_currencies.intersection(real_gateio_currencies)
         
-        logger.info(f"✅ Found {len(valid_usdt_currencies)} REAL Gate.io currencies with USDT pairs")
-        logger.info(f"📋 Valid currencies: {sorted(list(valid_usdt_currencies)[:20])}")
+        self.logger.info(f"✅ Found {len(valid_usdt_currencies)} REAL Gate.io currencies with USDT pairs")
+        self.logger.info(f"📋 Valid currencies: {sorted(list(valid_usdt_currencies)[:20])}")
         
         # Build USDT triangular paths: USDT → curr1 → curr2 → USDT
         usdt_triangles = []
@@ -313,8 +315,8 @@ class MultiExchangeDetector:
                         
                         if len(usdt_triangles) <= 20:
                             pair2_used = pair2 if pair2 in available_pairs else alt_pair2
-                            logger.info(f"💰 VALID USDT Triangle: USDT → {curr1} → {curr2} → USDT")
-                            logger.info(f"   Pairs: {pair1}, {pair2_used}, {pair3}")
+                            self.logger.info(f"💰 VALID USDT Triangle: USDT → {curr1} → {curr2} → USDT")
+                            self.logger.info(f"   Pairs: {pair1}, {pair2_used}, {pair3}")
                     else:
                         # Log missing pairs for debugging
                         missing_pairs = []
@@ -326,7 +328,7 @@ class MultiExchangeDetector:
                             missing_pairs.append(f"{pair2} or {alt_pair2}")
                         
                         if len(usdt_triangles) < 5:  # Only log first few for debugging
-                            logger.debug(f"❌ Rejected USDT triangle {curr1}-{curr2}: missing {missing_pairs}")
+                            self.logger.debug(f"❌ Rejected USDT triangle {curr1}-{curr2}: missing {missing_pairs}")
         
         # Add specific high-volume USDT triangles that definitely exist on Gate.io
         priority_usdt_triangles = [
@@ -345,9 +347,9 @@ class MultiExchangeDetector:
             if (self._validate_usdt_triangle_exists(triangle_3_currencies, available_pairs) and 
                 triangle_3_currencies not in usdt_triangles):
                 usdt_triangles.append(triangle_3_currencies)
-                logger.info(f"💎 Added priority USDT triangle: {' → '.join(triangle_3_currencies)} → USDT")
+                self.logger.info(f"💎 Added priority USDT triangle: {' → '.join(triangle_3_currencies)} → USDT")
         
-        logger.info(f"✅ Built {len(usdt_triangles)} USDT triangles for {exchange_name}")
+        self.logger.info(f"✅ Built {len(usdt_triangles)} USDT triangles for {exchange_name}")
         return usdt_triangles if usdt_triangles else []
 
     def _validate_usdt_triangle_exists(self, triangle: List[str], available_pairs: set) -> bool:
@@ -371,7 +373,7 @@ class MultiExchangeDetector:
         pair2_exists = pair2 in available_pairs or alt_pair2 in available_pairs
         
         if pair1_exists and pair2_exists and pair3_exists:
-            logger.debug(f"✅ Valid triangle: {' → '.join(triangle)} → USDT")
+            self.logger.debug(f"✅ Valid triangle: {' → '.join(triangle)} → USDT")
             return True
         else:
             missing = []
@@ -381,17 +383,17 @@ class MultiExchangeDetector:
                 missing.append(pair3)
             if not pair2_exists:
                 missing.append(f"{pair2} or {alt_pair2}")
-            logger.debug(f"❌ Invalid triangle {' → '.join(triangle)}: missing {missing}")
+            self.logger.debug(f"❌ Invalid triangle {' → '.join(triangle)}: missing {missing}")
             return False
 
     async def scan_all_opportunities(self) -> List[ArbitrageResult]:
         """Scan all exchanges for ALL arbitrage opportunities regardless of balance"""
         scan_start_time = time.time()
         all_results = []
-        logger.info(f"🔍 Scanning ALL opportunities regardless of balance (Min Display: {self.min_profit_pct}%)...")
+        self.logger.info(f"🔍 Scanning ALL opportunities regardless of balance (Min Display: {self.min_profit_pct}%)...")
         
         # STEP 1: Scan for ALL real market opportunities (ignore balance completely)
-        logger.info("🔍 Fetching ALL market opportunities regardless of account balance...")
+        self.logger.info("🔍 Fetching ALL market opportunities regardless of account balance...")
         
         # STEP 2: Get opportunities from simple detector
         simple_opportunities = self.simple_detector.get_current_opportunities()
@@ -399,9 +401,9 @@ class MultiExchangeDetector:
             # Only log if we have new opportunities
             current_time = time.time()
             if not hasattr(self, '_last_simple_log') or current_time - self._last_simple_log > 30:
-                logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
+                self.logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
                 for i, opp in enumerate(simple_opportunities[:3]):
-                    logger.info(f"   {i+1}. {opp}")
+                    self.logger.info(f"   {i+1}. {opp}")
                 self._last_simple_log = current_time
                 
             # Convert simple detector opportunities to results
@@ -424,26 +426,26 @@ class MultiExchangeDetector:
         
         # STEP 3: Scan traditional triangular paths for ALL opportunities
         if 'binance' in self.exchange_manager.exchanges and self.realtime_detector.running:
-            logger.info("📡 Using real-time WebSocket data for Binance")
+            self.logger.info("📡 Using real-time WebSocket data for Binance")
 
         for ex_name, triangles in self.triangle_paths.items():
             ex = self.exchange_manager.exchanges.get(ex_name)
             if not ex:
-                logger.warning(f"Skipping {ex_name}: no exchange connection")
+                self.logger.warning(f"Skipping {ex_name}: no exchange connection")
                 continue
                 
             if not triangles:
-                logger.warning(f"Skipping {ex_name}: no triangular paths built")
+                self.logger.warning(f"Skipping {ex_name}: no triangular paths built")
                 continue
             
             try:
                 # Scan ALL triangles without balance restrictions
-                logger.info(f"🔍 Scanning {len(triangles)} triangles on {ex_name} for ALL opportunities...")
+                self.logger.info(f"🔍 Scanning {len(triangles)} triangles on {ex_name} for ALL opportunities...")
                 results = await self._scan_exchange_triangles_all(ex, triangles)
                 all_results.extend(results)
-                logger.info(f"💎 Found {len(results)} opportunities on {ex_name}")
+                self.logger.info(f"💎 Found {len(results)} opportunities on {ex_name}")
             except Exception as e:
-                logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
+                self.logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
 
         # STEP 4: Sort all results by profitability
         all_results.sort(key=lambda x: x.profit_percentage, reverse=True)
@@ -454,17 +456,17 @@ class MultiExchangeDetector:
         # STEP 5: Log comprehensive results
         scan_duration = (time.time() - scan_start_time) * 1000  # Convert to milliseconds
         
-        logger.info(f"📊 SCAN RESULTS (Duration: {scan_duration:.0f}ms):")
-        logger.info(f"   Total opportunities found: {len(filtered_results)}")
-        logger.info(f"   Showing ALL opportunities for manual selection")
-        logger.info(f"   User can choose which opportunities to execute")
+        self.logger.info(f"📊 SCAN RESULTS (Duration: {scan_duration:.0f}ms):")
+        self.logger.info(f"   Total opportunities found: {len(filtered_results)}")
+        self.logger.info(f"   Showing ALL opportunities for manual selection")
+        self.logger.info(f"   User can choose which opportunities to execute")
         
         if len(filtered_results) > 0:
-            logger.info(f"💎 Top opportunities:")
+            self.logger.info(f"💎 Top opportunities:")
             for i, opp in enumerate(filtered_results[:5]):
-                logger.info(f"   {i+1}. {opp.exchange}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Available for execution")
+                self.logger.info(f"   {i+1}. {opp.exchange}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Available for execution")
         else:
-            logger.info(f"   No opportunities found in current market conditions")
+            self.logger.info(f"   No opportunities found in current market conditions")
         
         # STEP 6: Broadcast ALL opportunities to UI
         await self._broadcast_opportunities(filtered_results)
@@ -516,7 +518,7 @@ class MultiExchangeDetector:
             )
             sample_opportunities.append(result)
         
-        logger.info(f"✅ Generated {len(sample_opportunities)} sample opportunities for UI display")
+        self.logger.info(f"✅ Generated {len(sample_opportunities)} sample opportunities for UI display")
         return sample_opportunities
 
     async def _scan_exchange_triangles_all(self, ex, triangles: List[List[str]]) -> List[ArbitrageResult]:
@@ -529,10 +531,10 @@ class MultiExchangeDetector:
         ticker_duration = (time.time() - ticker_start_time) * 1000
         
         if not ticker:
-            logger.error(f"No ticker data for {ex.name}")
+            self.logger.error(f"No ticker data for {ex.name}")
             return []
 
-        logger.info(f"🔍 Scanning {len(triangles)} triangles for {ex.name} - ALL opportunities (ticker fetch: {ticker_duration:.0f}ms)")
+        self.logger.info(f"🔍 Scanning {len(triangles)} triangles for {ex.name} - ALL opportunities (ticker fetch: {ticker_duration:.0f}ms)")
         
         # Scan ALL triangles for market opportunities
         for path in triangles:
@@ -567,14 +569,14 @@ class MultiExchangeDetector:
                     
                     # Log all opportunities
                     profit_status = "💰 PROFITABLE" if profit >= self.min_profit_pct else "📊 OPPORTUNITY"
-                    logger.debug(f"{profit_status} {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}%")
+                    self.logger.debug(f"{profit_status} {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}%")
                 else:
-                    logger.debug(f"🚫 Invalid: {base_currency}→{intermediate_currency}→{quote_currency} = {profit}")
+                    self.logger.debug(f"🚫 Invalid: {base_currency}→{intermediate_currency}→{quote_currency} = {profit}")
                     
             except Exception as e:
-                logger.debug(f"Error calculating triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
+                self.logger.debug(f"Error calculating triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
         
-        logger.info(f"✅ Found {len(results)} opportunities on {ex.name} (ALL market opportunities)")
+        self.logger.info(f"✅ Found {len(results)} opportunities on {ex.name} (ALL market opportunities)")
         return results
 
     async def _get_ticker_data(self, ex):
@@ -585,7 +587,7 @@ class MultiExchangeDetector:
         if current_time - last_fetch < 5:
             ticker = self._last_tickers.get(ex.name, {})
             if ticker:
-                logger.debug(f"Using cached tickers for {ex.name}")
+                self.logger.debug(f"Using cached tickers for {ex.name}")
                 return ticker
 
         ticker = await self._safe_fetch_tickers(ex)
@@ -600,10 +602,10 @@ class MultiExchangeDetector:
         try:
             await asyncio.sleep(0.2)  # Rate limiting
             tickers = await ex.fetch_tickers()
-            logger.info(f"📊 Fetched {len(tickers)} 🔴 LIVE tickers from {ex.name}")
+            self.logger.info(f"📊 Fetched {len(tickers)} 🔴 LIVE tickers from {ex.name}")
             return tickers
         except Exception as e:
-            logger.error(f"Error fetching tickers from {ex.name}: {str(e)}")
+            self.logger.error(f"Error fetching tickers from {ex.name}: {str(e)}")
             return self._last_tickers.get(ex.name, {})
 
     async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
@@ -611,31 +613,21 @@ class MultiExchangeDetector:
         
         # Ensure this is a USDT-based triangle (a should be USDT)
         if a != 'USDT':
-            logger.debug(f"Skipping non-USDT triangle: {a}→{b}→{c}")
+            self.logger.debug(f"Skipping non-USDT triangle: {a}→{b}→{c}")
             return 0.0
         
-        # CRITICAL: Validate currencies exist on Gate.io
-        valid_gateio_currencies = {
-            'BTC', 'ETH', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-            'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-            'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-            'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-            'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
-            'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-            'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB'
-            'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
-            'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
-            'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
-        }
+        # Get exchange-specific valid currencies
+        valid_currencies = self._get_valid_currencies_for_exchange(ex.exchange_id)
         
-        if b not in valid_gateio_currencies or c not in valid_gateio_currencies:
-            logger.debug(f"❌ Skipping triangle with non-existent currencies: USDT→{b}→{c}→USDT")
+        if b not in valid_currencies or c not in valid_currencies:
+            self.logger.debug(f"❌ Skipping triangle with non-existent currencies on {ex.exchange_id}: USDT→{b}→{c}→USDT")
             return 0.0
         
         try:
             # USDT Triangle calculation: USDT → b → c → USDT
             
-            start_usdt = max(5.0, min(self.max_trade_amount, 20.0))  # $5-20 range for Gate.io
+            # Apply exchange-specific trade limits
+            start_usdt = self._get_exchange_trade_limits(ex.exchange_id)
             
             # Required pairs for USDT triangle
             pair1 = f"{b}/USDT"      # b/USDT pair
@@ -645,7 +637,7 @@ class MultiExchangeDetector:
             
             # CRITICAL: Check if all required pairs exist in ticker data
             if not (pair1 in ticker and pair3 in ticker):
-                logger.debug(f"❌ Missing USDT pairs for triangle USDT→{b}→{c}→USDT: {pair1} or {pair3}")
+                self.logger.debug(f"❌ Missing USDT pairs for triangle USDT→{b}→{c}→USDT: {pair1} or {pair3}")
                 return 0.0
             
             # Determine which b→c pair to use
@@ -656,7 +648,7 @@ class MultiExchangeDetector:
                 use_direct = False
                 bc_pair = alt_pair2
             else:
-                logger.debug(f"❌ Missing {b}→{c} pair for triangle USDT→{b}→{c}→USDT: neither {pair2} nor {alt_pair2}")
+                self.logger.debug(f"❌ Missing {b}→{c} pair for triangle USDT→{b}→{c}→USDT: neither {pair2} nor {alt_pair2}")
                 return 0.0
             
             # Get ticker data
@@ -666,14 +658,14 @@ class MultiExchangeDetector:
             
             # Validate price data
             if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
-                logger.debug(f"❌ Invalid price data for USDT triangle USDT→{b}→{c}→USDT")
+                self.logger.debug(f"❌ Invalid price data for USDT triangle USDT→{b}→{c}→USDT")
                 return 0.0
             
             # Validate prices are reasonable
             prices = [float(t1['ask']), float(t1['bid']), float(t2['ask']), float(t2['bid']), 
                      float(t3['ask']), float(t3['bid'])]
             if any(p <= 0 or p > 1000000 for p in prices):
-                logger.debug(f"❌ Unreasonable prices for USDT triangle USDT→{b}→{c}→USDT")
+                self.logger.debug(f"❌ Unreasonable prices for USDT triangle USDT→{b}→{c}→USDT")
                 return 0.0
             
             # Step 1: USDT → b (buy b with USDT)
@@ -682,7 +674,7 @@ class MultiExchangeDetector:
             
             # Validate step 1 result
             if amount_b <= 0 or amount_b > start_usdt * 1000:
-                logger.debug(f"❌ Invalid step 1 result for USDT→{b}: {amount_b}")
+                self.logger.debug(f"❌ Invalid step 1 result for USDT→{b}: {amount_b}")
                 return 0.0
             
             # Step 2: b → c
@@ -697,7 +689,7 @@ class MultiExchangeDetector:
             
             # Validate step 2 result
             if amount_c <= 0 or amount_c > amount_b * 1000:
-                logger.debug(f"❌ Invalid step 2 result for {b}→{c}: {amount_c}")
+                self.logger.debug(f"❌ Invalid step 2 result for {b}→{c}: {amount_c}")
                 return 0.0
             
             # Step 3: c → USDT (sell c for USDT)
@@ -706,18 +698,18 @@ class MultiExchangeDetector:
             
             # Validate final result
             if final_usdt <= 0 or final_usdt > start_usdt * 10:
-                logger.debug(f"❌ Invalid final result for {c}→USDT: {final_usdt}")
+                self.logger.debug(f"❌ Invalid final result for {c}→USDT: {final_usdt}")
                 return 0.0
             
             # Calculate profit
             gross_profit = final_usdt - start_usdt
             gross_profit_pct = (gross_profit / start_usdt) * 100
             
-            # Apply realistic trading costs for Gate.io
-            total_costs_pct = 0.6  # 0.6% total costs (0.2% per trade × 3 trades)
+            # Apply exchange-specific trading costs
+            total_costs_pct = self._get_exchange_trading_costs(ex.exchange_id)
             net_profit_pct = gross_profit_pct - total_costs_pct
             
-            logger.debug(f"USDT Triangle USDT→{b}→{c}→USDT: "
+            self.logger.debug(f"USDT Triangle USDT→{b}→{c}→USDT: "
                         f"{start_usdt:.2f} USDT → {amount_b:.6f} {b} → {amount_c:.6f} {c} → {final_usdt:.2f} USDT = "
                         f"{net_profit_pct:.6f}% net profit")
             
@@ -728,8 +720,83 @@ class MultiExchangeDetector:
                 return 0.0
                 
         except Exception as e:
-            logger.debug(f"USDT calculation failed for USDT→{b}→{c}→USDT: {str(e)}")
+            self.logger.debug(f"USDT calculation failed for USDT→{b}→{c}→USDT: {str(e)}")
             return 0.0
+    
+    def _get_valid_currencies_for_exchange(self, exchange_id: str) -> set:
+        """Get valid currencies for specific exchange"""
+        if exchange_id == 'gate':
+            return {
+                'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
+                'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
+                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+            }
+        elif exchange_id == 'kucoin':
+            return {
+                'BTC', 'ETH', 'USDT', 'USDC', 'KCS', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP'
+            }
+        elif exchange_id == 'binance':
+            return {
+                'BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'BUSD', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP'
+            }
+        elif exchange_id == 'bybit':
+            return {
+                'BTC', 'ETH', 'USDT', 'USDC', 'BIT', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
+            }
+        else:
+            # Default major currencies
+            return {
+                'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
+            }
+    
+    def _get_exchange_trade_limits(self, exchange_id: str) -> float:
+        """Get exchange-specific trade amount limits"""
+        if exchange_id == 'gate':
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Gate.io: $5-20
+        elif exchange_id == 'kucoin':
+            return max(1.0, min(self.max_trade_amount, 50.0))  # KuCoin: $1-50
+        elif exchange_id == 'binance':
+            return max(10.0, min(self.max_trade_amount, 100.0))  # Binance: $10-100
+        elif exchange_id == 'bybit':
+            return max(5.0, min(self.max_trade_amount, 50.0))  # Bybit: $5-50
+        else:
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Default: $5-20
+    
+    def _get_exchange_trading_costs(self, exchange_id: str) -> float:
+        """Get exchange-specific total trading costs percentage"""
+        from config.exchanges_config import SUPPORTED_EXCHANGES
+        ex_config = SUPPORTED_EXCHANGES.get(exchange_id, {})
+        
+        # Use taker fees for market orders (3 trades in triangle)
+        base_taker_fee = ex_config.get('taker_fee', 0.001)
+        
+        # Check if fee token discount applies (assume user has fee tokens for better rates)
+        if ex_config.get('fee_token') and ex_config.get('taker_fee_with_token'):
+            fee_per_trade = ex_config.get('taker_fee_with_token', base_taker_fee)
+            self.logger.debug(f"💰 Using {ex_config['fee_token']} discount for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
+        else:
+            fee_per_trade = base_taker_fee
+            self.logger.debug(f"📊 Using base fees for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
+        
+        # Total cost for 3 trades + slippage buffer
+        total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
+        total_costs_pct = total_costs * 100
+        
+        self.logger.debug(f"🔧 {ex_config.get('name', exchange_id)} total costs: {total_costs_pct:.3f}%")
+        return total_costs_pct
 
     def _calculate_usdt_path_profit(self, ticker, pairs: List[str], steps: List[str], start_amount: float, b: str, c: str) -> float:
         """Calculate profit for a USDT-based arbitrage path"""
@@ -775,7 +842,7 @@ class MultiExchangeDetector:
         else:
             raise ValueError(f"Invalid step: {steps[2]}")
         
-        logger.debug(f"USDT Triangle: {start_amount:.6f} USDT → {amount_after_step1:.6f} {b} → {amount_after_step2:.6f} {c} → {final_amount:.6f} USDT")
+        self.logger.debug(f"USDT Triangle: {start_amount:.6f} USDT → {amount_after_step1:.6f} {b} → {amount_after_step2:.6f} {c} → {final_amount:.6f} USDT")
         
         gross_profit = final_amount - start_amount
         profit_pct = (gross_profit / start_amount) * 100
@@ -784,7 +851,7 @@ class MultiExchangeDetector:
         total_costs = 0.3 + 0.1  # 0.4% total costs
         net_profit_pct = profit_pct - total_costs
         
-        logger.debug(f"USDT Path result: Start={start_amount:.6f} USDT, Final={final_amount:.6f} USDT, "
+        self.logger.debug(f"USDT Path result: Start={start_amount:.6f} USDT, Final={final_amount:.6f} USDT, "
                     f"Gross={profit_pct:.6f}%, Net={net_profit_pct:.6f}% (after {total_costs}% costs)")
         
         return net_profit_pct
@@ -813,21 +880,21 @@ class MultiExchangeDetector:
         
         total_count = len(payload)
         
-        logger.info(f"📡 Broadcasting {total_count} ALL opportunities to UI for manual selection")
+        self.logger.info(f"📡 Broadcasting {total_count} ALL opportunities to UI for manual selection")
         
         if self.websocket_manager:
             try:
                 if hasattr(self.websocket_manager, 'broadcast'):
                     await self.websocket_manager.broadcast('opportunities_update', payload)
-                    logger.info("✅ Successfully broadcasted ALL opportunities to UI via WebSocket")
+                    self.logger.info("✅ Successfully broadcasted ALL opportunities to UI via WebSocket")
                 elif hasattr(self.websocket_manager, 'broadcast_sync'):
                     self.websocket_manager.broadcast_sync('opportunities_update', payload)
-                    logger.info("✅ Successfully broadcasted ALL opportunities to UI via sync WebSocket")
+                    self.logger.info("✅ Successfully broadcasted ALL opportunities to UI via sync WebSocket")
             except Exception as e:
-                logger.error(f"Error broadcasting to WebSocket: {e}")
+                self.logger.error(f"Error broadcasting to WebSocket: {e}")
         else:
-            logger.warning("ℹ️ UI broadcast disabled in this run (no WebSocket manager)")
+            self.logger.warning("ℹ️ UI broadcast disabled in this run (no WebSocket manager)")
         
         # Log top opportunities for user
         for opp in payload[:5]:
-            logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")
+            self.logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")

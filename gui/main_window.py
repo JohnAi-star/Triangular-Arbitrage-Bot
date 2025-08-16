@@ -190,21 +190,21 @@ class ArbitrageBotGUI:
         
         # Min profit setting
         ctk.CTkLabel(settings_frame, text="Min Profit %:").pack()
-        self.min_profit_var = tk.DoubleVar(value=0.5)  # Fixed 0.5%
+        self.min_profit_var = tk.DoubleVar(value=0.5)
         self.min_profit_entry = ctk.CTkEntry(settings_frame, textvariable=self.min_profit_var, width=80)
-        self.min_profit_entry.configure(state="disabled")  # Lock at 0.5%
+        self.min_profit_entry.configure(state="normal")  # Allow changes
         self.min_profit_entry.pack(pady=2)
         
         # Max trade amount setting
         ctk.CTkLabel(settings_frame, text="Max Trade Amount:").pack()
-        self.max_trade_var = tk.DoubleVar(value=20.0)  # Fixed $20
+        self.max_trade_var = tk.DoubleVar(value=20.0)
         self.max_trade_entry = ctk.CTkEntry(settings_frame, textvariable=self.max_trade_var, width=80)
-        self.max_trade_entry.configure(state="disabled")  # Lock at $20
+        self.max_trade_entry.configure(state="normal")  # Allow changes
         self.max_trade_entry.pack(pady=2)
         
-        # Add label showing locked values
-        ctk.CTkLabel(settings_frame, text="(Locked for optimal profit)", 
-                    font=("Arial", 10), text_color="yellow").pack(pady=2)
+        # Add label showing exchange-specific optimization
+        ctk.CTkLabel(settings_frame, text="(Exchange-specific fees applied)", 
+                    font=("Arial", 10), text_color="green").pack(pady=2)
     
     def create_opportunities_panel(self):
         """Create the opportunities display panel."""
@@ -324,6 +324,21 @@ class ArbitrageBotGUI:
         if not selected_exchanges:
             messagebox.showerror("Error", "Please select at least one exchange")
             return
+        
+        # Log selected exchanges and their fee structures
+        from config.exchanges_config import SUPPORTED_EXCHANGES
+        self.logger.info("🚀 Starting bot with selected exchanges:")
+        for ex_id in selected_exchanges:
+            ex_config = SUPPORTED_EXCHANGES.get(ex_id, {})
+            self.logger.info(f"   {ex_config.get('name', ex_id)}:")
+            self.logger.info(f"     Maker Fee: {ex_config.get('maker_fee', 0)*100:.3f}%")
+            self.logger.info(f"     Taker Fee: {ex_config.get('taker_fee', 0)*100:.3f}%")
+            if ex_config.get('fee_token'):
+                self.logger.info(f"     Fee Token: {ex_config['fee_token']} "
+                               f"(Maker: {ex_config.get('maker_fee_with_token', 0)*100:.3f}%, "
+                               f"Taker: {ex_config.get('taker_fee_with_token', 0)*100:.3f}%)")
+            self.logger.info(f"     API URL: {ex_config.get('api_url', 'Unknown')}")
+            self.logger.info(f"     WebSocket URL: {ex_config.get('websocket_url', 'Unknown')}")
         
         self.selected_exchanges = selected_exchanges
         self.running = True

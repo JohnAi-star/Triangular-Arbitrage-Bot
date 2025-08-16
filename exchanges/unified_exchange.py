@@ -40,6 +40,9 @@ class UnifiedExchange(BaseExchange):
         self.zero_fee_pairs = config.get('zero_fee_pairs', [])
         self.maker_fee = config.get('maker_fee', 0.001)
         self.taker_fee = config.get('taker_fee', 0.001)
+        # Add fee token discount rates
+        self.maker_fee_with_token = config.get('maker_fee_with_token', self.maker_fee)
+        self.taker_fee_with_token = config.get('taker_fee_with_token', self.taker_fee)
         self.live_trading = True  # 🔴 FORCE LIVE TRADING
         self.dry_run = False      # 🔴 NO DRY RUN MODE
         self.trading_pairs: Dict[str, Any] = {}
@@ -510,16 +513,37 @@ class UnifiedExchange(BaseExchange):
         return total_usd
 
     async def get_trading_fees(self, symbol: str) -> Tuple[float, float]:
+        """Get accurate trading fees for the specific exchange with fee token discounts."""
         try:
+            # Check for zero-fee pairs first
             if symbol in self.zero_fee_pairs:
+                self.logger.info(f"✅ Zero-fee pair detected: {symbol} on {self.exchange_id}")
                 return 0.0, 0.0
-            maker, taker = self.maker_fee, self.taker_fee
-            if self.fee_token and self.fee_discount > 0:
-                bal = await self.check_fee_token_balance()
-                if bal > 0:
-                    maker *= (1 - self.fee_discount)
-                    taker *= (1 - self.fee_discount)
-            return maker, taker
+            
+            # Get base fees from exchange config
+            base_maker_fee = self.maker_fee
+            base_taker_fee = self.taker_fee
+            
+            # Check if user has fee token balance for discount
+            fee_token_balance = 0.0
+            if self.fee_token:
+                fee_token_balance = await self.check_fee_token_balance()
+                self.logger.info(f"💰 {self.fee_token} balance: {fee_token_balance:.6f}")
+            
+            # Apply fee token discount if available
+            if fee_token_balance > 0 and hasattr(self, 'maker_fee_with_token'):
+                maker_fee = getattr(self, 'maker_fee_with_token', base_maker_fee)
+                taker_fee = getattr(self, 'taker_fee_with_token', base_taker_fee)
+                self.logger.info(f"✅ {self.exchange_id} fees with {self.fee_token}: "
+                               f"maker={maker_fee*100:.3f}%, taker={taker_fee*100:.3f}%")
+            else:
+                maker_fee = base_maker_fee
+                taker_fee = base_taker_fee
+                self.logger.info(f"📊 {self.exchange_id} base fees: "
+                               f"maker={maker_fee*100:.3f}%, taker={taker_fee*100:.3f}%")
+            
+            return maker_fee, taker_fee
+            
         except Exception as e:
             self.logger.error(f"Error fetching fees for {symbol} on {self.exchange_id}: {e}")
             return self.maker_fee, self.taker_fee

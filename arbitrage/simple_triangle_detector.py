@@ -12,6 +12,7 @@ from typing import Dict, List, Any, Set, Tuple
 from datetime import datetime
 import logging
 from dataclasses import dataclass
+from utils.logger import setup_logger
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +41,7 @@ class SimpleTriangleDetector:
     """Simple triangular arbitrage detector using Binance WebSocket - Based on JavaScript logic"""
     
     def __init__(self, min_profit_pct: float = 0.5, exchange_id: str = 'binance'):
+        self.logger = setup_logger(f'SimpleTriangleDetector_{exchange_id}')
         self.min_profit_pct = min_profit_pct
         self.exchange_id = exchange_id
         self.exchange_config = self._get_exchange_config(exchange_id)
@@ -50,46 +52,61 @@ class SimpleTriangleDetector:
         self.opportunities_found = 0
         self.current_opportunities: List[TriangleOpportunity] = []
         
-        logger.info(f"🚀 Simple Triangle Detector initialized for {self.exchange_config['name']}")
-        logger.info(f"   Exchange: {self.exchange_config['name']}")
-        logger.info(f"   API URL: {self.exchange_config['api_url']}")
-        logger.info(f"   WebSocket URL: {self.exchange_config['websocket_url']}")
-        logger.info(f"   Min Profit: {min_profit_pct}%")
+        self.logger.info(f"🚀 Simple Triangle Detector initialized for {self.exchange_config['name']}")
+        self.logger.info(f"   Exchange: {self.exchange_config['name']}")
+        self.logger.info(f"   API URL: {self.exchange_config['api_url']}")
+        self.logger.info(f"   WebSocket URL: {self.exchange_config['websocket_url']}")
+        self.logger.info(f"   Min Profit: {min_profit_pct}%")
     
     def _get_exchange_config(self, exchange_id: str) -> Dict[str, Any]:
         """Get exchange configuration"""
         from config.exchanges_config import SUPPORTED_EXCHANGES
-        return SUPPORTED_EXCHANGES.get(exchange_id, SUPPORTED_EXCHANGES['binance'])
+        config = SUPPORTED_EXCHANGES.get(exchange_id, SUPPORTED_EXCHANGES['binance'])
+        self.logger.info(f"🔧 Using {config['name']} configuration:")
+        self.logger.info(f"   API URL: {config['api_url']}")
+        self.logger.info(f"   WebSocket URL: {config['websocket_url']}")
+        self.logger.info(f"   Maker Fee: {config['maker_fee']*100:.3f}%")
+        self.logger.info(f"   Taker Fee: {config['taker_fee']*100:.3f}%")
+        if config.get('fee_token'):
+            self.logger.info(f"   Fee Token: {config['fee_token']} (discount: {config['fee_discount']*100:.1f}%)")
+        return config
     
     async def get_pairs(self):
         """Get trading pairs and build triangular paths - Exact JavaScript logic"""
         import aiohttp
         
-        logger.info("📡 Fetching exchange info...")
+        self.logger.info(f"📡 Fetching exchange info from {self.exchange_config['name']}...")
+        
+        # Use exchange-specific API endpoint
+        api_url = self.exchange_config['api_url']
+        
+        if self.exchange_id == 'binance':
+            endpoint = f"{api_url}/api/v3/exchangeInfo"
+        elif self.exchange_id == 'kucoin':
+            endpoint = f"{api_url}/api/v1/symbols"
+        elif self.exchange_id == 'gate':
+            endpoint = f"{api_url}/api/v4/spot/currency_pairs"
+        elif self.exchange_id == 'bybit':
+            endpoint = f"{api_url}/v5/market/instruments-info?category=spot"
+        else:
+            # Default to Binance format
+            endpoint = f"{api_url}/api/v3/exchangeInfo"
+        
+        self.logger.info(f"🔗 Using endpoint: {endpoint}")
         
         async with aiohttp.ClientSession() as session:
-            async with session.get('https://api.binance.com/api/v3/exchangeInfo') as response:
+            async with session.get(endpoint) as response:
                 if response.status == 200:
-                    e_info = await response.json()
+                    data = await response.json()
                     
-                    # Get all unique symbols (currencies)
-                    symbols = list(set([
-                        asset for symbol_info in e_info['symbols']
-                        if symbol_info['status'] == 'TRADING'
-                        for asset in [symbol_info['baseAsset'], symbol_info['quoteAsset']]
-                    ]))
-                    
-                    # Get valid trading pairs
-                    valid_pairs = [
-                        symbol_info['symbol'] for symbol_info in e_info['symbols']
-                        if symbol_info['status'] == 'TRADING'
-                    ]
+                    # Parse exchange-specific response format
+                    symbols, valid_pairs = self._parse_exchange_info(data)
                     
                     # Initialize price tracking
                     for symbol in valid_pairs:
                         self.sym_val_j[symbol] = {'bidPrice': 0, 'askPrice': 0}
                     
-                    logger.info(f"✅ Found {len(symbols)} currencies and {len(valid_pairs)} trading pairs")
+                    self.logger.info(f"✅ {self.exchange_config['name']}: {len(symbols)} currencies, {len(valid_pairs)} pairs")
                     
                     # Build triangular paths - EXACT JavaScript logic
                     self.pairs = []
@@ -134,11 +151,84 @@ class SimpleTriangleDetector:
                                             'value': -100, 'tpath': ''
                                         })
                     
-                    logger.info(f"✅ Built {len(self.pairs)} triangular arbitrage paths")
+                    self.logger.info(f"✅ Built {len(self.pairs)} triangular arbitrage paths")
                     return True
                 else:
-                    logger.error(f"Failed to fetch exchange info: {response.status}")
+                    self.logger.error(f"Failed to fetch {self.exchange_config['name']} exchange info: {response.status}")
                     return False
+    
+    def _parse_exchange_info(self, data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+        """Parse exchange-specific response format"""
+        symbols = []
+        valid_pairs = []
+        
+        try:
+            if self.exchange_id == 'binance':
+                # Binance format
+                symbols = list(set([
+                    asset for symbol_info in data['symbols']
+                    if symbol_info['status'] == 'TRADING'
+                    for asset in [symbol_info['baseAsset'], symbol_info['quoteAsset']]
+                ]))
+                valid_pairs = [
+                    symbol_info['symbol'] for symbol_info in data['symbols']
+                    if symbol_info['status'] == 'TRADING'
+                ]
+                
+            elif self.exchange_id == 'kucoin':
+                # KuCoin format
+                symbols = list(set([
+                    asset for symbol_info in data['data']
+                    if symbol_info['enableTrading']
+                    for asset in [symbol_info['baseCurrency'], symbol_info['quoteCurrency']]
+                ]))
+                valid_pairs = [
+                    symbol_info['symbol'].replace('-', '') for symbol_info in data['data']
+                    if symbol_info['enableTrading']
+                ]
+                
+            elif self.exchange_id == 'gate':
+                # Gate.io format
+                symbols = list(set([
+                    asset for pair_info in data
+                    if pair_info['trade_status'] == 'tradable'
+                    for asset in [pair_info['base'], pair_info['quote']]
+                ]))
+                valid_pairs = [
+                    pair_info['id'].replace('_', '') for pair_info in data
+                    if pair_info['trade_status'] == 'tradable'
+                ]
+                
+            elif self.exchange_id == 'bybit':
+                # Bybit format
+                symbols = list(set([
+                    asset for instrument in data['result']['list']
+                    if instrument['status'] == 'Trading'
+                    for asset in [instrument['baseCoin'], instrument['quoteCoin']]
+                ]))
+                valid_pairs = [
+                    instrument['symbol'] for instrument in data['result']['list']
+                    if instrument['status'] == 'Trading'
+                ]
+                
+            else:
+                # Default to Binance format
+                symbols = list(set([
+                    asset for symbol_info in data.get('symbols', [])
+                    if symbol_info.get('status') == 'TRADING'
+                    for asset in [symbol_info.get('baseAsset', ''), symbol_info.get('quoteAsset', '')]
+                ]))
+                valid_pairs = [
+                    symbol_info.get('symbol', '') for symbol_info in data.get('symbols', [])
+                    if symbol_info.get('status') == 'TRADING'
+                ]
+            
+            self.logger.info(f"📊 Parsed {self.exchange_config['name']} data: {len(symbols)} currencies, {len(valid_pairs)} pairs")
+            return symbols, valid_pairs
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing {self.exchange_config['name']} exchange info: {e}")
+            return [], []
     
     def process_data(self, data: str):
         """Process WebSocket data from the selected exchange"""
@@ -161,9 +251,9 @@ class SimpleTriangleDetector:
         except Exception as e:
             # Only log debug info if it's a real error, not just data format issues
             if "has no attribute 'get'" not in str(e):
-                logger.debug(f"Problematic data type: {type(data)}")
-                logger.debug(f"Data content: {str(data)[:200]}...")
-            logger.error(f"Error processing {self.exchange_config['name']} WebSocket data: {e}")
+                self.logger.debug(f"Problematic data type: {type(data)}")
+                self.logger.debug(f"Data content: {str(data)[:200]}...")
+            self.logger.error(f"Error processing {self.exchange_config['name']} WebSocket data: {e}")
     
     def _process_binance_data(self, data):
         """Process Binance WebSocket ticker data"""
@@ -330,13 +420,13 @@ class SimpleTriangleDetector:
                     # Only log if opportunities changed significantly
                     current_time = time.time()
                     if not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 10:
-                        logger.info(f"💎 Found {len(profitable_opportunities)} profitable opportunities on {self.exchange_config['name']}!")
+                        self.logger.info(f"💎 Found {len(profitable_opportunities)} profitable opportunities on {self.exchange_config['name']}!")
                         for i, opp in enumerate(profitable_opportunities[:3]):
-                            logger.info(f"   {i+1}. {opp}")
+                            self.logger.info(f"   {i+1}. {opp}")
                         self._last_log_time = current_time
                 
         except Exception as e:
-            logger.error(f"Error calculating opportunities for {self.exchange_config['name']}: {e}")
+            self.logger.error(f"Error calculating opportunities for {self.exchange_config['name']}: {e}")
     
     def _get_valid_currencies_for_exchange(self) -> Set[str]:
         """Get valid currencies for the selected exchange"""
@@ -381,23 +471,35 @@ class SimpleTriangleDetector:
     
     def _get_trading_costs_for_exchange(self) -> float:
         """Get trading costs percentage for the selected exchange"""
-        if self.exchange_id == 'gate':
-            return 0.6  # 0.6% total costs (0.2% per trade × 3 trades)
-        elif self.exchange_id == 'kucoin':
-            return 0.3  # 0.3% total costs (0.1% per trade × 3 trades)
-        elif self.exchange_id == 'binance':
-            return 0.3  # 0.3% total costs (0.1% per trade × 3 trades)
-        elif self.exchange_id == 'bybit':
-            return 0.3  # 0.3% total costs (0.1% per trade × 3 trades)
+        config = self.exchange_config
+        
+        # Use taker fees for market orders (3 trades in triangle)
+        base_fee_per_trade = config.get('taker_fee', 0.001)  # Default 0.1%
+        
+        # Check if fee token discount applies (simplified - assume user has fee tokens)
+        if config.get('fee_token') and config.get('taker_fee_with_token'):
+            fee_per_trade = config.get('taker_fee_with_token', base_fee_per_trade)
+            logger.info(f"💰 Using {config['fee_token']} discount: {fee_per_trade*100:.3f}% per trade")
         else:
-            return 0.4  # Default 0.4% total costs
+            fee_per_trade = base_fee_per_trade
+            logger.info(f"📊 Using base fees: {fee_per_trade*100:.3f}% per trade")
+        
+        # Total cost for 3 trades + slippage buffer
+        total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
+        total_costs_pct = total_costs * 100
+        
+        logger.info(f"🔧 {config['name']} total costs: {total_costs_pct:.3f}% "
+                        f"({fee_per_trade*100:.3f}% × 3 trades + 0.1% slippage)")
+        
+        return total_costs_pct
     
     async def start_websocket_stream(self):
         """Start WebSocket stream for the selected exchange"""
+        # Use exchange-specific WebSocket URL
         websocket_url = self.exchange_config['websocket_url']
         
-        logger.info(f"🌐 Connecting to {self.exchange_config['name']} WebSocket...")
-        logger.info(f"   URL: {websocket_url}")
+        self.logger.info(f"🌐 Connecting to {self.exchange_config['name']} WebSocket...")
+        self.logger.info(f"   URL: {websocket_url}")
         
         max_retries = 5
         retry_count = 0
@@ -407,17 +509,7 @@ class SimpleTriangleDetector:
                 async with websockets.connect(websocket_url) as websocket:
                     self.websocket = websocket
                     self.running = True
-                    logger.info(f"✅ Connected to {self.exchange_config['name']} WebSocket")
-                    
-                    # Subscribe to all ticker data
-                    subscribe_message = {
-                        "method": "SUBSCRIBE",
-                        "params": ["!ticker@arr"],
-                        "id": 121212131
-                    }
-                    
-                    await websocket.send(json.dumps(subscribe_message))
-                    logger.info("📡 Subscribed to all ticker data stream")
+                    self.logger.info(f"✅ Connected to {self.exchange_config['name']} WebSocket")
                     
                     # Reset retry count on successful connection
                     retry_count = 0
@@ -431,23 +523,23 @@ class SimpleTriangleDetector:
                             if message and message.strip():
                                 self.process_data(message)
                         except Exception as e:
-                            logger.error(f"Error processing message: {e}")
-                            logger.debug(f"Message that caused error: {message[:200]}...")
+                            self.logger.error(f"Error processing message: {e}")
+                            self.logger.debug(f"Message that caused error: {message[:200]}...")
                             
             except Exception as e:
                 retry_count += 1
-                logger.error(f"{self.exchange_config['name']} WebSocket connection failed (attempt {retry_count}): {e}")
+                self.logger.error(f"{self.exchange_config['name']} WebSocket connection failed (attempt {retry_count}): {e}")
                 
                 if retry_count < max_retries:
                     wait_time = min(2 ** retry_count, 30)
-                    logger.info(f"Retrying in {wait_time} seconds...")
+                    self.logger.info(f"Retrying in {wait_time} seconds...")
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f"Max {self.exchange_config['name']} WebSocket retry attempts reached")
+                    self.logger.error(f"Max {self.exchange_config['name']} WebSocket retry attempts reached")
                     break
         
         self.running = False
-        logger.info(f"{self.exchange_config['name']} WebSocket stream ended")
+        self.logger.info(f"{self.exchange_config['name']} WebSocket stream ended")
     
     async def _send_subscription_message(self, websocket):
         """Send exchange-specific subscription message"""
@@ -460,10 +552,22 @@ class SimpleTriangleDetector:
                     "id": 121212131
                 }
                 await websocket.send(json.dumps(subscribe_message))
-                logger.info("📡 Subscribed to Binance all ticker data stream")
+                self.logger.info("📡 Subscribed to Binance all ticker data stream")
                 
             elif self.exchange_id == 'kucoin':
-                # KuCoin: Subscribe to all ticker data
+                # KuCoin: Get WebSocket token first, then subscribe
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"{self.exchange_config['api_url']}/api/v1/bullet-public") as response:
+                        if response.status == 200:
+                            token_data = await response.json()
+                            token = token_data['data']['token']
+                            endpoint = token_data['data']['instanceServers'][0]['endpoint']
+                            
+                            # Update WebSocket URL with token
+                            websocket_url = f"{endpoint}?token={token}"
+                            self.logger.info(f"🔑 KuCoin WebSocket URL with token: {websocket_url}")
+                
                 subscribe_message = {
                     "id": int(time.time() * 1000),
                     "type": "subscribe",
@@ -471,17 +575,17 @@ class SimpleTriangleDetector:
                     "response": True
                 }
                 await websocket.send(json.dumps(subscribe_message))
-                logger.info("📡 Subscribed to KuCoin all ticker data stream")
+                self.logger.info("📡 Subscribed to KuCoin all ticker data stream")
                 
             elif self.exchange_id == 'gate':
                 # Gate.io: Subscribe to all ticker data
                 subscribe_message = {
                     "method": "ticker.subscribe",
-                    "params": [],
+                    "params": ["all"],
                     "id": 12345
                 }
                 await websocket.send(json.dumps(subscribe_message))
-                logger.info("📡 Subscribed to Gate.io all ticker data stream")
+                self.logger.info("📡 Subscribed to Gate.io all ticker data stream")
                 
             elif self.exchange_id == 'bybit':
                 # Bybit: Subscribe to all ticker data
@@ -490,7 +594,27 @@ class SimpleTriangleDetector:
                     "args": ["tickers.spot"]
                 }
                 await websocket.send(json.dumps(subscribe_message))
-                logger.info("📡 Subscribed to Bybit all ticker data stream")
+                self.logger.info("📡 Subscribed to Bybit all ticker data stream")
+                
+            elif self.exchange_id == 'coinbase':
+                # Coinbase: Subscribe to ticker data
+                subscribe_message = {
+                    "type": "subscribe",
+                    "product_ids": ["BTC-USD", "ETH-USD", "BTC-ETH"],  # Major pairs
+                    "channels": ["ticker"]
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                self.logger.info("📡 Subscribed to Coinbase ticker data stream")
+                
+            elif self.exchange_id == 'kraken':
+                # Kraken: Subscribe to ticker data
+                subscribe_message = {
+                    "event": "subscribe",
+                    "pair": ["XBT/USD", "ETH/USD", "XBT/ETH"],  # Major pairs
+                    "subscription": {"name": "ticker"}
+                }
+                await websocket.send(json.dumps(subscribe_message))
+                self.logger.info("📡 Subscribed to Kraken ticker data stream")
             
             else:
                 # Default to Binance format for unknown exchanges
@@ -500,10 +624,10 @@ class SimpleTriangleDetector:
                     "id": 121212131
                 }
                 await websocket.send(json.dumps(subscribe_message))
-                logger.info(f"📡 Subscribed to {self.exchange_config['name']} ticker data (using Binance format)")
+                self.logger.info(f"📡 Subscribed to {self.exchange_config['name']} ticker data (using Binance format)")
                 
         except Exception as e:
-            logger.error(f"Error sending subscription message to {self.exchange_config['name']}: {e}")
+            self.logger.error(f"Error sending subscription message to {self.exchange_config['name']}: {e}")
     
     def get_current_opportunities(self) -> List[TriangleOpportunity]:
         """Get current profitable opportunities"""

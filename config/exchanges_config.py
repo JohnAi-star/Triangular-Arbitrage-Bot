@@ -1,5 +1,5 @@
 """
-Exchange configurations for multi-exchange arbitrage bot.
+Exchange configurations for multi-exchange arbitrage bot with accurate fees and URLs (2025 Updated Version).
 """
 
 SUPPORTED_EXCHANGES = {
@@ -7,14 +7,16 @@ SUPPORTED_EXCHANGES = {
         'name': 'Binance',
         'class_name': 'binance',
         'api_url': 'https://api.binance.com',
-        'websocket_url': 'wss://stream.binance.com:9443/ws/!ticker@arr',
+        'websocket_url': 'wss://stream.binance.com:9443/ws',
         'ticker_endpoint': '/api/v3/ticker/price',
         'exchange_info_endpoint': '/api/v3/exchangeInfo',
         'fee_token': 'BNB',
         'fee_discount': 0.25,  # 25% discount with BNB
-        'zero_fee_pairs': [],
-        'maker_fee': 0.001,
-        'taker_fee': 0.001,
+        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT'],  
+        'maker_fee': 0.0010,   # 0.10%
+        'taker_fee': 0.0010,   # 0.10%
+        'maker_fee_with_token': 0.00075,  
+        'taker_fee_with_token': 0.00075,
         'enabled': True,
         'requires_passphrase': False
     },
@@ -26,10 +28,12 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/v5/market/tickers',
         'exchange_info_endpoint': '/v5/market/instruments-info',
         'fee_token': 'BIT',
-        'fee_discount': 0.10,
+        'fee_discount': 0.10,  
         'zero_fee_pairs': [],
-        'maker_fee': 0.001,
-        'taker_fee': 0.001,
+        'maker_fee': 0.0010,   
+        'taker_fee': 0.0010,   
+        'maker_fee_with_token': 0.0009,  
+        'taker_fee_with_token': 0.0009,
         'enabled': True,
         'requires_passphrase': False
     },
@@ -37,30 +41,36 @@ SUPPORTED_EXCHANGES = {
         'name': 'KuCoin',
         'class_name': 'kucoin',
         'api_url': 'https://api.kucoin.com',
-        'websocket_url': 'wss://ws-api.kucoin.com/endpoint',
+        'websocket_url': 'wss://ws-api-spot.kucoin.com',  # Updated WebSocket URL
         'ticker_endpoint': '/api/v1/market/allTickers',
         'exchange_info_endpoint': '/api/v1/symbols',
         'fee_token': 'KCS',
-        'fee_discount': 0.20,
-        'zero_fee_pairs': ['BTC/ETH', 'ETH/BTC'],  # Example zero-fee pairs
-        'maker_fee': 0.001,
-        'taker_fee': 0.001,
+        'fee_discount': 0.20,  # 20% discount for KCS holders
+        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT'],  # Major pairs often have zero fees
+        'maker_fee': 0.0010,  # 0.10%
+        'taker_fee': 0.0010,  # 0.10%
+        'maker_fee_with_token': 0.0008,  # 0.08% with KCS
+        'taker_fee_with_token': 0.0010,  # No taker discount
         'enabled': True,
-        'requires_passphrase': True  # KuCoin requires passphrase
+        'requires_passphrase': True,
+        'timeout': 10  # Added timeout to prevent hanging
     },
     'coinbase': {
-        'name': 'Coinbase Pro',
+        'name': 'Coinbase Advanced',
         'class_name': 'coinbasepro',
-        'api_url': 'https://api.pro.coinbase.com',
-        'websocket_url': 'wss://ws-feed.pro.coinbase.com',
+        'api_url': 'https://api.exchange.coinbase.com',
+        'websocket_url': 'wss://ws-feed.exchange.coinbase.com',
         'ticker_endpoint': '/products/ticker',
         'exchange_info_endpoint': '/products',
         'fee_token': None,
         'fee_discount': 0.0,
         'zero_fee_pairs': [],
-        'maker_fee': 0.005,
-        'taker_fee': 0.005,
-        'enabled': True
+        'maker_fee': 0.0040,   # 0.40% (volume-based, conservative base)
+        'taker_fee': 0.0060,   # 0.60%
+        'maker_fee_with_token': 0.0040,
+        'taker_fee_with_token': 0.0060,
+        'enabled': True,
+        'requires_passphrase': True
     },
     'kraken': {
         'name': 'Kraken',
@@ -72,9 +82,12 @@ SUPPORTED_EXCHANGES = {
         'fee_token': None,
         'fee_discount': 0.0,
         'zero_fee_pairs': [],
-        'maker_fee': 0.0016,
-        'taker_fee': 0.0026,
-        'enabled': True
+        'maker_fee': 0.0016,   
+        'taker_fee': 0.0026,   
+        'maker_fee_with_token': 0.0016,
+        'taker_fee_with_token': 0.0026,
+        'enabled': True,
+        'requires_passphrase': False
     },
     'gate': {
         'name': 'Gate.io',
@@ -84,10 +97,12 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/api/v4/spot/tickers',
         'exchange_info_endpoint': '/api/v4/spot/currency_pairs',
         'fee_token': 'GT',
-        'fee_discount': 0.15,
+        'fee_discount': 0.55,  
         'zero_fee_pairs': [],
-        'maker_fee': 0.002,
-        'taker_fee': 0.002,
+        'maker_fee': 0.0020,   
+        'taker_fee': 0.0020,   
+        'maker_fee_with_token': 0.0009,  
+        'taker_fee_with_token': 0.0009,  
         'enabled': True,
         'requires_passphrase': False
     },
@@ -99,25 +114,31 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/v1/market/ticker/all',
         'exchange_info_endpoint': '/v1/market/info',
         'fee_token': 'CET',
-        'fee_discount': 0.20,
+        'fee_discount': 0.10,  
         'zero_fee_pairs': [],
-        'maker_fee': 0.002,
-        'taker_fee': 0.002,
-        'enabled': True
+        'maker_fee': 0.0020,   
+        'taker_fee': 0.0020,   
+        'maker_fee_with_token': 0.0018,  
+        'taker_fee_with_token': 0.0018,  
+        'enabled': True,
+        'requires_passphrase': False
     },
     'htx': {
         'name': 'HTX (Huobi)',
         'class_name': 'htx',
-        'api_url': 'https://api.huobi.pro',
-        'websocket_url': 'wss://api.huobi.pro/ws',
+        'api_url': 'https://api.htx.com',
+        'websocket_url': 'wss://api-aws.htx.com/ws',
         'ticker_endpoint': '/market/tickers',
-        'exchange_info_endpoint': '/v1/common/symbols',
+        'exchange_info_endpoint': '/v2/settings/common/symbols',
         'fee_token': 'HT',
-        'fee_discount': 0.20,
+        'fee_discount': 0.20,  
         'zero_fee_pairs': [],
-        'maker_fee': 0.002,
-        'taker_fee': 0.002,
-        'enabled': True
+        'maker_fee': 0.0020,   
+        'taker_fee': 0.0020,   
+        'maker_fee_with_token': 0.0016,  
+        'taker_fee_with_token': 0.0016,  
+        'enabled': True,
+        'requires_passphrase': False
     },
     'mexc': {
         'name': 'MEXC',
@@ -127,11 +148,14 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/api/v3/ticker/24hr',
         'exchange_info_endpoint': '/api/v3/exchangeInfo',
         'fee_token': 'MX',
-        'fee_discount': 0.20,
-        'zero_fee_pairs': [],
-        'maker_fee': 0.002,
-        'taker_fee': 0.002,
-        'enabled': True
+        'fee_discount': 0.10,  
+        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT'],
+        'maker_fee': 0.0000,   
+        'taker_fee': 0.0010,   
+        'maker_fee_with_token': 0.0000,
+        'taker_fee_with_token': 0.0009,  
+        'enabled': True,
+        'requires_passphrase': False
     },
     'poloniex': {
         'name': 'Poloniex',
@@ -143,9 +167,12 @@ SUPPORTED_EXCHANGES = {
         'fee_token': None,
         'fee_discount': 0.0,
         'zero_fee_pairs': [],
-        'maker_fee': 0.00125,
-        'taker_fee': 0.00125,
-        'enabled': True
+        'maker_fee': 0.00145,  
+        'taker_fee': 0.00155,  
+        'maker_fee_with_token': 0.00145,
+        'taker_fee_with_token': 0.00155,
+        'enabled': True,
+        'requires_passphrase': False
     },
     'probit': {
         'name': 'ProBit Global',
@@ -155,11 +182,14 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/api/exchange/v1/ticker',
         'exchange_info_endpoint': '/api/exchange/v1/market',
         'fee_token': 'PROB',
-        'fee_discount': 0.25,
+        'fee_discount': 0.20,  
         'zero_fee_pairs': [],
-        'maker_fee': 0.002,
-        'taker_fee': 0.002,
-        'enabled': True
+        'maker_fee': 0.0020,   
+        'taker_fee': 0.0020,   
+        'maker_fee_with_token': 0.0016,  
+        'taker_fee_with_token': 0.0016,  
+        'enabled': True,
+        'requires_passphrase': False
     },
     'hitbtc': {
         'name': 'HitBTC',
@@ -171,17 +201,20 @@ SUPPORTED_EXCHANGES = {
         'fee_token': None,
         'fee_discount': 0.0,
         'zero_fee_pairs': [],
-        'maker_fee': 0.001,
-        'taker_fee': 0.002,
-        'enabled': True
+        'maker_fee': 0.0009,   
+        'taker_fee': 0.0025,   
+        'maker_fee_with_token': 0.0009,
+        'taker_fee_with_token': 0.0025,
+        'enabled': True,
+        'requires_passphrase': False
     }
 }
 
 # Priority currencies for triangle detection
-PRIORITY_CURRENCIES = ['USDT', 'BTC', 'ETH', 'BNB', 'USDC', 'BUSD']
+PRIORITY_CURRENCIES = ['USDT', 'BTC', 'ETH', 'BNB', 'USDC', 'BUSD', 'SOL', 'XRP']
 
-# Minimum liquidity requirements
-MIN_LIQUIDITY_USD = 10000  # $10,000 minimum liquidity
+# Minimum liquidity requirements (USD)
+MIN_LIQUIDITY_USD = 10000  
 
 # Maximum number of triangles to monitor per exchange
 MAX_TRIANGLES_PER_EXCHANGE = 100
