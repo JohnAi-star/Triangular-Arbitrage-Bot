@@ -1,7 +1,5 @@
-import asyncio
 import time
 from typing import List, Dict, Any, Set, Tuple
-from itertools import combinations
 from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep
 from exchanges.unified_exchange import UnifiedExchange
 from utils.logger import setup_logger
@@ -14,6 +12,8 @@ class TriangleDetector:
         self.config = config
         self.logger = setup_logger('TriangleDetector')
         self.price_cache: Dict[str, Dict[str, float]] = {}
+        self.require_usdt_anchor: bool = bool(self.config.get('require_usdt_anchor', True))
+        self.max_triangles: int = int(self.config.get('max_triangles', 500))
         self.triangles: List[Tuple[str, str, str]] = []
         self._last_scan_time = 0
         self.scan_interval = self.config.get('scan_interval_ms', 100) / 1000  # default 100ms per cycle
@@ -26,30 +26,59 @@ class TriangleDetector:
         self.logger.info(f"Found {len(self.triangles)} valid triangular paths for {self.exchange.exchange_id}")
 
     def _find_triangles(self, pairs: List[str]) -> List[Tuple[str, str, str]]:
-        """Build all valid triangular combinations from available pairs."""
-        triangles = []
-        currencies: Set[str] = set()
-        pair_map = {}
+        """Build triangular combinations anchored to USDT and capped by config."""
+        triangles: List[Tuple[str, str, str]] = []
+        pair_map: Set[str] = set()
+        usdt_coins: Set[str] = set()
 
+        # Normalize and index pairs, collect USDT-quoted/base coins
         for pair in pairs:
             if '/' not in pair:
                 continue
             base, quote = pair.split('/')
-            currencies.update([base, quote])
-            pair_map[f"{base}/{quote}"] = pair
-            pair_map[f"{quote}/{base}"] = pair  # allow reversed lookup for quick checks
+            norm = f"{base}/{quote}"
+            rev = f"{quote}/{base}"
+            pair_map.add(norm)
+            pair_map.add(rev)
+            if base == 'USDT' and quote != 'USDT':
+                usdt_coins.add(quote)
+            elif quote == 'USDT' and base != 'USDT':
+                usdt_coins.add(base)
 
-        for base in currencies:
-            for mid in currencies:
-                if mid == base:
-                    continue
-                for quote in currencies:
-                    if quote in (base, mid):
+        # If not requiring USDT anchor, fallback to legacy (but still cap)
+        if not getattr(self, 'require_usdt_anchor', True):
+            currencies: Set[str] = set()
+            for p in pairs:
+                if '/' in p:
+                    a, b = p.split('/')
+                    currencies.update([a, b])
+            for base in currencies:
+                for mid in currencies:
+                    if mid == base:
                         continue
-                    p1, p2, p3 = f"{base}/{mid}", f"{mid}/{quote}", f"{base}/{quote}"
-                    if p1 in pair_map and p2 in pair_map and p3 in pair_map:
-                        triangles.append((base, mid, quote))
+                    for quote in currencies:
+                        if quote in (base, mid):
+                            continue
+                        if (f"{base}/{mid}" in pair_map and
+                            f"{mid}/{quote}" in pair_map and
+                            f"{base}/{quote}" in pair_map):
+                            triangles.append((base, mid, quote))
+                            if len(triangles) >= getattr(self, 'max_triangles', 500):
+                                return triangles
+            return triangles
 
+        # USDT-anchored triangles: USDT -> CoinA -> CoinB -> USDT
+        coins = sorted(usdt_coins)
+        # Build unique pairs (CoinA, CoinB) without duplicates
+        for i in range(len(coins)):
+            for j in range(i + 1, len(coins)):
+                a = coins[i]
+                b = coins[j]
+                # Check cross-market exists between A and B
+                if f"{a}/{b}" in pair_map or f"{b}/{a}" in pair_map:
+                    triangles.append(('USDT', a, b))
+                    if len(triangles) >= getattr(self, 'max_triangles', 500):
+                        return triangles
         return triangles
 
     async def update_prices(self, price_data: Dict[str, Any]) -> None:
@@ -100,8 +129,9 @@ class TriangleDetector:
         for base, mid, quote in self.triangles:
             try:
                 opp = await self._calculate_triangle_profit(base, mid, quote, trade_amount)
-                if opp and opp.is_profitable and opp.profit_percentage >= min_profit:
-                    results.append(opp)
+                if opp and hasattr(opp, 'is_profitable') and hasattr(opp, 'profit_percentage'):
+                    if opp.is_profitable and opp.profit_percentage >= min_profit:
+                        results.append(opp)
             except Exception as e:
                 self.logger.error(f"Error evaluating triangle {base}-{mid}-{quote}: {e}")
                 continue
@@ -135,7 +165,7 @@ class TriangleDetector:
         final_amount = amount2 / p3['ask']  # buy BASE with QUOTE
         step3 = TradeStep(pair3, 'buy', amount2, p3['ask'], final_amount)
 
-        maker_fee, taker_fee = await self.exchange.get_trading_fees(pair1)
+        _, taker_fee = await self.exchange.get_trading_fees(pair1)
         total_fees = (
             initial_amount * taker_fee +
             amount1 * taker_fee +

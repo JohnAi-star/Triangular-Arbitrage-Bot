@@ -9,10 +9,9 @@ import websockets
 import json
 import time
 from typing import Dict, List, Any, Set, Tuple
-from datetime import datetime
 import logging
 from dataclasses import dataclass
-from utils.logger import setup_logger
+import aiohttp
 
 # Configure logging
 logging.basicConfig(
@@ -41,7 +40,7 @@ class SimpleTriangleDetector:
     """Simple triangular arbitrage detector using Binance WebSocket - Based on JavaScript logic"""
     
     def __init__(self, min_profit_pct: float = 0.5, exchange_id: str = 'binance'):
-        self.logger = setup_logger(f'SimpleTriangleDetector_{exchange_id}')
+        self.logger = logging.getLogger(f'SimpleTriangleDetector_{exchange_id}')
         self.min_profit_pct = min_profit_pct
         self.exchange_id = exchange_id
         self.exchange_config = self._get_exchange_config(exchange_id)
@@ -60,8 +59,38 @@ class SimpleTriangleDetector:
     
     def _get_exchange_config(self, exchange_id: str) -> Dict[str, Any]:
         """Get exchange configuration"""
-        from config.exchanges_config import SUPPORTED_EXCHANGES
-        config = SUPPORTED_EXCHANGES.get(exchange_id, SUPPORTED_EXCHANGES['binance'])
+        # Simplified exchange config - in a real app you'd import this from config
+        configs = {
+            'binance': {
+                'name': 'Binance',
+                'api_url': 'https://api.binance.com',
+                'websocket_url': 'wss://stream.binance.com:9443/ws',
+                'maker_fee': 0.001,
+                'taker_fee': 0.001
+            },
+            'kucoin': {
+                'name': 'KuCoin',
+                'api_url': 'https://api.kucoin.com',
+                'websocket_url': 'wss://ws-api.kucoin.com/endpoint',
+                'maker_fee': 0.001,
+                'taker_fee': 0.001
+            },
+            'gate': {
+                'name': 'Gate.io',
+                'api_url': 'https://api.gateio.ws',
+                'websocket_url': 'wss://ws.gate.io/v3',
+                'maker_fee': 0.001,
+                'taker_fee': 0.001
+            },
+            'bybit': {
+                'name': 'Bybit',
+                'api_url': 'https://api.bybit.com',
+                'websocket_url': 'wss://stream.bybit.com/v5/public/spot',
+                'maker_fee': 0.001,
+                'taker_fee': 0.001
+            }
+        }
+        config = configs.get(exchange_id, configs['binance'])
         self.logger.info(f"🔧 Using {config['name']} configuration:")
         self.logger.info(f"   API URL: {config['api_url']}")
         self.logger.info(f"   WebSocket URL: {config['websocket_url']}")
@@ -73,8 +102,6 @@ class SimpleTriangleDetector:
     
     async def get_pairs(self):
         """Get trading pairs and build triangular paths - Exact JavaScript logic"""
-        import aiohttp
-        
         self.logger.info(f"📡 Fetching exchange info from {self.exchange_config['name']}...")
         
         # Use exchange-specific API endpoint
@@ -111,57 +138,59 @@ class SimpleTriangleDetector:
                     # Build triangular paths - EXACT JavaScript logic
                     self.pairs = []
                     
-                    for d1 in symbols:
-                        for d2 in symbols:
-                            for d3 in symbols:
-                                if not (d1 == d2 or d2 == d3 or d3 == d1):
-                                    lv1, lv2, lv3 = [], [], []
-                                    l1, l2, l3 = '', '', ''
-                                    
-                                    # Level 1: d1 -> d2
-                                    if f"{d1}{d2}" in self.sym_val_j:
-                                        lv1.append(f"{d1}{d2}")
-                                        l1 = 'num'
-                                    if f"{d2}{d1}" in self.sym_val_j:
-                                        lv1.append(f"{d2}{d1}")
-                                        l1 = 'den'
-                                    
-                                    # Level 2: d2 -> d3
-                                    if f"{d2}{d3}" in self.sym_val_j:
-                                        lv2.append(f"{d2}{d3}")
-                                        l2 = 'num'
-                                    if f"{d3}{d2}" in self.sym_val_j:
-                                        lv2.append(f"{d3}{d2}")
-                                        l2 = 'den'
-                                    
-                                    # Level 3: d3 -> d1
-                                    if f"{d3}{d1}" in self.sym_val_j:
-                                        lv3.append(f"{d3}{d1}")
-                                        l3 = 'num'
-                                    if f"{d1}{d3}" in self.sym_val_j:
-                                        lv3.append(f"{d1}{d3}")
-                                        l3 = 'den'
-                                    
-                                    # If all three levels have valid pairs, add to triangular paths
-                                    if lv1 and lv2 and lv3:
-                                        self.pairs.append({
-                                            'l1': l1, 'l2': l2, 'l3': l3,
-                                            'd1': d1, 'd2': d2, 'd3': d3,
-                                            'lv1': lv1[0], 'lv2': lv2[0], 'lv3': lv3[0],
-                                            'value': -100, 'tpath': ''
-                                        })
+                    # --- USDT-anchored optimization ---
+                    # Limit symbols to those that have a direct USDT market
+                    usdt_symbols = [s for s in symbols if s != 'USDT' and (f"{s}USDT" in self.sym_val_j or f"USDT{s}" in self.sym_val_j)]
                     
+                    # Build unique (CoinA, CoinB) combos and map edges USDT<->A, A<->B, B<->USDT
+                    added = 0
+                    max_pairs = getattr(self, 'max_pairs', 500)
+                    for i in range(len(usdt_symbols)):
+                        for j in range(i+1, len(usdt_symbols)):
+                            if added >= max_pairs:
+                                break
+                            d1, d2, d3 = 'USDT', usdt_symbols[i], usdt_symbols[j]
+                            
+                            lv1, lv2, lv3 = [], [], []
+                            l1 = l2 = l3 = ''
+                            
+                            # Level 1: USDT <-> d2
+                            if f"{d1}{d2}" in self.sym_val_j:
+                                lv1.append(f"{d1}{d2}"); l1 = 'num'
+                            if f"{d2}{d1}" in self.sym_val_j:
+                                lv1.append(f"{d2}{d1}"); l1 = 'den' if not l1 else l1
+                            
+                            # Level 2: d2 <-> d3
+                            if f"{d2}{d3}" in self.sym_val_j:
+                                lv2.append(f"{d2}{d3}"); l2 = 'num'
+                            if f"{d3}{d2}" in self.sym_val_j:
+                                lv2.append(f"{d3}{d2}"); l2 = 'den' if not l2 else l2
+                            
+                            # Level 3: d3 <-> USDT
+                            if f"{d3}{d1}" in self.sym_val_j:
+                                lv3.append(f"{d3}{d1}"); l3 = 'num'
+                            if f"{d1}{d3}" in self.sym_val_j:
+                                lv3.append(f"{d1}{d3}"); l3 = 'den' if not l3 else l3
+                            
+                            if lv1 and lv2 and lv3:
+                                self.pairs.append({
+                                    'l1': l1, 'l2': l2, 'l3': l3,
+                                    'd1': d1, 'd2': d2, 'd3': d3,
+                                    'lv1': lv1[0], 'lv2': lv2[0], 'lv3': lv3[0],
+                                    'value': -100, 'tpath': ''
+                                })
+                                added += 1
                     self.logger.info(f"✅ Built {len(self.pairs)} triangular arbitrage paths")
                     return True
                 else:
                     self.logger.error(f"Failed to fetch {self.exchange_config['name']} exchange info: {response.status}")
                     return False
-    
+
     def _parse_exchange_info(self, data: Dict[str, Any]) -> Tuple[List[str], List[str]]:
         """Parse exchange-specific response format"""
         symbols = []
         valid_pairs = []
-        
+            
         try:
             if self.exchange_id == 'binance':
                 # Binance format
@@ -325,106 +354,105 @@ class SimpleTriangleDetector:
     def _calculate_opportunities(self):
         """Calculate arbitrage opportunities - EXACT JavaScript logic"""
         try:
+            profitable_opportunities = []
+            
+            # Define valid currencies for the selected exchange
+            valid_currencies = self._get_valid_currencies_for_exchange()
+            
+            for pair_data in self.pairs:
+                # CRITICAL: Filter out triangles with invalid currencies
+                d1, d2, d3 = pair_data['d1'], pair_data['d2'], pair_data['d3']
                 
-                profitable_opportunities = []
+                # Skip triangles with invalid currencies for this exchange
+                if not all(currency in valid_currencies for currency in [d1, d2, d3]):
+                    continue
                 
-                # Define valid currencies for the selected exchange
-                valid_currencies = self._get_valid_currencies_for_exchange()
+                # CRITICAL: Only process USDT-based triangles for profitability
+                if d1 != 'USDT':
+                    continue
                 
-                for pair_data in self.pairs:
-                    # CRITICAL: Filter out triangles with invalid currencies
-                    d1, d2, d3 = pair_data['d1'], pair_data['d2'], pair_data['d3']
+                # Check if all prices are available
+                lv1_data = self.sym_val_j.get(pair_data['lv1'], {})
+                lv2_data = self.sym_val_j.get(pair_data['lv2'], {})
+                lv3_data = self.sym_val_j.get(pair_data['lv3'], {})
+                
+                if (lv1_data.get('bidPrice', 0) > 0 and 
+                    lv1_data.get('askPrice', 0) > 0 and
+                    lv2_data.get('bidPrice', 0) > 0 and 
+                    lv2_data.get('askPrice', 0) > 0 and
+                    lv3_data.get('bidPrice', 0) > 0 and
+                    lv3_data.get('askPrice', 0) > 0):
                     
-                    # Skip triangles with invalid currencies for this exchange
-                    if not all(currency in valid_currencies for currency in [d1, d2, d3]):
-                        continue
+                    # Level 1 calculation
+                    if pair_data['l1'] == 'num':
+                        lv_calc = lv1_data['bidPrice']
+                        lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[bid:{lv1_data['bidPrice']}]→{pair_data['d2']}<br/>"
+                    else:
+                        lv_calc = 1 / lv1_data['askPrice']
+                        lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[ask:{lv1_data['askPrice']}]→{pair_data['d2']}<br/>"
                     
-                    # CRITICAL: Only process USDT-based triangles for profitability
-                    if d1 != 'USDT':
-                        continue
+                    # Level 2 calculation
+                    if pair_data['l2'] == 'num':
+                        lv_calc *= lv2_data['bidPrice']
+                        lv_str += f"{pair_data['d2']}→{pair_data['lv2']}[bid:{lv2_data['bidPrice']}]→{pair_data['d3']}<br/>"
+                    else:
+                        lv_calc *= 1 / lv2_data['askPrice']
+                        lv_str += f"{pair_data['d2']}→{pair_data['lv2']}[ask:{lv2_data['askPrice']}]→{pair_data['d3']}<br/>"
                     
-                    # Check if all prices are available
-                    lv1_data = self.sym_val_j.get(pair_data['lv1'], {})
-                    lv2_data = self.sym_val_j.get(pair_data['lv2'], {})
-                    lv3_data = self.sym_val_j.get(pair_data['lv3'], {})
+                    # Level 3 calculation
+                    if pair_data['l3'] == 'num':
+                        lv_calc *= lv3_data['bidPrice']
+                        lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[bid:{lv3_data['bidPrice']}]→{pair_data['d1']}"
+                    else:
+                        lv_calc *= 1 / lv3_data['askPrice']
+                        lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[ask:{lv3_data['askPrice']}]→{pair_data['d1']}"
                     
-                    if (lv1_data.get('bidPrice', 0) > 0 and 
-                        lv1_data.get('askPrice', 0) > 0 and
-                        lv2_data.get('bidPrice', 0) > 0 and 
-                        lv2_data.get('askPrice', 0) > 0 and
-                        lv3_data.get('bidPrice', 0) > 0 and
-                        lv3_data.get('askPrice', 0) > 0):
-                        
-                        # Level 1 calculation
-                        if pair_data['l1'] == 'num':
-                            lv_calc = lv1_data['bidPrice']
-                            lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[bid:{lv1_data['bidPrice']}]→{pair_data['d2']}<br/>"
-                        else:
-                            lv_calc = 1 / lv1_data['askPrice']
-                            lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[ask:{lv1_data['askPrice']}]→{pair_data['d2']}<br/>"
-                        
-                        # Level 2 calculation
-                        if pair_data['l2'] == 'num':
-                            lv_calc *= lv2_data['bidPrice']
-                            lv_str += f"{pair_data['d2']}→{pair_data['lv2']}[bid:{lv2_data['bidPrice']}]→{pair_data['d3']}<br/>"
-                        else:
-                            lv_calc *= 1 / lv2_data['askPrice']
-                            lv_str += f"{pair_data['d2']}→{pair_data['lv2']}[ask:{lv2_data['askPrice']}]→{pair_data['d3']}<br/>"
-                        
-                        # Level 3 calculation
-                        if pair_data['l3'] == 'num':
-                            lv_calc *= lv3_data['bidPrice']
-                            lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[bid:{lv3_data['bidPrice']}]→{pair_data['d1']}"
-                        else:
-                            lv_calc *= 1 / lv3_data['askPrice']
-                            lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[ask:{lv3_data['askPrice']}]→{pair_data['d1']}"
-                        
-                        # Calculate profit percentage with safety checks
-                        try:
-                            if lv_calc > 0 and lv_calc != float('inf'):
-                                pair_data['tpath'] = lv_str
-                                gross_profit_pct = (lv_calc - 1) * 100
+                    # Calculate profit percentage with safety checks
+                    try:
+                        if lv_calc > 0 and lv_calc != float('inf'):
+                            pair_data['tpath'] = lv_str
+                            gross_profit_pct = (lv_calc - 1) * 100
+                            
+                            # Apply exchange-specific trading costs
+                            trading_costs = self._get_trading_costs_for_exchange()
+                            net_profit_pct = gross_profit_pct - trading_costs
+                            pair_data['value'] = round(net_profit_pct, 6)
+                            
+                            # Add to profitable opportunities if above threshold and realistic
+                            if (pair_data['value'] > self.min_profit_pct and 
+                                pair_data['value'] < 10.0 and  # Max 10% profit (realistic)
+                                pair_data['value'] > -5.0):    # Min -5% loss (realistic)
                                 
-                                # Apply exchange-specific trading costs
-                                trading_costs = self._get_trading_costs_for_exchange()
-                                net_profit_pct = gross_profit_pct - trading_costs
-                                pair_data['value'] = round(net_profit_pct, 6)
-                                
-                                # Add to profitable opportunities if above threshold and realistic
-                                if (pair_data['value'] > self.min_profit_pct and 
-                                    pair_data['value'] < 10.0 and  # Max 10% profit (realistic)
-                                    pair_data['value'] > -5.0):    # Min -5% loss (realistic)
-                                    
-                                    opportunity = TriangleOpportunity(
-                                        d1=pair_data['d1'],
-                                        d2=pair_data['d2'], 
-                                        d3=pair_data['d3'],
-                                        lv1=pair_data['lv1'],
-                                        lv2=pair_data['lv2'],
-                                        lv3=pair_data['lv3'],
-                                        value=pair_data['value'],
-                                        tpath=pair_data['tpath']
-                                    )
-                                    profitable_opportunities.append(opportunity)
-                                    self.opportunities_found += 1
-                        except (ZeroDivisionError, OverflowError, ValueError):
-                            continue
-                
-                # Sort by profit percentage (highest first)
-                profitable_opportunities.sort(key=lambda x: x.value, reverse=True)
-                
-                # Update current opportunities
-                self.current_opportunities = profitable_opportunities[:10]  # Top 10
-                
-                if profitable_opportunities:
-                    # Only log if opportunities changed significantly
-                    current_time = time.time()
-                    if not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 10:
-                        self.logger.info(f"💎 Found {len(profitable_opportunities)} profitable opportunities on {self.exchange_config['name']}!")
-                        for i, opp in enumerate(profitable_opportunities[:3]):
-                            self.logger.info(f"   {i+1}. {opp}")
-                        self._last_log_time = current_time
-                
+                                opportunity = TriangleOpportunity(
+                                    d1=pair_data['d1'],
+                                    d2=pair_data['d2'], 
+                                    d3=pair_data['d3'],
+                                    lv1=pair_data['lv1'],
+                                    lv2=pair_data['lv2'],
+                                    lv3=pair_data['lv3'],
+                                    value=pair_data['value'],
+                                    tpath=pair_data['tpath']
+                                )
+                                profitable_opportunities.append(opportunity)
+                                self.opportunities_found += 1
+                    except (ZeroDivisionError, OverflowError, ValueError):
+                        continue
+            
+            # Sort by profit percentage (highest first)
+            profitable_opportunities.sort(key=lambda x: x.value, reverse=True)
+            
+            # Update current opportunities
+            self.current_opportunities = profitable_opportunities[:10]  # Top 10
+            
+            if profitable_opportunities:
+                # Only log if opportunities changed significantly
+                current_time = time.time()
+                if not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 10:
+                    self.logger.info(f"💎 Found {len(profitable_opportunities)} profitable opportunities on {self.exchange_config['name']}!")
+                    for i, opp in enumerate(profitable_opportunities[:3]):
+                        self.logger.info(f"   {i+1}. {opp}")
+                    self._last_log_time = current_time
+            
         except Exception as e:
             self.logger.error(f"Error calculating opportunities for {self.exchange_config['name']}: {e}")
     
@@ -432,23 +460,67 @@ class SimpleTriangleDetector:
         """Get valid currencies for the selected exchange"""
         if self.exchange_id == 'gate':
             return {
-                    'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                    'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                    'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                    'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                    'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
-                    'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-                    'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
-                    'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
-                    'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
-                    'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
+                'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
+                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
             }
         elif self.exchange_id == 'kucoin':
             return {
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'KCS'  # KuCoin's native token
+                'KCS',  # KuCoin's native token
+                # Additional major cryptocurrencies
+                'ETC', 'BCH', 'EOS', 'XLM', 'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX',
+                'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO',
+                # Stablecoins
+                'USDD', 'TUSD', 'DAI', 'PAX', 'BUSD', 'HUSD', 'USDK', 'FRAX',
+                # DeFi tokens
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
+                # NFT/Gaming tokens
+                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
+                # AI/Web3 tokens
+                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
+                # Meme coins
+                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
+                # Layer 2/Rollups
+                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
+                # Oracles
+                'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
+                # Privacy coins
+                'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
+                # Exchange tokens
+                'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
+                # Real-world assets
+                'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
+                # New listings
+                'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
+                # AI and Big Data
+                'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
+                # Liquid Staking
+                'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
+                # Bridges
+                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
+                # Additional popular tokens
+                'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
+                # Metaverse
+                'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
+                # Additional stablecoins
+                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
+                # Additional DeFi
+                'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
+                # Additional gaming
+                'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
+                # Additional AI
+                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC'
             }
         elif self.exchange_id == 'binance':
             return {
@@ -479,23 +551,28 @@ class SimpleTriangleDetector:
         # Check if fee token discount applies (simplified - assume user has fee tokens)
         if config.get('fee_token') and config.get('taker_fee_with_token'):
             fee_per_trade = config.get('taker_fee_with_token', base_fee_per_trade)
-            logger.info(f"💰 Using {config['fee_token']} discount: {fee_per_trade*100:.3f}% per trade")
+            self.logger.info(f"💰 Using {config['fee_token']} discount: {fee_per_trade*100:.3f}% per trade")
         else:
             fee_per_trade = base_fee_per_trade
-            logger.info(f"📊 Using base fees: {fee_per_trade*100:.3f}% per trade")
+            self.logger.info(f"📊 Using base fees: {fee_per_trade*100:.3f}% per trade")
         
         # Total cost for 3 trades + slippage buffer
         total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
         total_costs_pct = total_costs * 100
         
-        logger.info(f"🔧 {config['name']} total costs: {total_costs_pct:.3f}% "
+        self.logger.info(f"🔧 {config['name']} total costs: {total_costs_pct:.3f}% "
                         f"({fee_per_trade*100:.3f}% × 3 trades + 0.1% slippage)")
         
         return total_costs_pct
     
     async def start_websocket_stream(self):
         """Start WebSocket stream for the selected exchange"""
-        # Use exchange-specific WebSocket URL
+        if self.exchange_id == 'kucoin':
+            # KuCoin requires special token-based WebSocket connection
+            await self._start_kucoin_websocket()
+            return
+        
+        # Use standard WebSocket URL for other exchanges
         websocket_url = self.exchange_config['websocket_url']
         
         self.logger.info(f"🌐 Connecting to {self.exchange_config['name']} WebSocket...")
@@ -541,6 +618,79 @@ class SimpleTriangleDetector:
         self.running = False
         self.logger.info(f"{self.exchange_config['name']} WebSocket stream ended")
     
+    async def _start_kucoin_websocket(self):
+        """Special WebSocket handling for KuCoin with proper token management"""
+        self.logger.info("🌐 Starting KuCoin WebSocket with token authentication...")
+        
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                # Get WebSocket token from KuCoin
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(f"{self.exchange_config['api_url']}/api/v1/bullet-public") as response:
+                        if response.status == 200:
+                            token_data = await response.json()
+                            token = token_data['data']['token']
+                            endpoint = token_data['data']['instanceServers'][0]['endpoint']
+                            
+                            # Build WebSocket URL with token
+                            websocket_url = f"{endpoint}?token={token}"
+                            self.logger.info(f"🔑 KuCoin WebSocket URL: {endpoint}")
+                            
+                            # Connect to KuCoin WebSocket
+                            async with websockets.connect(websocket_url, ping_interval=20, ping_timeout=10) as websocket:
+                                self.websocket = websocket
+                                self.running = True
+                                self.logger.info("✅ Connected to KuCoin WebSocket successfully")
+                                
+                                # Send welcome message
+                                welcome_msg = {
+                                    "id": int(time.time() * 1000),
+                                    "type": "welcome"
+                                }
+                                await websocket.send(json.dumps(welcome_msg))
+                                
+                                # Subscribe to all tickers
+                                subscribe_msg = {
+                                    "id": int(time.time() * 1000),
+                                    "type": "subscribe",
+                                    "topic": "/market/ticker:all",
+                                    "privateChannel": False,
+                                    "response": True
+                                }
+                                await websocket.send(json.dumps(subscribe_msg))
+                                self.logger.info("📡 Subscribed to KuCoin ticker stream")
+                                
+                                # Reset retry count on successful connection
+                                retry_count = 0
+                                
+                                # Process messages
+                                async for message in websocket:
+                                    try:
+                                        if message and message.strip():
+                                            self.process_data(message)
+                                    except Exception as e:
+                                        self.logger.error(f"Error processing KuCoin message: {e}")
+                        else:
+                            raise Exception(f"Failed to get KuCoin token: {response.status}")
+                            
+            except Exception as e:
+                retry_count += 1
+                self.logger.error(f"KuCoin WebSocket failed (attempt {retry_count}): {e}")
+                
+                if retry_count < max_retries:
+                    wait_time = min(2 ** retry_count, 30)
+                    self.logger.info(f"Retrying KuCoin WebSocket in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.logger.error("Max KuCoin WebSocket retry attempts reached")
+                    break
+        
+        self.running = False
+        self.logger.info("KuCoin WebSocket stream ended")
+    
     async def _send_subscription_message(self, websocket):
         """Send exchange-specific subscription message"""
         try:
@@ -555,27 +705,24 @@ class SimpleTriangleDetector:
                 self.logger.info("📡 Subscribed to Binance all ticker data stream")
                 
             elif self.exchange_id == 'kucoin':
-                # KuCoin: Get WebSocket token first, then subscribe
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(f"{self.exchange_config['api_url']}/api/v1/bullet-public") as response:
-                        if response.status == 200:
-                            token_data = await response.json()
-                            token = token_data['data']['token']
-                            endpoint = token_data['data']['instanceServers'][0]['endpoint']
-                            
-                            # Update WebSocket URL with token
-                            websocket_url = f"{endpoint}?token={token}"
-                            self.logger.info(f"🔑 KuCoin WebSocket URL with token: {websocket_url}")
+                # KuCoin: Use simple ping-pong to keep connection alive
+                ping_message = {
+                    "id": int(time.time() * 1000),
+                    "type": "ping"
+                }
+                await websocket.send(json.dumps(ping_message))
+                self.logger.info("📡 KuCoin: Sent ping to maintain connection")
                 
+                # Subscribe to ticker updates
                 subscribe_message = {
                     "id": int(time.time() * 1000),
                     "type": "subscribe",
                     "topic": "/market/ticker:all",
+                    "privateChannel": False,
                     "response": True
                 }
                 await websocket.send(json.dumps(subscribe_message))
-                self.logger.info("📡 Subscribed to KuCoin all ticker data stream")
+                self.logger.info("📡 Subscribed to KuCoin ticker stream")
                 
             elif self.exchange_id == 'gate':
                 # Gate.io: Subscribe to all ticker data

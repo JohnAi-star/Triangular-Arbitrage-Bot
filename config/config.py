@@ -34,8 +34,12 @@ class Config:
     # Core Trading Parameters
     MIN_PROFIT_PERCENTAGE: float = 0.5    # 0.5% minimum profit threshold
     MIN_PROFIT_THRESHOLD: float = 0.5      # 0.5% threshold for execution (SINGLE SOURCE OF TRUTH)
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '15'))               # $15 USDT per trade (safer for Gate.io)
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (optimized for multi-exchange)
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
+    # Triangle generation limits
+    REQUIRE_USDT_ANCHOR: bool = True
+    MAX_TRIANGLES: int = int(os.getenv('MAX_TRIANGLES', '300'))  # Reduced for better performance
+    MIN_VOLUME_USDT: float = float(os.getenv('MIN_VOLUME_USDT', '0'))  # optional filter if volumes available
 
     # Fee & Trading Mode
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
@@ -112,6 +116,9 @@ class Config:
             'paper_trading': cls.PAPER_TRADING,
             'backtesting_mode': cls.BACKTESTING_MODE,
             'live_trading': not cls.PAPER_TRADING,
+            'require_usdt_anchor': cls.REQUIRE_USDT_ANCHOR,
+            'max_triangles': cls.MAX_TRIANGLES,
+            'min_volume_usdt': cls.MIN_VOLUME_USDT,
             'enabled_exchanges': [
                 ex_id for ex_id, cred in cls.EXCHANGE_CREDENTIALS.items()
                 if cred['enabled']

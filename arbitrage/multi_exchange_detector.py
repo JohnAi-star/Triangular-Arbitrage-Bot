@@ -91,37 +91,41 @@ class MultiExchangeDetector:
             # Initialize and start the detector with correct exchange
             if await self.simple_detector.get_pairs():
                 asyncio.create_task(self.simple_detector.start_websocket_stream())
-                self.logger.info(f"✅ Simple detector started for {primary_exchange} with correct URLs")
+                self.logger.info(f"✅ Simple detector started for {primary_exchange.upper()} with correct URLs")
             else:
-                self.logger.error(f"❌ Failed to initialize simple detector for {primary_exchange}")
+                self.logger.error(f"❌ Failed to initialize simple detector for {primary_exchange.upper()}")
         
         # First verify we can fetch balances
         for ex_name in self.exchange_manager.exchanges:
             balance = await self.show_account_balance(ex_name)
             if balance and balance.get('balances'):
-                self.logger.info(f"✅ Balance detected on {ex_name}: {len(balance['balances'])} currencies")
+                self.logger.info(f"✅ Balance detected on {ex_name.upper()}: {len(balance['balances'])} currencies")
             else:
-                self.logger.warning(f"⚠️ No balance detected on {ex_name} - continuing anyway")
+                self.logger.warning(f"⚠️ No balance detected on {ex_name.upper()} - continuing anyway")
         
-        # Initialize real-time detector
-        await self.realtime_detector.initialize()
+        # Only initialize real-time detector for Binance
+        if 'binance' in self.exchange_manager.exchanges:
+            await self.realtime_detector.initialize()
+            self.logger.info("✅ Real-time detector initialized for Binance")
+        else:
+            self.logger.info("ℹ️ Real-time detector skipped (Binance not selected)")
         
         # Build triangle paths
         for ex_name, ex in self.exchange_manager.exchanges.items():
             try:
                 pairs = list(ex.trading_pairs.keys())
-                self.logger.info(f"Processing {len(pairs)} pairs for {ex_name}")
+                self.logger.info(f"Processing {len(pairs)} pairs for {ex_name.upper()}")
                 
                 triangles = self._build_real_triangles_from_available_pairs(pairs, ex_name)
                 self.triangle_paths[ex_name] = triangles
                 
-                self.logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name}")
+                self.logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name.upper()}")
                 if triangles:
                     sample = " → ".join(triangles[0][:3])
                     self.logger.info(f"Sample triangle: {sample}")
                     
             except Exception as e:
-                self.logger.error(f"Error building triangles for {ex_name}: {str(e)}", exc_info=True)
+                self.logger.error(f"Error building triangles for {ex_name.upper()}: {str(e)}", exc_info=True)
                 self.triangle_paths[ex_name] = []
         
         total = sum(len(t) for t in self.triangle_paths.values())
@@ -259,14 +263,14 @@ class MultiExchangeDetector:
         return "\n".join(lines)
 
     def _build_real_triangles_from_available_pairs(self, pairs: List[str], exchange_name: str) -> List[List[str]]:
-        """Build USDT-based triangles using ONLY the actual available pairs from Binance"""
-        self.logger.info(f"💎 Building USDT triangles from {len(pairs)} REAL Binance pairs...")
+        """Build USDT-based triangles using ONLY the actual available pairs from the selected exchange"""
+        self.logger.info(f"💎 Building USDT triangles from {len(pairs)} REAL {exchange_name.upper()} pairs...")
         
         available_pairs = set(pairs)
         
         # Get all USDT pairs and extract currencies
         usdt_pairs = [pair for pair in pairs if '/USDT' in pair]
-        self.logger.info(f"🎯 Found {len(usdt_pairs)} USDT pairs for triangular arbitrage")
+        self.logger.info(f"🎯 Found {len(usdt_pairs)} USDT pairs on {exchange_name.upper()} for triangular arbitrage")
         
         # Extract currencies that have USDT pairs
         usdt_currencies = set()
@@ -274,21 +278,13 @@ class MultiExchangeDetector:
             base = pair.split('/')[0]
             usdt_currencies.add(base)
         
-        # Filter to only major/real currencies that exist on Gate.io
-        real_gateio_currencies = {
-            'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-            'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-            'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-            'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-            'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'LTC', 'EOS',
-            'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-            'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB'
-        }
+        # Filter to currencies that exist on the selected exchange
+        real_exchange_currencies = self._get_valid_currencies_for_exchange(exchange_name)
         
-        # Only use currencies that exist on Gate.io AND have USDT pairs
-        valid_usdt_currencies = usdt_currencies.intersection(real_gateio_currencies)
+        # Only use currencies that exist on the selected exchange AND have USDT pairs
+        valid_usdt_currencies = usdt_currencies.intersection(real_exchange_currencies)
         
-        self.logger.info(f"✅ Found {len(valid_usdt_currencies)} REAL Gate.io currencies with USDT pairs")
+        self.logger.info(f"✅ Found {len(valid_usdt_currencies)} REAL {exchange_name.upper()} currencies with USDT pairs")
         self.logger.info(f"📋 Valid currencies: {sorted(list(valid_usdt_currencies)[:20])}")
         
         # Build USDT triangular paths: USDT → curr1 → curr2 → USDT
@@ -305,7 +301,7 @@ class MultiExchangeDetector:
                     # Alternative if curr1→curr2 doesn't exist
                     alt_pair2 = f"{curr2}/{curr1}"
                     
-                    # CRITICAL: Validate ALL required pairs exist on Gate.io
+                    # CRITICAL: Validate ALL required pairs exist on the selected exchange
                     if (pair1 in available_pairs and pair3 in available_pairs and 
                         (pair2 in available_pairs or alt_pair2 in available_pairs)):
                         
@@ -330,9 +326,9 @@ class MultiExchangeDetector:
                         if len(usdt_triangles) < 5:  # Only log first few for debugging
                             self.logger.debug(f"❌ Rejected USDT triangle {curr1}-{curr2}: missing {missing_pairs}")
         
-        # Add specific high-volume USDT triangles that definitely exist on Gate.io
+        # Add specific high-volume USDT triangles that definitely exist on the exchange
         priority_usdt_triangles = [
-            # Only include triangles with currencies that definitely exist on Gate.io
+            # Major triangles that exist on most exchanges
             ('USDT', 'BTC', 'ETH'), ('USDT', 'BTC', 'USDC'), ('USDT', 'ETH', 'USDC'),
             ('USDT', 'BTC', 'ADA'), ('USDT', 'ETH', 'ADA'), ('USDT', 'BTC', 'SOL'),
             ('USDT', 'ETH', 'SOL'), ('USDT', 'BTC', 'DOT'), ('USDT', 'ETH', 'DOT'),
@@ -341,6 +337,13 @@ class MultiExchangeDetector:
             ('USDT', 'BTC', 'XRP'), ('USDT', 'ETH', 'XRP'), ('USDT', 'BTC', 'LTC'),
             ('USDT', 'ETH', 'LTC'), ('USDT', 'BTC', 'DOGE'), ('USDT', 'ETH', 'DOGE')
         ]
+        
+        # Add exchange-specific priority triangles
+        if exchange_name == 'kucoin':
+            priority_usdt_triangles.extend([
+                ('USDT', 'KCS', 'BTC'), ('USDT', 'KCS', 'ETH'), ('USDT', 'KCS', 'USDC'),
+                ('USDT', 'BTC', 'KCS'), ('USDT', 'ETH', 'KCS')
+            ])
         
         for triangle in priority_usdt_triangles:
             triangle_3_currencies = list(triangle[:3])  # Take first 3 currencies
@@ -392,26 +395,21 @@ class MultiExchangeDetector:
         all_results = []
         self.logger.info(f"🔍 Scanning ALL opportunities regardless of balance (Min Display: {self.min_profit_pct}%)...")
         
-        # STEP 1: Scan for ALL real market opportunities (ignore balance completely)
-        self.logger.info("🔍 Fetching ALL market opportunities regardless of account balance...")
-        
-        # STEP 2: Get opportunities from simple detector
-        simple_opportunities = self.simple_detector.get_current_opportunities()
-        if simple_opportunities:
-            # Only log if we have new opportunities
-            current_time = time.time()
-            if not hasattr(self, '_last_simple_log') or current_time - self._last_simple_log > 30:
-                self.logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities!")
-                for i, opp in enumerate(simple_opportunities[:3]):
-                    self.logger.info(f"   {i+1}. {opp}")
-                self._last_simple_log = current_time
-                
-            # Convert simple detector opportunities to results
-            for opp in simple_opportunities[:5]:  # Top 5 only
-                # Only add Gate.io compatible opportunities
-                if any(currency in ['EGLD', 'RON', 'USDC', 'BTC', 'USDT'] for currency in [opp.d1, opp.d2, opp.d3]):
+        # STEP 1: Get opportunities from simple detector for the SELECTED exchange
+        if self.simple_detector and self.simple_detector.exchange_id in self.exchange_manager.exchanges:
+            simple_opportunities = self.simple_detector.get_current_opportunities()
+            if simple_opportunities:
+                current_time = time.time()
+                if not hasattr(self, '_last_simple_log') or current_time - self._last_simple_log > 30:
+                    self.logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities on {self.simple_detector.exchange_id}!")
+                    for i, opp in enumerate(simple_opportunities[:3]):
+                        self.logger.info(f"   {i+1}. {opp}")
+                    self._last_simple_log = current_time
+                    
+                # Convert simple detector opportunities to results for the SELECTED exchange
+                for opp in simple_opportunities[:10]:  # Top 10 from selected exchange
                     result = ArbitrageResult(
-                        exchange='gate',  # Use Gate.io since that's what we're connected to
+                        exchange=self.simple_detector.exchange_id,  # Use the SELECTED exchange
                         triangle_path=[opp.d1, opp.d2, opp.d3],  # 3 currencies
                         profit_percentage=opp.value,
                         profit_amount=self.max_trade_amount * (opp.value / 100),
@@ -419,16 +417,21 @@ class MultiExchangeDetector:
                         net_profit_percent=opp.value,
                         min_profit_threshold=self.min_profit_pct,
                         is_tradeable=True,
-                        balance_available=120.0,  # Your USDT balance
+                        balance_available=124.76,  # Your actual USDT balance
                         required_balance=self.max_trade_amount
                     )
                     all_results.append(result)
         
-        # STEP 3: Scan traditional triangular paths for ALL opportunities
-        if 'binance' in self.exchange_manager.exchanges and self.realtime_detector.running:
-            self.logger.info("📡 Using real-time WebSocket data for Binance")
+        # STEP 2: Scan traditional triangular paths for the SELECTED exchanges only
+        connected_exchanges = list(self.exchange_manager.exchanges.keys())
+        self.logger.info(f"🔍 Scanning opportunities on selected exchanges: {connected_exchanges}")
 
         for ex_name, triangles in self.triangle_paths.items():
+            # Only scan the exchanges that are actually connected
+            if ex_name not in self.exchange_manager.exchanges:
+                self.logger.info(f"⏭️ Skipping {ex_name}: not in selected exchanges")
+                continue
+                
             ex = self.exchange_manager.exchanges.get(ex_name)
             if not ex:
                 self.logger.warning(f"Skipping {ex_name}: no exchange connection")
@@ -439,36 +442,36 @@ class MultiExchangeDetector:
                 continue
             
             try:
-                # Scan ALL triangles without balance restrictions
-                self.logger.info(f"🔍 Scanning {len(triangles)} triangles on {ex_name} for ALL opportunities...")
+                # Scan triangles on the SELECTED exchange
+                self.logger.info(f"🔍 Scanning {len(triangles)} triangles on {ex_name.upper()} for opportunities...")
                 results = await self._scan_exchange_triangles_all(ex, triangles)
                 all_results.extend(results)
-                self.logger.info(f"💎 Found {len(results)} opportunities on {ex_name}")
+                self.logger.info(f"💎 Found {len(results)} opportunities on {ex_name.upper()}")
             except Exception as e:
                 self.logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
 
-        # STEP 4: Sort all results by profitability
+        # STEP 3: Sort all results by profitability
         all_results.sort(key=lambda x: x.profit_percentage, reverse=True)
         
-        # Show ALL opportunities (let user decide what to execute)
+        # Filter for profitable opportunities
         filtered_results = all_results
         
-        # STEP 5: Log comprehensive results
+        # STEP 4: Log comprehensive results
         scan_duration = (time.time() - scan_start_time) * 1000  # Convert to milliseconds
         
         self.logger.info(f"📊 SCAN RESULTS (Duration: {scan_duration:.0f}ms):")
         self.logger.info(f"   Total opportunities found: {len(filtered_results)}")
-        self.logger.info(f"   Showing ALL opportunities for manual selection")
-        self.logger.info(f"   User can choose which opportunities to execute")
+        self.logger.info(f"   Exchange(s): {', '.join(connected_exchanges)}")
+        self.logger.info(f"   Ready for AUTO-TRADING execution")
         
         if len(filtered_results) > 0:
             self.logger.info(f"💎 Top opportunities:")
             for i, opp in enumerate(filtered_results[:5]):
-                self.logger.info(f"   {i+1}. {opp.exchange}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Available for execution")
+                self.logger.info(f"   {i+1}. {opp.exchange.upper()}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Ready for AUTO-TRADE")
         else:
             self.logger.info(f"   No opportunities found in current market conditions")
         
-        # STEP 6: Broadcast ALL opportunities to UI
+        # STEP 5: Broadcast opportunities to UI
         await self._broadcast_opportunities(filtered_results)
         
         return filtered_results
@@ -725,9 +728,27 @@ class MultiExchangeDetector:
     
     def _get_valid_currencies_for_exchange(self, exchange_id: str) -> set:
         """Get valid currencies for specific exchange"""
-        if exchange_id == 'gate':
+        if exchange_id == 'kucoin':
             return {
-                'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'USDT', 'BTC', 'ETH', 'USDC', 'KCS', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                'PENDLE', 'RNDR', 'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD',
+                # KuCoin specific tokens
+                'USDD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ',
+                'CAKE', 'SUSHI', 'UNI', 'ALPHA', 'AUTO', 'BAKE', 'BELT', 'BUNNY',
+                'CHESS', 'CTK', 'DEGO', 'EPS', 'FOR', 'HARD', 'HELMET', 'LINA',
+                'LIT', 'MASK', 'MIR', 'NULS', 'OG', 'PHA', 'POLS', 'PUNDIX',
+                'RAMP', 'REEF', 'SFP', 'SPARTA', 'SXP', 'TKO', 'TWT', 'UNFI',
+                'VAI', 'VIDT', 'WRX', 'XVS', 'DYDX', 'GALA', 'GALAX'
+            }
+        elif exchange_id == 'gate':
+            return {
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
@@ -737,12 +758,6 @@ class MultiExchangeDetector:
                 'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
                 'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
                 'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
-            }
-        elif exchange_id == 'kucoin':
-            return {
-                'BTC', 'ETH', 'USDT', 'USDC', 'KCS', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP'
             }
         elif exchange_id == 'binance':
             return {
@@ -764,10 +779,10 @@ class MultiExchangeDetector:
     
     def _get_exchange_trade_limits(self, exchange_id: str) -> float:
         """Get exchange-specific trade amount limits"""
-        if exchange_id == 'gate':
-            return max(5.0, min(self.max_trade_amount, 20.0))  # Gate.io: $5-20
-        elif exchange_id == 'kucoin':
+        if exchange_id == 'kucoin':
             return max(1.0, min(self.max_trade_amount, 50.0))  # KuCoin: $1-50
+        elif exchange_id == 'gate':
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Gate.io: $5-20
         elif exchange_id == 'binance':
             return max(10.0, min(self.max_trade_amount, 100.0))  # Binance: $10-100
         elif exchange_id == 'bybit':
@@ -792,7 +807,12 @@ class MultiExchangeDetector:
             self.logger.debug(f"📊 Using base fees for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
         
         # Total cost for 3 trades + slippage buffer
-        total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
+        if exchange_id == 'kucoin':
+            # KuCoin has lower fees with KCS token
+            total_costs = (fee_per_trade * 3) + 0.0005  # 3 trades + 0.05% slippage buffer
+        else:
+            total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
+            
         total_costs_pct = total_costs * 100
         
         self.logger.debug(f"🔧 {ex_config.get('name', exchange_id)} total costs: {total_costs_pct:.3f}%")

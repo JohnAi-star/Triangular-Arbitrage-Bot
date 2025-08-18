@@ -310,6 +310,25 @@ class UnifiedExchange(BaseExchange):
                     # For market SELL orders, use standard format
                     self.logger.info(f"🔧 Gate.io MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
                     order = await self.exchange.create_market_order(symbol, side, qty)
+            elif self.exchange_id == 'kucoin':
+                self.logger.info("🔧 Using KuCoin specific order format...")
+                
+                # KuCoin market order handling
+                if side.lower() == 'buy':
+                    # For market BUY orders, KuCoin needs the quote currency amount (USDT to spend)
+                    self.logger.info(f"🔧 KuCoin MARKET BUY: Spending {qty:.2f} USDT to buy {symbol}")
+                    order = await self.exchange.create_order(
+                        symbol=symbol,
+                        type='market',
+                        side='buy',
+                        amount=qty,  # USDT amount to spend
+                        price=None,
+                        params={'quoteOrderQty': qty}  # KuCoin specific parameter
+                    )
+                else:
+                    # For market SELL orders, use standard format
+                    self.logger.info(f"🔧 KuCoin MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
+                    order = await self.exchange.create_market_order(symbol, side, qty)
             else:
                 # Standard order for other exchanges
                 order = await self.exchange.create_market_order(symbol, side, qty)

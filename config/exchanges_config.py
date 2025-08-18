@@ -41,19 +41,20 @@ SUPPORTED_EXCHANGES = {
         'name': 'KuCoin',
         'class_name': 'kucoin',
         'api_url': 'https://api.kucoin.com',
-        'websocket_url': 'wss://ws-api-spot.kucoin.com',  # Updated WebSocket URL
+        'websocket_url': 'wss://ws-api-spot.kucoin.com',
         'ticker_endpoint': '/api/v1/market/allTickers',
         'exchange_info_endpoint': '/api/v1/symbols',
         'fee_token': 'KCS',
         'fee_discount': 0.20,  # 20% discount for KCS holders
-        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT'],  # Major pairs often have zero fees
+        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT', 'KCS/USDT'],  # KuCoin zero-fee pairs
         'maker_fee': 0.0010,  # 0.10%
         'taker_fee': 0.0010,  # 0.10%
         'maker_fee_with_token': 0.0008,  # 0.08% with KCS
-        'taker_fee_with_token': 0.0010,  # No taker discount
+        'taker_fee_with_token': 0.0008,  # 0.08% with KCS for both maker and taker
         'enabled': True,
         'requires_passphrase': True,
-        'timeout': 10  # Added timeout to prevent hanging
+        'timeout': 15,  # Increased timeout for KuCoin
+        'rate_limit': 1000  # KuCoin rate limit
     },
     'coinbase': {
         'name': 'Coinbase Advanced',
