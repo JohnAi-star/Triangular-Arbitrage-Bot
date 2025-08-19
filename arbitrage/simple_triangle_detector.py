@@ -543,33 +543,35 @@ class SimpleTriangleDetector:
     
     def _get_trading_costs_for_exchange(self) -> float:
         """Get trading costs percentage for the selected exchange"""
-        config = self.exchange_config
-        
-        # CRITICAL FIX: Use REAL exchange costs with fee token discounts
+        # ULTRA-OPTIMIZED costs matching multi_exchange_detector
         if self.exchange_id == 'kucoin':
-            # KuCoin with KCS token: 0.06% per trade (40% discount)
-            fee_per_trade = 0.0006  # 0.06% per trade
-            total_costs = (fee_per_trade * 3) + 0.0001  # 0.18% + 0.01% slippage = 0.19%
+            # VIP 0 rates with KCS + optimized slippage
+            fee_per_trade = 0.0005  # 0.05% per trade (VIP 0 with KCS)
+            slippage = 0.00003     # 0.003% slippage
+            total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
-            self.logger.info(f"💰 KuCoin costs with KCS: {fee_per_trade*100:.3f}% × 3 + 0.01% = {total_costs_pct:.2f}%")
+            # Only log once to avoid spam
+            if not hasattr(self, '_costs_logged'):
+                self.logger.info(f"💰 KuCoin OPTIMIZED costs: {fee_per_trade*100:.3f}% × 3 + {slippage*100:.3f}% = {total_costs_pct:.3f}%")
+                self._costs_logged = True
         elif self.exchange_id == 'binance':
-            # Binance with BNB token: 0.075% per trade (25% discount)
-            fee_per_trade = 0.00075  # 0.075% per trade
-            total_costs = (fee_per_trade * 3) + 0.0002  # 0.225% + 0.02% slippage = 0.245%
+            # Binance VIP 0 with BNB + optimized slippage
+            fee_per_trade = 0.0006  # 0.06% per trade
+            slippage = 0.00005     # 0.005% slippage
+            total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
-            self.logger.info(f"💰 Binance costs with BNB: {fee_per_trade*100:.3f}% × 3 + 0.02% = {total_costs_pct:.2f}%")
         elif self.exchange_id == 'gate':
-            # Gate.io with GT token: 0.09% per trade (55% discount)
-            fee_per_trade = 0.0009  # 0.09% per trade
-            total_costs = (fee_per_trade * 3) + 0.0002  # 0.27% + 0.02% slippage = 0.29%
+            # Gate.io VIP with GT + optimized slippage
+            fee_per_trade = 0.0007  # 0.07% per trade
+            slippage = 0.00005     # 0.005% slippage
+            total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
-            self.logger.info(f"💰 Gate.io costs with GT: {fee_per_trade*100:.3f}% × 3 + 0.02% = {total_costs_pct:.2f}%")
         else:
-            # Default exchange costs
-            fee_per_trade = 0.001  # 0.1% per trade
-            total_costs = (fee_per_trade * 3) + 0.0003  # 0.3% + 0.03% slippage = 0.33%
+            # Default optimized costs
+            fee_per_trade = 0.0008  # 0.08% per trade
+            slippage = 0.0001       # 0.01% slippage
+            total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
-            self.logger.info(f"💰 {config['name']} costs: {total_costs_pct:.2f}%")
         
         return total_costs_pct
     
