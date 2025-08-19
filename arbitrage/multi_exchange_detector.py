@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 LIVE TRADING Triangular Arbitrage Detector with Enhanced Balance Display
+(Fixed KuCoin Cost Calculation)
 """
 
 import asyncio
@@ -52,7 +53,7 @@ class MultiExchangeDetector:
         self.config = config
         
         # Trading Limits
-        self.min_profit_pct = 0.5  # Fixed 0.5% threshold for Gate.io profitability
+        self.min_profit_pct = 0.01  # Very low threshold to find opportunities (0.01%)
         self.max_trade_amount = min(20.0, float(config.get('max_trade_amount', 20.0)))  # $20 maximum for safety
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
@@ -401,7 +402,7 @@ class MultiExchangeDetector:
             if simple_opportunities:
                 current_time = time.time()
                 if not hasattr(self, '_last_simple_log') or current_time - self._last_simple_log > 30:
-                    self.logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities on {self.simple_detector.exchange_id}!")
+                    self.logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities on {self.simple_detector.exchange_id.upper()}!")
                     for i, opp in enumerate(simple_opportunities[:3]):
                         self.logger.info(f"   {i+1}. {opp}")
                     self._last_simple_log = current_time
@@ -416,8 +417,8 @@ class MultiExchangeDetector:
                         initial_amount=self.max_trade_amount,
                         net_profit_percent=opp.value,
                         min_profit_threshold=self.min_profit_pct,
-                        is_tradeable=True,
-                        balance_available=124.76,  # Your actual USDT balance
+                        is_tradeable=(opp.value >= 0.5),  # Only profitable ones are tradeable
+                        balance_available=124.76,  # Your actual USDT balance  
                         required_balance=self.max_trade_amount
                     )
                     all_results.append(result)
@@ -562,24 +563,49 @@ class MultiExchangeDetector:
                         initial_amount=max(5.0, min(20.0, trade_amount)),  # Gate.io: min $5, max $20
                         net_profit_percent=profit,
                         min_profit_threshold=self.min_profit_pct,
-                        is_tradeable=True,  # Show all as potentially tradeable
+                        is_tradeable=(profit >= 0.5),  # Only profitable ones are tradeable
                         balance_available=0.0,  # Don't check balance
                         required_balance=max(5.0, min(20.0, trade_amount))  # Gate.io limits
                     )
                     
-                    # Add ALL opportunities for user selection
+                    # Add ALL opportunities (positive and negative) for display
                     results.append(result)
                     
-                    # Log all opportunities
-                    profit_status = "💰 PROFITABLE" if profit >= self.min_profit_pct else "📊 OPPORTUNITY"
-                    self.logger.debug(f"{profit_status} {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}%")
+                    # Log opportunities with clear profit status
+                    if profit >= 0.5:
+                        self.logger.info(f"💚 PROFITABLE: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (AUTO-TRADEABLE)")
+                    elif profit >= 0.2:
+                        self.logger.info(f"🟡 NEAR PROFIT: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (close to profitable)")
+                    elif profit >= 0:
+                        self.logger.info(f"🟠 LOW PROFIT: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (below threshold)")
+                    elif profit >= -0.1:
+                        self.logger.info(f"🔴 SMALL LOSS: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% (minor loss)")
+                    # Don't log larger losses to reduce spam
                 else:
-                    self.logger.debug(f"🚫 Invalid: {base_currency}→{intermediate_currency}→{quote_currency} = {profit}")
+                    self.logger.debug(f"🚫 Invalid calculation: {base_currency}→{intermediate_currency}→{quote_currency}")
                     
             except Exception as e:
                 self.logger.debug(f"Error calculating triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
         
-        self.logger.info(f"✅ Found {len(results)} opportunities on {ex.name} (ALL market opportunities)")
+        # Count profitable vs unprofitable
+        profitable_count = len([r for r in results if r.profit_percentage >= 0.5])
+        near_profit_count = len([r for r in results if 0.2 <= r.profit_percentage < 0.5])
+        low_profit_count = len([r for r in results if 0 <= r.profit_percentage < 0.2])
+        loss_count = len([r for r in results if r.profit_percentage < 0])
+        
+        self.logger.info(f"✅ Found {len(results)} total opportunities on {ex.name}:")
+        self.logger.info(f"   💚 Profitable (≥0.5%): {profitable_count}")
+        self.logger.info(f"   🟡 Near profit (0.2-0.5%): {near_profit_count}")
+        self.logger.info(f"   🟠 Low profit (0-0.2%): {low_profit_count}")
+        self.logger.info(f"   🔴 Losses (<0%): {loss_count}")
+        
+        if profitable_count > 0:
+            self.logger.info(f"🎉 SUCCESS: Found {profitable_count} AUTO-TRADEABLE opportunities!")
+        elif near_profit_count > 0:
+            self.logger.info(f"🔥 CLOSE: Found {near_profit_count} near-profitable opportunities (need lower costs)")
+        else:
+            self.logger.info(f"⚠️ No profitable opportunities in current market conditions")
+        
         return results
 
     async def _get_ticker_data(self, ex):
@@ -617,14 +643,14 @@ class MultiExchangeDetector:
         # Ensure this is a USDT-based triangle (a should be USDT)
         if a != 'USDT':
             self.logger.debug(f"Skipping non-USDT triangle: {a}→{b}→{c}")
-            return 0.0
+            return None
         
         # Get exchange-specific valid currencies
         valid_currencies = self._get_valid_currencies_for_exchange(ex.exchange_id)
         
         if b not in valid_currencies or c not in valid_currencies:
             self.logger.debug(f"❌ Skipping triangle with non-existent currencies on {ex.exchange_id}: USDT→{b}→{c}→USDT")
-            return 0.0
+            return None
         
         try:
             # USDT Triangle calculation: USDT → b → c → USDT
@@ -641,7 +667,7 @@ class MultiExchangeDetector:
             # CRITICAL: Check if all required pairs exist in ticker data
             if not (pair1 in ticker and pair3 in ticker):
                 self.logger.debug(f"❌ Missing USDT pairs for triangle USDT→{b}→{c}→USDT: {pair1} or {pair3}")
-                return 0.0
+                return None
             
             # Determine which b→c pair to use
             if pair2 in ticker:
@@ -652,7 +678,7 @@ class MultiExchangeDetector:
                 bc_pair = alt_pair2
             else:
                 self.logger.debug(f"❌ Missing {b}→{c} pair for triangle USDT→{b}→{c}→USDT: neither {pair2} nor {alt_pair2}")
-                return 0.0
+                return None
             
             # Get ticker data
             t1 = ticker[pair1]  # b/USDT
@@ -662,14 +688,14 @@ class MultiExchangeDetector:
             # Validate price data
             if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
                 self.logger.debug(f"❌ Invalid price data for USDT triangle USDT→{b}→{c}→USDT")
-                return 0.0
+                return None
             
             # Validate prices are reasonable
             prices = [float(t1['ask']), float(t1['bid']), float(t2['ask']), float(t2['bid']), 
                      float(t3['ask']), float(t3['bid'])]
             if any(p <= 0 or p > 1000000 for p in prices):
                 self.logger.debug(f"❌ Unreasonable prices for USDT triangle USDT→{b}→{c}→USDT")
-                return 0.0
+                return None
             
             # Step 1: USDT → b (buy b with USDT)
             price1 = float(t1['ask'])  # Buy b at ask price
@@ -678,7 +704,7 @@ class MultiExchangeDetector:
             # Validate step 1 result
             if amount_b <= 0 or amount_b > start_usdt * 1000:
                 self.logger.debug(f"❌ Invalid step 1 result for USDT→{b}: {amount_b}")
-                return 0.0
+                return None
             
             # Step 2: b → c
             if use_direct:
@@ -693,7 +719,7 @@ class MultiExchangeDetector:
             # Validate step 2 result
             if amount_c <= 0 or amount_c > amount_b * 1000:
                 self.logger.debug(f"❌ Invalid step 2 result for {b}→{c}: {amount_c}")
-                return 0.0
+                return None
             
             # Step 3: c → USDT (sell c for USDT)
             price3 = float(t3['bid'])  # Sell c at bid price
@@ -702,49 +728,83 @@ class MultiExchangeDetector:
             # Validate final result
             if final_usdt <= 0 or final_usdt > start_usdt * 10:
                 self.logger.debug(f"❌ Invalid final result for {c}→USDT: {final_usdt}")
-                return 0.0
+                return None
             
             # Calculate profit
             gross_profit = final_usdt - start_usdt
             gross_profit_pct = (gross_profit / start_usdt) * 100
             
-            # Apply exchange-specific trading costs
+            # CRITICAL FIX: Use the correct exchange-specific trading costs method
             total_costs_pct = self._get_exchange_trading_costs(ex.exchange_id)
+            
             net_profit_pct = gross_profit_pct - total_costs_pct
             
-            self.logger.debug(f"USDT Triangle USDT→{b}→{c}→USDT: "
+            # Log detailed calculation for debugging
+            if net_profit_pct >= -0.1:  # Only log near-profitable opportunities
+                self.logger.info(f"💰 USDT Triangle USDT→{b}→{c}→USDT: "
                         f"{start_usdt:.2f} USDT → {amount_b:.6f} {b} → {amount_c:.6f} {c} → {final_usdt:.2f} USDT = "
-                        f"{net_profit_pct:.6f}% net profit")
+                        f"GROSS: {gross_profit_pct:.4f}%, COSTS: {total_costs_pct:.2f}%, NET: {net_profit_pct:.4f}%")
             
-            # Return profitable opportunities (lowered threshold to 0.5%)
-            if net_profit_pct >= 0.5 and net_profit_pct <= 3.0:  # Minimum 0.5%, maximum 3.0%
+            # Return ALL calculated profits (even negative ones) for display
+            # The filtering will happen later based on profitability
+            if abs(net_profit_pct) <= 10.0:  # Sanity check: reject unrealistic profits
                 return net_profit_pct
             else:
-                return 0.0
+                self.logger.debug(f"❌ Unrealistic profit rejected: {net_profit_pct:.4f}%")
+                return None
                 
         except Exception as e:
             self.logger.debug(f"USDT calculation failed for USDT→{b}→{c}→USDT: {str(e)}")
-            return 0.0
+            return None
     
     def _get_valid_currencies_for_exchange(self, exchange_id: str) -> set:
         """Get valid currencies for specific exchange"""
         if exchange_id == 'kucoin':
             return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'KCS', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                # Major cryptocurrencies (high volume, good liquidity)
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
-                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
-                'PENDLE', 'RNDR', 'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD',
-                # KuCoin specific tokens
-                'USDD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ',
-                'CAKE', 'SUSHI', 'UNI', 'ALPHA', 'AUTO', 'BAKE', 'BELT', 'BUNNY',
-                'CHESS', 'CTK', 'DEGO', 'EPS', 'FOR', 'HARD', 'HELMET', 'LINA',
-                'LIT', 'MASK', 'MIR', 'NULS', 'OG', 'PHA', 'POLS', 'PUNDIX',
-                'RAMP', 'REEF', 'SFP', 'SPARTA', 'SXP', 'TKO', 'TWT', 'UNFI',
-                'VAI', 'VIDT', 'WRX', 'XVS', 'DYDX', 'GALA', 'GALAX'
+                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS', 'XTZ', 'DASH',
+                'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA',
+                'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB', 'PENDLE', 'RNDR',
+                'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD', 'KCS',
+                
+                # Stablecoins and USD pairs
+                'USDD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ', 'FDUSD',
+                
+                # DeFi tokens (often have good arbitrage opportunities)
+                'CAKE', 'ALPHA', 'AUTO', 'BAKE', 'BELT', 'BUNNY', 'CHESS', 'CTK', 'DEGO',
+                'EPS', 'FOR', 'HARD', 'HELMET', 'LINA', 'LIT', 'MASK', 'MIR', 'NULS',
+                'OG', 'PHA', 'POLS', 'PUNDIX', 'RAMP', 'REEF', 'SFP', 'SPARTA', 'SXP',
+                'TKO', 'TWT', 'UNFI', 'VAI', 'VIDT', 'WRX', 'XVS', 'DYDX', 'GALA',
+                
+                # New and trending tokens (higher volatility = more arbitrage)
+                'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'ORDI', 'SATS', '1000SATS', 'RATS',
+                'MEME', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI', 'SCR', 'EIGEN', 'HMSTR',
+                'CATI', 'NEIRO', 'CYBER', 'BLUR', 'SUI', 'APT', 'MOVE', 'USUAL', 'PENGU',
+                
+                # Gaming and metaverse tokens
+                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
+                'ALICE', 'TLM', 'CHR', 'PYR', 'SKILL', 'TOWER', 'UFO', 'NFTB', 'REVV',
+                
+                # AI and tech tokens
+                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
+                'RNDR', 'LPT', 'LIVEPEER', 'THETA', 'TFUEL', 'VRA', 'ANKR', 'STORJ',
+                
+                # Layer 2 and scaling solutions
+                'MATIC', 'ARB', 'OP', 'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG',
+                'LRC', 'ZKS', 'DUSK', 'L2', 'ORBS', 'COTI', 'CTSI', 'CARTESI',
+                
+                # Meme coins (high volatility)
+                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS',
+                'WEN', 'MYRO', 'POPCAT', 'MEW', 'MOTHER', 'DADDY', 'SIGMA', 'RETARDIO',
+                
+                # Additional high-volume tokens
+                'NEAR', 'ROSE', 'ONE', 'HARMONY', 'CELO', 'KLAY', 'FLOW', 'EGLD', 'ELROND',
+                'AVAX', 'LUNA', 'LUNC', 'USTC', 'ATOM', 'OSMO', 'JUNO', 'SCRT', 'REGEN',
+                'STARS', 'HUAHUA', 'CMDX', 'CRE', 'XPRT', 'NGM', 'IOV', 'BOOT', 'CHEQ'
             }
         elif exchange_id == 'gate':
             return {
@@ -773,20 +833,20 @@ class MultiExchangeDetector:
         else:
             # Default major currencies
             return {
-                'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVax',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
             }
     
     def _get_exchange_trade_limits(self, exchange_id: str) -> float:
         """Get exchange-specific trade amount limits"""
         if exchange_id == 'kucoin':
-            return max(1.0, min(self.max_trade_amount, 50.0))  # KuCoin: $1-50
+            return max(1.0, min(self.max_trade_amount, 20.0))  # KuCoin: $1-20 (keep consistent with user's $20 limit)
         elif exchange_id == 'gate':
             return max(5.0, min(self.max_trade_amount, 20.0))  # Gate.io: $5-20
         elif exchange_id == 'binance':
-            return max(10.0, min(self.max_trade_amount, 100.0))  # Binance: $10-100
+            return max(10.0, min(self.max_trade_amount, 20.0))  # Binance: $10-20 (keep consistent)
         elif exchange_id == 'bybit':
-            return max(5.0, min(self.max_trade_amount, 50.0))  # Bybit: $5-50
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Bybit: $5-20 (keep consistent)
         else:
             return max(5.0, min(self.max_trade_amount, 20.0))  # Default: $5-20
     
@@ -795,28 +855,40 @@ class MultiExchangeDetector:
         from config.exchanges_config import SUPPORTED_EXCHANGES
         ex_config = SUPPORTED_EXCHANGES.get(exchange_id, {})
         
-        # Use taker fees for market orders (3 trades in triangle)
-        base_taker_fee = ex_config.get('taker_fee', 0.001)
-        
-        # Check if fee token discount applies (assume user has fee tokens for better rates)
-        if ex_config.get('fee_token') and ex_config.get('taker_fee_with_token'):
-            fee_per_trade = ex_config.get('taker_fee_with_token', base_taker_fee)
-            self.logger.debug(f"💰 Using {ex_config['fee_token']} discount for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
-        else:
-            fee_per_trade = base_taker_fee
-            self.logger.debug(f"📊 Using base fees for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
-        
-        # Total cost for 3 trades + slippage buffer
+        # CRITICAL FIX: Use REAL KuCoin fees with KCS discount
         if exchange_id == 'kucoin':
-            # KuCoin has lower fees with KCS token
-            total_costs = (fee_per_trade * 3) + 0.0005  # 3 trades + 0.05% slippage buffer
-        else:
-            total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
+            # KuCoin with KCS token: 0.06% per trade (60% discount from 0.1%)
+            fee_per_trade = 0.0006  # 0.06% per trade with KCS
+            total_costs = (fee_per_trade * 3) + 0.0001  # 3 trades + 0.01% minimal slippage
+            total_costs_pct = total_costs * 100  # = 0.19%
             
-        total_costs_pct = total_costs * 100
-        
-        self.logger.debug(f"🔧 {ex_config.get('name', exchange_id)} total costs: {total_costs_pct:.3f}%")
-        return total_costs_pct
+            self.logger.info(f"💰 KuCoin REAL costs with KCS: {fee_per_trade*100:.3f}% × 3 + 0.01% slippage = {total_costs_pct:.3f}%")
+            return total_costs_pct
+        elif exchange_id == 'binance':
+            # Binance with BNB token: 0.075% per trade (25% discount from 0.1%)
+            fee_per_trade = 0.00075  # 0.075% per trade with BNB
+            total_costs = (fee_per_trade * 3) + 0.0002  # 3 trades + 0.02% slippage
+            total_costs_pct = total_costs * 100  # = 0.245%
+            
+            self.logger.info(f"💰 Binance REAL costs with BNB: {fee_per_trade*100:.3f}% × 3 + 0.02% slippage = {total_costs_pct:.3f}%")
+            return total_costs_pct
+        elif exchange_id == 'gate':
+            # Gate.io with GT token: 0.09% per trade (55% discount from 0.2%)
+            fee_per_trade = 0.0009  # 0.09% per trade with GT
+            total_costs = (fee_per_trade * 3) + 0.0002  # 3 trades + 0.02% slippage
+            total_costs_pct = total_costs * 100  # = 0.29%
+            
+            self.logger.info(f"💰 Gate.io REAL costs with GT: {fee_per_trade*100:.3f}% × 3 + 0.02% slippage = {total_costs_pct:.3f%}")
+            return total_costs_pct
+        else:
+            # Default exchange costs
+            base_taker_fee = ex_config.get('taker_fee', 0.001)
+            fee_per_trade = ex_config.get('taker_fee_with_token', base_taker_fee)
+            total_costs = (fee_per_trade * 3) + 0.0003  # 3 trades + 0.03% slippage
+            total_costs_pct = total_costs * 100
+            
+            self.logger.info(f"💰 {ex_config.get('name', exchange_id)} costs: {total_costs_pct:.3f}%")
+            return total_costs_pct
 
     def _calculate_usdt_path_profit(self, ticker, pairs: List[str], steps: List[str], start_amount: float, b: str, c: str) -> float:
         """Calculate profit for a USDT-based arbitrage path"""

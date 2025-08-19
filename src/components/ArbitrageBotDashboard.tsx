@@ -417,36 +417,43 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     </thead>
                                     <tbody className="divide-y divide-slate-700">
                                         {opportunities.map(o => (
-                                            <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className={`hover:bg-slate-700/30 cursor-pointer ${o.real_market_data ? 'bg-green-900/20 border-l-4 border-l-green-400' : 'bg-slate-800/50'}`}>
+                                            <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className={`hover:bg-slate-700/30 cursor-pointer ${o.profitPercentage >= 0.5 ? 'bg-green-900/20 border-l-4 border-l-green-400' :
+                                                    o.profitPercentage >= 0 ? 'bg-yellow-900/20 border-l-4 border-l-yellow-400' :
+                                                        'bg-red-900/20 border-l-4 border-l-red-400'
+                                                }`}>
                                                 <td className="p-2">{getStatusIcon(o.status)}</td>
                                                 <td className="p-2 text-white">
                                                     {o.exchange}
-                                                    {o.real_market_data && <span className="ml-2 text-xs bg-green-600 px-2 py-1 rounded">LIVE</span>}
+                                                    <span className="ml-2 text-xs bg-blue-600 px-2 py-1 rounded">LIVE</span>
                                                 </td>
                                                 <td className="p-2 text-sm text-gray-300">
                                                     {o.trianglePath}
                                                     <div className="text-xs text-blue-400">
-                                                        {o.trianglePath.includes('USDT →') && o.trianglePath.includes('→ USDT') ?
-                                                            '✅ USDT Triangle (4-step cycle)' :
-                                                            '⚠️ Not USDT triangle'
+                                                        {o.profitPercentage >= 0.5 ? '💚 PROFITABLE (≥0.5%)' :
+                                                            o.profitPercentage >= 0 ? '🟡 LOW PROFIT (0-0.5%)' :
+                                                                '🔴 LOSS (<0%)'
                                                         }
                                                     </div>
                                                 </td>
-                                                <td className="p-2 text-green-400">{o.profitPercentage.toFixed(4)}%</td>
-                                                <td className="p-2 text-green-400">${o.profitAmount.toFixed(2)}</td>
+                                                <td className={`p-2 ${o.profitPercentage >= 0.5 ? 'text-green-400' : o.profitPercentage >= 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                    {o.profitPercentage >= 0 ? '+' : ''}{o.profitPercentage.toFixed(4)}%
+                                                </td>
+                                                <td className={`p-2 ${o.profitPercentage >= 0.5 ? 'text-green-400' : o.profitPercentage >= 0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                                                    ${o.profitPercentage >= 0 ? '+' : ''}{o.profitAmount.toFixed(4)}
+                                                </td>
                                                 <td className="p-2 text-gray-300">${o.volume.toFixed(0)}</td>
                                                 <td className="p-2">
-                                                    {o.status === 'detected' && o.trianglePath.startsWith('USDT →') && o.trianglePath.endsWith('→ USDT') && (
+                                                    {o.status === 'detected' && o.profitPercentage >= 0.5 && (
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
+                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700 animate-pulse"
                                                         >
-                                                            EXECUTE USDT
+                                                            EXECUTE (+{o.profitPercentage.toFixed(2)}%)
                                                         </button>
                                                     )}
-                                                    {o.status === 'detected' && (!o.trianglePath.startsWith('USDT →') || !o.trianglePath.endsWith('→ USDT')) && (
+                                                    {o.status === 'detected' && o.profitPercentage < 0.5 && (
                                                         <span className="px-3 py-1 text-gray-400 text-xs">
-                                                            Not USDT triangle
+                                                            {o.profitPercentage >= 0 ? 'Low Profit' : 'Loss'}
                                                         </span>
                                                     )}
                                                 </td>

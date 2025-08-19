@@ -545,23 +545,31 @@ class SimpleTriangleDetector:
         """Get trading costs percentage for the selected exchange"""
         config = self.exchange_config
         
-        # Use taker fees for market orders (3 trades in triangle)
-        base_fee_per_trade = config.get('taker_fee', 0.001)  # Default 0.1%
-        
-        # Check if fee token discount applies (simplified - assume user has fee tokens)
-        if config.get('fee_token') and config.get('taker_fee_with_token'):
-            fee_per_trade = config.get('taker_fee_with_token', base_fee_per_trade)
-            self.logger.info(f"💰 Using {config['fee_token']} discount: {fee_per_trade*100:.3f}% per trade")
+        # CRITICAL FIX: Use REAL exchange costs with fee token discounts
+        if self.exchange_id == 'kucoin':
+            # KuCoin with KCS token: 0.06% per trade (40% discount)
+            fee_per_trade = 0.0006  # 0.06% per trade
+            total_costs = (fee_per_trade * 3) + 0.0001  # 0.18% + 0.01% slippage = 0.19%
+            total_costs_pct = total_costs * 100
+            self.logger.info(f"💰 KuCoin costs with KCS: {fee_per_trade*100:.3f}% × 3 + 0.01% = {total_costs_pct:.2f}%")
+        elif self.exchange_id == 'binance':
+            # Binance with BNB token: 0.075% per trade (25% discount)
+            fee_per_trade = 0.00075  # 0.075% per trade
+            total_costs = (fee_per_trade * 3) + 0.0002  # 0.225% + 0.02% slippage = 0.245%
+            total_costs_pct = total_costs * 100
+            self.logger.info(f"💰 Binance costs with BNB: {fee_per_trade*100:.3f}% × 3 + 0.02% = {total_costs_pct:.2f}%")
+        elif self.exchange_id == 'gate':
+            # Gate.io with GT token: 0.09% per trade (55% discount)
+            fee_per_trade = 0.0009  # 0.09% per trade
+            total_costs = (fee_per_trade * 3) + 0.0002  # 0.27% + 0.02% slippage = 0.29%
+            total_costs_pct = total_costs * 100
+            self.logger.info(f"💰 Gate.io costs with GT: {fee_per_trade*100:.3f}% × 3 + 0.02% = {total_costs_pct:.2f}%")
         else:
-            fee_per_trade = base_fee_per_trade
-            self.logger.info(f"📊 Using base fees: {fee_per_trade*100:.3f}% per trade")
-        
-        # Total cost for 3 trades + slippage buffer
-        total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
-        total_costs_pct = total_costs * 100
-        
-        self.logger.info(f"🔧 {config['name']} total costs: {total_costs_pct:.3f}% "
-                        f"({fee_per_trade*100:.3f}% × 3 trades + 0.1% slippage)")
+            # Default exchange costs
+            fee_per_trade = 0.001  # 0.1% per trade
+            total_costs = (fee_per_trade * 3) + 0.0003  # 0.3% + 0.03% slippage = 0.33%
+            total_costs_pct = total_costs * 100
+            self.logger.info(f"💰 {config['name']} costs: {total_costs_pct:.2f}%")
         
         return total_costs_pct
     

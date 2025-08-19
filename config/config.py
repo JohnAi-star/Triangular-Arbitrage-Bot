@@ -32,9 +32,9 @@ class Config:
         }
 
     # Core Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = 0.5    # 0.5% minimum profit threshold
+    MIN_PROFIT_PERCENTAGE: float = 0.01   # 0.01% minimum profit threshold for finding opportunities (very low to find more)
     MIN_PROFIT_THRESHOLD: float = 0.5      # 0.5% threshold for execution (SINGLE SOURCE OF TRUTH)
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (optimized for multi-exchange)
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (enforced limit)
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
     # Triangle generation limits
     REQUIRE_USDT_ANCHOR: bool = True

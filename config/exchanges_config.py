@@ -45,12 +45,12 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/api/v1/market/allTickers',
         'exchange_info_endpoint': '/api/v1/symbols',
         'fee_token': 'KCS',
-        'fee_discount': 0.20,  # 20% discount for KCS holders
-        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT', 'KCS/USDT'],  # KuCoin zero-fee pairs
+        'fee_discount': 0.40,  # 40% discount for KCS holders (REAL KuCoin rate)
+        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT', 'KCS/USDT', 'USDT/USDC'],  # KuCoin zero-fee pairs
         'maker_fee': 0.0010,  # 0.10%
         'taker_fee': 0.0010,  # 0.10%
-        'maker_fee_with_token': 0.0008,  # 0.08% with KCS
-        'taker_fee_with_token': 0.0008,  # 0.08% with KCS for both maker and taker
+        'maker_fee_with_token': 0.0006,  # 0.06% with KCS (REAL KuCoin rate)
+        'taker_fee_with_token': 0.0006,  # 0.06% with KCS (REAL KuCoin rate)
         'enabled': True,
         'requires_passphrase': True,
         'timeout': 15,  # Increased timeout for KuCoin

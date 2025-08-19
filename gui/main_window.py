@@ -688,26 +688,32 @@ class ArbitrageBotGUI:
                 if hasattr(opportunity, 'is_profitable'):
                     is_profitable = opportunity.is_profitable
                 elif hasattr(opportunity, 'net_profit_percent'):
-                    is_profitable = opportunity.net_profit_percent > 0.5
+                    is_profitable = opportunity.net_profit_percent >= 0.5
                 else:
-                    is_profitable = profit_pct > 0.5
+                    is_profitable = profit_pct >= 0.5
                 
                 values = (
                     exchange,
                     path,
-                    f"{profit_pct:.4f}%",
-                    f"${profit_amt:.6f}",
+                    f"{'+' if profit_pct >= 0 else ''}{profit_pct:.4f}%",
+                    f"${'+' if profit_amt >= 0 else ''}{profit_amt:.4f}",
                     f"${initial_amt:.2f}",
                     "Execute"
                 )
                 
-                # Color code by profitability
-                tags = ("profitable",) if is_profitable else ("unprofitable",)
+                # Color code by profitability with 3 levels
+                if profit_pct >= 0.5:
+                    tags = ("profitable",)  # Green for profitable
+                elif profit_pct >= 0:
+                    tags = ("low_profit",)  # Yellow for low profit
+                else:
+                    tags = ("unprofitable",)  # Red for losses
                 
                 self.opportunities_tree.insert("", "end", values=values, tags=tags)
             
-            # Configure tags
+            # Configure tags with better colors
             self.opportunities_tree.tag_configure("profitable", background="lightgreen")
+            self.opportunities_tree.tag_configure("low_profit", background="lightyellow")
             self.opportunities_tree.tag_configure("unprofitable", background="lightcoral")
             
         except Exception as e:
@@ -886,16 +892,55 @@ Detected At: {opportunity.detected_at.strftime('%Y-%m-%d %H:%M:%S')}
             
             # Validate all currencies exist on Gate.io
             valid_gateio_currencies = {
+                # Major cryptocurrencies (high volume, good liquidity)
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'KCS',  # KuCoin's native token
+                # Additional major cryptocurrencies
+                'ETC', 'BCH', 'EOS', 'XLM', 'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX',
+                'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO',
+                # Stablecoins
+                'USDD', 'TUSD', 'DAI', 'PAX', 'BUSD', 'HUSD', 'USDK', 'FRAX',
+                # DeFi tokens
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
-                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
-                'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
-                'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
-                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+                'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
+                # NFT/Gaming tokens (high volatility for arbitrage)
+                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
+                # AI/Web3 tokens
+                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
+                # Meme coins (high volatility for arbitrage)
+                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
+                # Layer 2/Rollups
+                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
+                # Oracles
+                'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
+                # Privacy coins
+                'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
+                # Exchange tokens
+                'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
+                # Real-world assets
+                'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
+                # New listings (high volatility)
+                'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
+                # AI and Big Data
+                'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
+                # Liquid Staking
+                'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
+                # Bridges
+                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
+                # Additional popular tokens
+                'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
+                # Metaverse
+                'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
+                # Additional stablecoins
+                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
+                # Additional DeFi
+                'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
+                # Additional gaming
+                'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
+                # Additional AI
+                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC'
             }
             
             return all(currency in valid_gateio_currencies for currency in currencies)
