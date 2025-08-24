@@ -39,7 +39,7 @@ class RealtimeArbitrageDetector:
     """Real-time triangular arbitrage detector using Binance WebSocket"""
     
     def __init__(self, min_profit_pct: float = 0.5, max_trade_amount: float = 100.0):
-        self.min_profit_pct = 0.4  # Fixed to 0.4% for consistency
+        self.min_profit_pct = min_profit_pct
         self.max_trade_amount = max_trade_amount
         
         # Real-time price data

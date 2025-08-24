@@ -42,8 +42,8 @@ export const ArbitrageBotDashboard: React.FC = () => {
     const [isRunning, setIsRunning] = useState(false);
     const [autoTrading, setAutoTrading] = useState(false);
     const [paperTrading, setPaperTrading] = useState(false);  // Default to LIVE trading
-    const [minProfit, setMinProfit] = useState(0.4);  // Updated to 0.4% per client requirement
-    const [maxTradeAmount, setMaxTradeAmount] = useState(20);  // Updated to $20 max
+    const [minProfit, setMinProfit] = useState(0.5);  // Updated to 0.5%
+    const [maxTradeAmount, setMaxTradeAmount] = useState(10);
     const [maxConsecutiveFails, setMaxConsecutiveFails] = useState(3);
     const [consecutiveFails, setConsecutiveFails] = useState(0);
     const [pausedAutoTrading, setPausedAutoTrading] = useState(false);
@@ -71,25 +71,17 @@ export const ArbitrageBotDashboard: React.FC = () => {
 
     const [exchanges, setExchanges] = useState<ExchangeConfig[]>([
         { id: 'binance', name: 'Binance', enabled: true, connected: false, feeToken: 'BNB', zeroFeePairs: 0 },
-        { id: 'bybit', name: 'Bybit', enabled: true, connected: false, feeToken: 'BIT', zeroFeePairs: 0 },
-        { id: 'kucoin', name: 'KuCoin', enabled: true, connected: false, feeToken: 'KCS', zeroFeePairs: 2 },
-        { id: 'coinbasepro', name: 'Coinbase Pro', enabled: true, connected: false, feeToken: 'USDC', zeroFeePairs: 0 },
-        { id: 'kraken', name: 'Kraken', enabled: true, connected: false, feeToken: 'USD', zeroFeePairs: 0 },
-        { id: 'gate', name: 'Gate.io', enabled: true, connected: false, feeToken: 'GT', zeroFeePairs: 0 },
-        { id: 'coinex', name: 'CoinEx', enabled: true, connected: false, feeToken: 'CET', zeroFeePairs: 0 },
-        { id: 'htx', name: 'HTX', enabled: true, connected: false, feeToken: 'HT', zeroFeePairs: 0 },
-        { id: 'mexc', name: 'MEXC', enabled: true, connected: false, feeToken: 'MX', zeroFeePairs: 2 },
-        { id: 'poloniex', name: 'Poloniex', enabled: true, connected: false, feeToken: 'TRX', zeroFeePairs: 0 },
-        { id: 'probit', name: 'ProBit Global', enabled: true, connected: false, feeToken: 'PROB', zeroFeePairs: 0 },
-        { id: 'hitbtc', name: 'HitBTC', enabled: true, connected: false, feeToken: 'HIT', zeroFeePairs: 0 },
-        { id: 'okx', name: 'OKX', enabled: true, connected: false, feeToken: 'OKB', zeroFeePairs: 0 },
-        { id: 'bitfinex', name: 'Bitfinex', enabled: true, connected: false, feeToken: 'LEO', zeroFeePairs: 0 },
-        { id: 'bingx', name: 'BingX', enabled: true, connected: false, feeToken: 'BGB', zeroFeePairs: 0 },
-        { id: 'lbank', name: 'LBank', enabled: true, connected: false, feeToken: 'LBK', zeroFeePairs: 0 },
-        { id: 'xt', name: 'XT.COM', enabled: true, connected: false, feeToken: 'XT', zeroFeePairs: 0 },
-        { id: 'bitget', name: 'Bitget', enabled: true, connected: false, feeToken: 'BGB', zeroFeePairs: 0 },
-        { id: 'whitebit', name: 'WhiteBIT', enabled: true, connected: false, feeToken: 'WBT', zeroFeePairs: 0 },
-        { id: 'digifinex', name: 'DigiFinex', enabled: true, connected: false, feeToken: 'DFT', zeroFeePairs: 0 },
+        { id: 'bybit', name: 'Bybit', enabled: false, connected: false, feeToken: 'BIT', zeroFeePairs: 0 },
+        { id: 'kucoin', name: 'KuCoin', enabled: false, connected: false, feeToken: 'KCS', zeroFeePairs: 2 },
+        { id: 'coinbasepro', name: 'Coinbase Pro', enabled: false, connected: false, feeToken: 'USDC', zeroFeePairs: 0 },
+        { id: 'kraken', name: 'Kraken', enabled: false, connected: false, feeToken: 'USD', zeroFeePairs: 0 },
+        { id: 'gateio', name: 'Gate.io', enabled: false, connected: false, feeToken: 'GT', zeroFeePairs: 0 },
+        { id: 'coinex', name: 'CoinEx', enabled: false, connected: false, feeToken: 'CET', zeroFeePairs: 0 },
+        { id: 'htx', name: 'HTX', enabled: false, connected: false, feeToken: 'HT', zeroFeePairs: 0 },
+        { id: 'mexc', name: 'MEXC', enabled: false, connected: false, feeToken: 'MX', zeroFeePairs: 0 },
+        { id: 'poloniex', name: 'Poloniex', enabled: false, connected: false, feeToken: 'TRX', zeroFeePairs: 0 },
+        { id: 'probit', name: 'ProBit Global', enabled: false, connected: false, feeToken: 'PROB', zeroFeePairs: 0 },
+        { id: 'hitbtc', name: 'HitBTC', enabled: false, connected: false, feeToken: 'HIT', zeroFeePairs: 0 },
     ]);
 
     useEffect(() => {
@@ -302,12 +294,12 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         <input
                             type="number"
                             value={minProfit}
-                            onChange={(e) => setMinProfit(Math.max(0.4, Math.min(3.0, parseFloat(e.target.value))))}
-                            min="0.4"
+                            onChange={(e) => setMinProfit(Math.max(0.5, Math.min(3.0, parseFloat(e.target.value))))}
+                            min="0.5"
                             max="3.0"
                             step="0.1"
                             className="w-full mb-4 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white"
-                            title="ENFORCED: Minimum 0.4% profit required"
+                            title="ENFORCED: Minimum 0.5% profit required"
                         />
                         <label className="block text-sm text-gray-300 mb-2">Max Trade Amount</label>
                         <input
@@ -321,10 +313,10 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         />
                         <div className="text-xs text-yellow-400 mt-2 p-2 bg-yellow-900/20 rounded">
                             🚫 ENFORCED LIMITS:<br />
-                            • Min Profit: 0.4%<br />
+                            • Min Profit: 0.5%<br />
                             • Max Trade: $20<br />
                             • Trades over $20 rejected<br />
-                            • Profits under 0.4% rejected<br />
+                            • Profits under 0.5% rejected<br />
                             • Only USDT triangles allowed
                         </div>
                         <label className="block text-sm text-gray-300 mb-2">Max Consecutive Fails</label>
@@ -347,8 +339,8 @@ export const ArbitrageBotDashboard: React.FC = () => {
                         </h3>
                         <div className="grid grid-cols-3 gap-4">
                             <div className="text-center">
-                                <div className="text-2xl text-blue-400">{opportunities.length}</div>
-                                <div className="text-xs text-gray-400">Opportunities (0-1%)</div>
+                                <div className="text-2xl text-blue-400">{stats.opportunitiesFound}</div>
+                                <div className="text-xs text-gray-400">Opportunities (≥{minProfit}%)</div>
                             </div>
                             <div className="text-center">
                                 <div className="text-2xl text-green-400">{stats.tradesExecuted}</div>
@@ -426,10 +418,8 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     <tbody className="divide-y divide-slate-700">
                                         {opportunities.map(o => (
                                             <tr key={o.id} onClick={() => setSelectedOpportunity(o.id)} className={`hover:bg-slate-700/30 cursor-pointer ${o.profitPercentage >= 0.5 ? 'bg-green-900/20 border-l-4 border-l-green-400' :
-                                                o.profitPercentage >= 0.4 ? 'bg-green-900/20 border-l-4 border-l-green-400' :
-                                                    o.profitPercentage >= 0.0 ? 'bg-yellow-900/20 border-l-4 border-l-yellow-400' :
-                                                        o.profitPercentage >= -0.2 ? 'bg-orange-900/20 border-l-4 border-l-orange-400' :
-                                                            'bg-red-900/20 border-l-4 border-l-red-400'
+                                                    o.profitPercentage >= 0 ? 'bg-yellow-900/20 border-l-4 border-l-yellow-400' :
+                                                        'bg-red-900/20 border-l-4 border-l-red-400'
                                                 }`}>
                                                 <td className="p-2">{getStatusIcon(o.status)}</td>
                                                 <td className="p-2 text-white">
@@ -439,46 +429,32 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                                 <td className="p-2 text-sm text-gray-300">
                                                     {o.trianglePath}
                                                     <div className="text-xs text-blue-400">
-                                                        {o.profitPercentage >= 0.4 ? '💚 AUTO-TRADEABLE (≥0.4%)' :
-                                                            o.profitPercentage >= 0.0 ? '🟡 MANUAL ONLY (0-0.4%)' :
-                                                                o.profitPercentage >= -0.2 ? '🟠 SMALL LOSS (-0.2% to 0%)' :
-                                                                    '🔴 NEGATIVE (<-0.2%)'
+                                                        {o.profitPercentage >= 0.5 ? '💚 PROFITABLE (≥0.5%)' :
+                                                            o.profitPercentage >= 0 ? '🟡 LOW PROFIT (0-0.5%)' :
+                                                                '🔴 LOSS (<0%)'
                                                         }
                                                     </div>
                                                 </td>
-                                                <td className={`p-2 ${o.profitPercentage >= 0.4 ? 'text-green-400' :
-                                                    'text-green-400'}`}>  {/* All 0% and positive are green */}
+                                                <td className={`p-2 ${o.profitPercentage >= 0.5 ? 'text-green-400' : o.profitPercentage >= 0 ? 'text-yellow-400' : 'text-red-400'}`}>
                                                     {o.profitPercentage >= 0 ? '+' : ''}{o.profitPercentage.toFixed(4)}%
                                                 </td>
-                                                <td className={`p-2 ${o.profitPercentage >= 0.4 ? 'text-green-400' :
-                                                    'text-green-400'}`}>  {/* All 0% and positive are green */}
+                                                <td className={`p-2 ${o.profitPercentage >= 0.5 ? 'text-green-400' : o.profitPercentage >= 0 ? 'text-yellow-400' : 'text-red-400'}`}>
                                                     ${o.profitPercentage >= 0 ? '+' : ''}{o.profitAmount.toFixed(4)}
                                                 </td>
                                                 <td className="p-2 text-gray-300">${o.volume.toFixed(0)}</td>
                                                 <td className="p-2">
-                                                    {o.status === 'detected' && o.profitPercentage >= 0.4 && (
+                                                    {o.status === 'detected' && o.profitPercentage >= 0.5 && (
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
+                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700 animate-pulse"
                                                         >
-                                                            AUTO-TRADE (+{o.profitPercentage.toFixed(3)}%)
+                                                            EXECUTE (+{o.profitPercentage.toFixed(2)}%)
                                                         </button>
                                                     )}
-                                                    {o.status === 'detected' && o.profitPercentage < 0.4 && o.profitPercentage >= 0.0 && (
-                                                        <button
-                                                            onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
-                                                        >
-                                                            EXECUTE (+{o.profitPercentage.toFixed(3)}%)
-                                                        </button>
-                                                    )}
-                                                    {o.status === 'detected' && o.profitPercentage === 0.0 && (
-                                                        <button
-                                                            onClick={(e) => { e.stopPropagation(); executeOpportunity(o.id); }}
-                                                            className="px-3 py-1 text-white text-xs rounded-lg bg-green-600 hover:bg-green-700"
-                                                        >
-                                                            EXECUTE (0.000%)
-                                                        </button>
+                                                    {o.status === 'detected' && o.profitPercentage < 0.5 && (
+                                                        <span className="px-3 py-1 text-gray-400 text-xs">
+                                                            {o.profitPercentage >= 0 ? 'Low Profit' : 'Loss'}
+                                                        </span>
                                                     )}
                                                 </td>
                                             </tr>
@@ -489,21 +465,22 @@ export const ArbitrageBotDashboard: React.FC = () => {
                                     <div className="text-center text-gray-400 py-8">
                                         {isRunning ? (
                                             <div>
-                                                <div className="text-lg mb-2">🔍 Generating 300-500 opportunities...</div>
+                                                <div className="text-lg mb-2">🔍 Scanning for ALL opportunities...</div>
                                                 <div className="text-sm mb-2">
-                                                    🔴 RED (0% profit) | 🟢 GREEN ({'>0.4%'} profit)
+                                                    Fetching ALL market opportunities regardless of balance
                                                 </div>
-                                                <div className="text-xs mt-2 text-green-400">
-                                                    🎯 Count: 300-500 | Min: 0.4% | Max: $20 | Colors: Red/Green Only
+                                                <div className="text-xs mt-2 text-yellow-400">
+                                                    💰 Looking for USDT triangles: USDT → Currency1 → Currency2 → USDT
                                                 </div>
                                                 <div className="text-xs mt-2 text-gray-500">
-                                                    Mode: 🔴 LIVE TRADING | Auto: {autoTrading ? 'ON' : 'OFF'} | Red/Green Scheme
+                                                    Mode: {paperTrading ? 'Paper Trading' : 'LIVE Trading'} |
+                                                    Auto: {autoTrading ? 'ON' : 'OFF'}
                                                 </div>
                                             </div>
                                         ) : (
                                             <div>
                                                 <div className="text-lg mb-2">Click "Start Bot" to begin</div>
-                                                <div className="text-sm">Will generate 300-500 opportunities with RED/GREEN colors</div>
+                                                <div className="text-sm">Will scan for USDT triangular arbitrage opportunities</div>
                                             </div>
                                         )}
                                     </div>

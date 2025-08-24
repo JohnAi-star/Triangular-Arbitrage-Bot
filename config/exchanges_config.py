@@ -45,18 +45,16 @@ SUPPORTED_EXCHANGES = {
         'ticker_endpoint': '/api/v1/market/allTickers',
         'exchange_info_endpoint': '/api/v1/symbols',
         'fee_token': 'KCS',
-        'fee_discount': 0.50,  # 50% discount for VIP 0 + KCS holders
-        'zero_fee_pairs': ['BTC/ETH', 'ETH/BTC', 'KCS/USDT'],  # KuCoin zero-fee pairs
-        'maker_fee': 0.0010,  # 0.10% base
-        'taker_fee': 0.0010,  # 0.10% base
-        'maker_fee_with_token': 0.0005,  # 0.05% with KCS (VIP 0 rate)
-        'taker_fee_with_token': 0.0005,  # 0.05% with KCS (VIP 0 rate)
+        'fee_discount': 0.20,  # 20% discount for KCS holders
+        'zero_fee_pairs': ['BTC/USDT', 'ETH/USDT', 'KCS/USDT'],  # KuCoin zero-fee pairs
+        'maker_fee': 0.0010,  # 0.10%
+        'taker_fee': 0.0010,  # 0.10%
+        'maker_fee_with_token': 0.0008,  # 0.08% with KCS
+        'taker_fee_with_token': 0.0008,  # 0.08% with KCS for both maker and taker
         'enabled': True,
         'requires_passphrase': True,
-        'timeout': 20,  # Increased timeout for KuCoin
-        'rate_limit': 1000,  # KuCoin rate limit
-        'min_order_value': 0.5,  # $0.5 minimum order (reduced for better execution)
-        'optimization_level': 'high'  # High optimization for profit detection
+        'timeout': 15,  # Increased timeout for KuCoin
+        'rate_limit': 1000  # KuCoin rate limit
     },
     'coinbase': {
         'name': 'Coinbase Advanced',
@@ -158,10 +156,7 @@ SUPPORTED_EXCHANGES = {
         'maker_fee_with_token': 0.0000,
         'taker_fee_with_token': 0.0009,  
         'enabled': True,
-        'requires_passphrase': False,
-        'timeout': 30000,  # Increased timeout for MEXC
-        'recvWindow': 60000,  # Large receive window for timestamp tolerance
-        'adjustForTimeDifference': True  # Auto-adjust for time differences
+        'requires_passphrase': False
     },
     'poloniex': {
         'name': 'Poloniex',
@@ -179,63 +174,6 @@ SUPPORTED_EXCHANGES = {
         'taker_fee_with_token': 0.00155,
         'enabled': True,
         'requires_passphrase': False
-    },
-    'okx': {
-        'name': 'OKX',
-        'class_name': 'okx',
-        'api_url': 'https://www.okx.com',
-        'websocket_url': 'wss://ws.okx.com:8443/ws/v5/public',
-        'ticker_endpoint': '/api/v5/market/tickers',
-        'exchange_info_endpoint': '/api/v5/public/instruments',
-        'fee_token': 'OKB',
-        'fee_discount': 0.20,  # 20% discount with OKB
-        'zero_fee_pairs': [],
-        'maker_fee': 0.0008,   # 0.08%
-        'taker_fee': 0.0010,   # 0.10%
-        'maker_fee_with_token': 0.00064,  # 0.064% with OKB
-        'taker_fee_with_token': 0.00080,  # 0.080% with OKB
-        'enabled': True,
-        'requires_passphrase': True,  # OKX requires passphrase
-        'timeout': 20000,
-        'rate_limit': 600
-    },
-    'bitfinex': {
-        'name': 'Bitfinex',
-        'class_name': 'bitfinex',
-        'api_url': 'https://api.bitfinex.com',
-        'websocket_url': 'wss://api.bitfinex.com/ws/2',
-        'ticker_endpoint': '/v2/tickers',
-        'exchange_info_endpoint': '/v2/conf/pub:info:pair',
-        'fee_token': 'LEO',
-        'fee_discount': 0.25,  # 25% discount with LEO
-        'zero_fee_pairs': [],
-        'maker_fee': 0.0010,   # 0.10%
-        'taker_fee': 0.0020,   # 0.20%
-        'maker_fee_with_token': 0.00075,  # 0.075% with LEO
-        'taker_fee_with_token': 0.00150,  # 0.150% with LEO
-        'enabled': True,
-        'requires_passphrase': False,
-        'timeout': 15000,
-        'rate_limit': 1000
-    },
-    'crypto': {
-        'name': 'Crypto.com',
-        'class_name': 'cryptocom',
-        'api_url': 'https://api.crypto.com',
-        'websocket_url': 'wss://stream.crypto.com/v2/market',
-        'ticker_endpoint': '/v2/public/get-ticker',
-        'exchange_info_endpoint': '/v2/public/get-instruments',
-        'fee_token': 'CRO',
-        'fee_discount': 0.10,  # 10% discount with CRO
-        'zero_fee_pairs': [],
-        'maker_fee': 0.0040,   # 0.40%
-        'taker_fee': 0.0040,   # 0.40%
-        'maker_fee_with_token': 0.0036,  # 0.36% with CRO
-        'taker_fee_with_token': 0.0036,  # 0.36% with CRO
-        'enabled': True,
-        'requires_passphrase': False,
-        'timeout': 20000,
-        'rate_limit': 1000
     },
     'probit': {
         'name': 'ProBit Global',

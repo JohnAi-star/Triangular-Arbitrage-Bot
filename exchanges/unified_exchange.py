@@ -60,52 +60,15 @@ class UnifiedExchange(BaseExchange):
             # Handle Gate.io special case
             if self.exchange_id == 'gate':
                 exchange_class = getattr(ccxt, 'gateio')
-            elif self.exchange_id == 'okx':
-                exchange_class = getattr(ccxt, 'okx')
-            elif self.exchange_id == 'bitfinex':
-                exchange_class = getattr(ccxt, 'bitfinex')
             else:
                 exchange_class = getattr(ccxt, self.exchange_id)
                 
             exchange_config = {
                 'enableRateLimit': True,
                 'options': {'defaultType': 'spot'},
-                'timeout': self.config.get('timeout', 10000),
-                'rateLimit': self.config.get('rate_limit', 1200)
+                'timeout': 10000,
+                'rateLimit': 1200
             }
-            
-            # Add MEXC-specific configuration to fix timestamp issues
-            if self.exchange_id == 'mexc':
-                exchange_config.update({
-                    'options': {
-                        'defaultType': 'spot',
-                        'adjustForTimeDifference': True,  # Auto-adjust for time differences
-                        'recvWindow': 60000  # Large receive window for timestamp tolerance
-                    },
-                    'timeout': 30000,  # Increased timeout for MEXC
-                    'rateLimit': 1000
-                })
-                self.logger.info("🔧 Applied MEXC-specific timestamp configuration")
-            
-            # Add OKX-specific configuration
-            elif self.exchange_id == 'okx':
-                exchange_config.update({
-                    'options': {
-                        'defaultType': 'spot',
-                        'adjustForTimeDifference': True
-                    }
-                })
-                self.logger.info("🔧 Applied OKX-specific configuration")
-            
-            # Add Bitfinex-specific configuration
-            elif self.exchange_id == 'bitfinex':
-                exchange_config.update({
-                    'options': {
-                        'defaultType': 'exchange',  # Bitfinex uses 'exchange' for spot trading
-                        'adjustForTimeDifference': True
-                    }
-                })
-                self.logger.info("🔧 Applied Bitfinex-specific configuration")
 
             # Check for API credentials
             api_key = self.config.get('api_key', '').strip()
@@ -128,11 +91,6 @@ class UnifiedExchange(BaseExchange):
             if self.config.get('passphrase'):
                 exchange_config['password'] = self.config.get('passphrase')
                 self.logger.info(f"Added passphrase for {self.exchange_id}")
-            
-            # Add passphrase for OKX (uses 'passphrase' field)
-            if self.exchange_id == 'okx' and self.config.get('passphrase'):
-                exchange_config['passphrase'] = self.config.get('passphrase')
-                self.logger.info(f"Added passphrase for OKX")
 
             self.exchange = exchange_class(exchange_config)
             await self.exchange.load_markets()
@@ -469,86 +427,41 @@ class UnifiedExchange(BaseExchange):
         if not self.is_connected:
             return {}
         try:
-            self.logger.info(f"💰 Fetching REAL account balance from {self.exchange_id.upper()}...")
+            self.logger.info(f"💰 Fetching REAL account balance from {self.exchange_id}...")
             balance = await self.exchange.fetch_balance()
             
-            if not balance:
-                self.logger.error(f"❌ No balance response from {self.exchange_id}")
-                return {}
-            
+            # Log the full balance object for debugging
             self.logger.debug(f"📊 Raw balance response keys: {list(balance.keys())}")
             
-            # Enhanced balance parsing for different exchange formats
+            # Handle both dict and direct value formats
             result = {}
-            
-            # Method 1: Standard CCXT format
-            if 'total' in balance and isinstance(balance['total'], dict):
-                for currency, amount in balance['total'].items():
-                    if isinstance(amount, (int, float)) and float(amount) > 0.000001:
-                        result[currency] = float(amount)
-                        self.logger.debug(f"💰 Method 1 - {currency}: {float(amount):.8f}")
-            
-            # Method 2: Individual currency objects
-            if not result:
-                for currency, info in balance.items():
-                    if currency in ['info', 'timestamp', 'datetime', 'free', 'used', 'total']:
-                        continue
-                    if isinstance(info, dict):
-                        free_balance = float(info.get('free', 0.0))
-                        locked_balance = float(info.get('used', 0.0))
-                        total_balance = free_balance + locked_balance
-                        if total_balance > 0.000001:
-                            result[currency] = total_balance
-                            self.logger.debug(f"💰 Method 2 - {currency}: {total_balance:.8f} (free: {free_balance:.8f}, locked: {locked_balance:.8f})")
-                    elif isinstance(info, (int, float)) and float(info) > 0.000001:
-                        result[currency] = float(info)
-                        self.logger.debug(f"💰 Method 2 - {currency}: {float(info):.8f}")
-            
-            # Method 3: Direct API call for KuCoin/Gate.io
-            if not result and self.exchange_id in ['kucoin', 'gate']:
-                try:
-                    self.logger.info(f"🔧 Trying direct API call for {self.exchange_id} balance...")
-                    if self.exchange_id == 'kucoin':
-                        # KuCoin specific API call
-                        accounts = await self.exchange.private_get_accounts()
-                        if accounts and accounts.get('data'):
-                            for account in accounts['data']:
-                                currency = account.get('currency', '')
-                                available = float(account.get('available', 0))
-                                hold = float(account.get('hold', 0))
-                                total = available + hold
-                                if total > 0.000001:
-                                    result[currency] = total
-                                    self.logger.debug(f"💰 KuCoin API - {currency}: {total:.8f}")
-                    elif self.exchange_id == 'gate':
-                        # Gate.io specific API call
-                        accounts = await self.exchange.private_get_spot_accounts()
-                        if accounts:
-                            for account in accounts:
-                                currency = account.get('currency', '')
-                                available = float(account.get('available', 0))
-                                locked = float(account.get('locked', 0))
-                                total = available + locked
-                                if total > 0.000001:
-                                    result[currency] = total
-                                    self.logger.debug(f"💰 Gate.io API - {currency}: {total:.8f}")
-                except Exception as api_error:
-                    self.logger.warning(f"Direct API call failed for {self.exchange_id}: {api_error}")
+            for currency, info in balance.items():
+                if currency in ['info', 'timestamp', 'datetime']:
+                    continue
+                if isinstance(info, dict):
+                    free_balance = float(info.get('free', 0.0))
+                    locked_balance = float(info.get('used', 0.0))
+                    total_balance = free_balance + locked_balance
+                    if total_balance > 0.000001:  # Only include meaningful balances
+                        result[currency] = total_balance
+                        self.logger.debug(f"💰 REAL BALANCE - {currency}: {total_balance:.8f} (free: {free_balance:.8f}, locked: {locked_balance:.8f})")
+                elif isinstance(info, (int, float)) and float(info) > 0:
+                    result[currency] = float(info)
+                    self.logger.debug(f"💰 REAL BALANCE - {currency}: {float(info):.8f}")
             
             # Get current prices for USD conversion
             total_usd_estimate = await self._calculate_usd_value(result)
             
-            self.logger.info(f"💵 REAL {self.exchange_id.upper()} BALANCE: {len(result)} currencies")
+            self.logger.info(f"💵 REAL Account balance for {self.exchange_id}: {len(result)} currencies")
             self.logger.info(f"💵 REAL Estimated Total: ~${total_usd_estimate:.2f} USD")
             
             if result:
-                self.logger.info(f"💰 REAL {self.exchange_id.upper()} BALANCES:")
+                self.logger.info("💰 REAL BALANCES DETECTED:")
                 for curr, bal in sorted(result.items(), key=lambda x: x[1], reverse=True):
                     if bal > 0.001:  # Only show significant balances in main log
                         self.logger.info(f"   {curr}: {bal:.8f}")
             else:
-                self.logger.warning(f"⚠️ No balances found on {self.exchange_id} - check API permissions")
-                self.logger.warning("   Required permissions: Spot Trading, Read Account")
+                self.logger.warning("⚠️ No balances found - check API permissions")
             
             return result
         except Exception as e:

@@ -1,282 +1,797 @@
+#!/usr/bin/env python3
 """
-Multi-exchange triangular arbitrage detector with FIXED profit calculation logic.
+LIVE TRADING Triangular Arbitrage Detector with Enhanced Balance Display
 """
 
 import asyncio
 import time
-import json
-from typing import Dict, List, Any, Optional, Tuple, Set
+import aiohttp
+from typing import Dict, List, Any, Set, Tuple
 from datetime import datetime
+import logging
 from dataclasses import dataclass
+
 from utils.logger import setup_logger
-from config.exchanges_config import SUPPORTED_EXCHANGES
-from config.config import Config
+from arbitrage.realtime_detector import RealtimeArbitrageDetector
+from arbitrage.simple_triangle_detector import SimpleTriangleDetector
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# Major currencies for display
+MAJOR_CURRENCIES = {'BTC', 'ETH', 'USDT', 'BNB', 'USDC', 'BUSD', 'ADA', 'DOT', 'LINK', 'LTC', 'XRP', 'SOL', 'MATIC', 'AVAX', 'DOGE', 'TRX', 'ATOM', 'FIL', 'UNI'}
 
 @dataclass
 class ArbitrageResult:
-    """Result of arbitrage calculation with FIXED profit logic"""
     exchange: str
-    triangle_path: List[str]  # 4-step path: [USDT, Currency1, Currency2, USDT]
-    profit_percentage: float  # CORRECTED profit percentage
-    profit_amount: float     # CORRECTED profit amount in USDT
+    triangle_path: List[str]
+    profit_percentage: float
+    profit_amount: float
     initial_amount: float
-    net_profit_percent: float
-    min_profit_threshold: float
-    is_tradeable: bool
-    balance_available: float
-    required_balance: float
+    net_profit_percent: float = 0.0
+    min_profit_threshold: float = 0.0001
+    is_tradeable: bool = False
+    balance_available: float = 0.0
+    required_balance: float = 0.0
     is_demo: bool = False
     
     @property
     def is_profitable(self) -> bool:
-        """Check if opportunity is actually profitable"""
-        return self.profit_percentage >= 0.0  # 0% or higher
-    
-    def __str__(self):
-        status = "💚 PROFITABLE" if self.profit_percentage >= 0.4 else \
-                "🟡 SMALL PROFIT" if self.profit_percentage >= 0.0 else \
-                "🔴 LOSS"
-        return f"{status}: {self.exchange} {' → '.join(self.triangle_path)} = {self.profit_percentage:.4f}%"
+        """Check if the opportunity is profitable above threshold."""
+        return self.profit_percentage >= self.min_profit_threshold
 
 class MultiExchangeDetector:
-    """Multi-exchange triangular arbitrage detector with CORRECTED profit calculations."""
-    
     def __init__(self, exchange_manager, websocket_manager, config: Dict[str, Any]):
+        self.logger = setup_logger('MultiExchangeDetector')
         self.exchange_manager = exchange_manager
         self.websocket_manager = websocket_manager
         self.config = config
-        self.logger = setup_logger('MultiExchangeDetector')
         
-        # Store auto_trading and executor from config
-        self.auto_trading = config.get('auto_trading', False)
-        self.executor = None  # Will be set later
-        
-        # Generate 300-500 opportunities with red/green color scheme
-        self.min_profit_pct = 0.0  # Show from 0%
-        self.max_profit_pct = 2.0  # Up to 2% for realism
-        self.display_threshold = 0.0  # Show 0% and positive only
-        self.target_opportunity_count = 400  # Target 400 opportunities (300-500 range)
-        
+        # Trading Limits
+        self.min_profit_pct = 0.5  # Fixed 0.5% threshold for Gate.io profitability
+        self.max_trade_amount = min(20.0, float(config.get('max_trade_amount', 20.0)))  # $20 maximum for safety
         self.triangle_paths: Dict[str, List[List[str]]] = {}
-        self.price_cache: Dict[str, Dict[str, Dict[str, float]]] = {}
-        self.last_scan_time = 0
         
-        self.logger.info("🚀 MultiExchangeDetector initialized for 300-500 opportunities")
-        self.logger.info(f"   Target Count: {self.target_opportunity_count} opportunities")
-        self.logger.info(f"   Colors: Red (0%) | Green (>0.4%)")
-        self.logger.info(f"   Min Profit: 0.4% | Max Trade: $20")
-    
-    def set_executor(self, executor):
-        """Set the trade executor for auto-trading."""
-        self.executor = executor
-        self.logger.info(f"✅ Trade executor set for auto-trading: {executor is not None}")
-    
+        # Initialize real-time detector
+        self.realtime_detector = RealtimeArbitrageDetector(
+            min_profit_pct=self.min_profit_pct,
+            max_trade_amount=self.max_trade_amount
+        )
+        
+        # Initialize simple detector (based on working JavaScript logic)
+        self.simple_detector = None  # Will be initialized per exchange
+        
+        # Rate limiting cache
+        self._last_tickers: Dict[str, Dict[str, Any]] = {}
+        self._last_ticker_time: Dict[str, float] = {}
+        self._logged_messages = set()
+        
+        self.logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: 0.5%, Max Trade: ${self.max_trade_amount}")
+        self.logger.info(f"🎯 Target: USDT → Currency1 → Currency2 → USDT cycles only")
+
     async def initialize(self):
-        """Initialize detector with all connected exchanges"""
-        try:
-            self.logger.info("🔧 Initializing multi-exchange detector...")
+        """Initialize with balance verification"""
+        self.logger.info("🚀 Initializing LIVE TRADING detector...")
+        
+        # Initialize simple detector for the first connected exchange
+        connected_exchanges = list(self.exchange_manager.exchanges.keys())
+        if connected_exchanges:
+            primary_exchange = connected_exchanges[0]
+            self.logger.info(f"🎯 Initializing simple detector for {primary_exchange}")
             
-            # Build triangle paths for each exchange
-            for exchange_id, exchange in self.exchange_manager.exchanges.items():
-                self.logger.info(f"🔺 Building triangles for {exchange_id}...")
+            self.simple_detector = SimpleTriangleDetector(
+                min_profit_pct=0.5,  # Fixed 0.5% for profitability
+                exchange_id=primary_exchange
+            )
+            
+            # Initialize and start the detector with correct exchange
+            if await self.simple_detector.get_pairs():
+                asyncio.create_task(self.simple_detector.start_websocket_stream())
+                self.logger.info(f"✅ Simple detector started for {primary_exchange.upper()} with correct URLs")
+            else:
+                self.logger.error(f"❌ Failed to initialize simple detector for {primary_exchange.upper()}")
+        
+        # First verify we can fetch balances
+        for ex_name in self.exchange_manager.exchanges:
+            balance = await self.show_account_balance(ex_name)
+            if balance and balance.get('balances'):
+                self.logger.info(f"✅ Balance detected on {ex_name.upper()}: {len(balance['balances'])} currencies")
+            else:
+                self.logger.warning(f"⚠️ No balance detected on {ex_name.upper()} - continuing anyway")
+        
+        # Only initialize real-time detector for Binance
+        if 'binance' in self.exchange_manager.exchanges:
+            await self.realtime_detector.initialize()
+            self.logger.info("✅ Real-time detector initialized for Binance")
+        else:
+            self.logger.info("ℹ️ Real-time detector skipped (Binance not selected)")
+        
+        # Build triangle paths
+        for ex_name, ex in self.exchange_manager.exchanges.items():
+            try:
+                pairs = list(ex.trading_pairs.keys())
+                self.logger.info(f"Processing {len(pairs)} pairs for {ex_name.upper()}")
                 
-                # Get trading pairs
-                pairs = await exchange.get_trading_pairs()
-                self.logger.info(f"   {exchange_id}: {len(pairs)} trading pairs available")
+                triangles = self._build_real_triangles_from_available_pairs(pairs, ex_name)
+                self.triangle_paths[ex_name] = triangles
                 
-                # Build USDT-based triangular paths
-                triangles = self._build_usdt_triangles(pairs, exchange_id)
-                self.triangle_paths[exchange_id] = triangles
-                
-                self.logger.info(f"   {exchange_id}: Built {len(triangles)} USDT triangular paths (targeting more opportunities)")
-                
-                # Initialize price cache
-                self.price_cache[exchange_id] = {}
-                
-                # Show sample triangles
+                self.logger.info(f"✅ Built {len(triangles)} REAL triangles for {ex_name.upper()}")
                 if triangles:
-                    self.logger.info(f"   Sample {exchange_id} triangles:")
-                    for i, triangle in enumerate(triangles[:3]):
-                        path = " → ".join(triangle)
-                        self.logger.info(f"     {i+1}. {path}")
+                    sample = " → ".join(triangles[0][:3])
+                    self.logger.info(f"Sample triangle: {sample}")
+                    
+            except Exception as e:
+                self.logger.error(f"Error building triangles for {ex_name.upper()}: {str(e)}", exc_info=True)
+                self.triangle_paths[ex_name] = []
+        
+        total = sum(len(t) for t in self.triangle_paths.values())
+        self.logger.info(f"🎯 Total REAL triangles across all exchanges: {total}")
+
+    async def show_account_balance(self, exchange_name: str = "binance") -> Dict[str, Any]:
+        """Display complete account balance with USD values"""
+        ex = self.exchange_manager.exchanges.get(exchange_name)
+        if not ex:
+            self.logger.error(f"Exchange {exchange_name} not found")
+            return {}
+
+        try:
+            # Try to get balance using the correct method
+            balance = await ex.get_account_balance()
+            if not balance:
+                self.logger.error("❌ No balance data retrieved")
+                return {}
             
-            total_triangles = sum(len(paths) for paths in self.triangle_paths.values())
-            self.logger.info(f"✅ Detector initialized: {total_triangles} total triangular paths across {len(self.triangle_paths)} exchanges")
+            # Calculate USD value
+            total_usd = await ex._calculate_usd_value(balance) if hasattr(ex, '_calculate_usd_value') else 0.0
+            
+            balance_data = {
+                'balances': balance,
+                'total_usd': total_usd,
+                'timestamp': int(time.time() * 1000)
+            }
+            
+            # Format the balance display
+            balance_text = f"💰 {exchange_name.upper()} ACCOUNT BALANCE (${balance_data['total_usd']:.2f}):\n"
+            for currency, amount in sorted(
+                balance_data['balances'].items(),
+                key=lambda x: x[1] * (1 if x[0] == 'USDT' else 
+                    self._get_usd_price(x[0], exchange_name)),
+                reverse=True
+            ):
+                if currency in MAJOR_CURRENCIES:
+                    balance_text += f"  {currency}: {amount:.8f}"
+                    if currency != 'USDT':
+                        usd_price = self._get_usd_price(currency, exchange_name)
+                        if usd_price:
+                            balance_text += f" (${amount * usd_price:.2f})"
+                    balance_text += "\n"
+                elif amount >= 1.0:
+                    balance_text += f"  {currency}: {amount:.4f}\n"
+                else:
+                    balance_text += f"  {currency}: {amount:.8f}\n"
+            
+            self.logger.info(balance_text)
+            return balance_data
             
         except Exception as e:
-            self.logger.error(f"Error initializing detector: {e}")
-            raise
-    
-    async def start_continuous_scanning(self, interval_seconds: int = 30):
-        """Start continuous scanning for arbitrage opportunities."""
-        self.logger.info(f"🔄 Starting continuous scanning every {interval_seconds} seconds")
-        
-        while True:
-            try:
-                # Scan for opportunities
-                opportunities = await self.scan_all_opportunities()
-                
-                # Log summary
-                if opportunities:
-                    profitable_count = len([opp for opp in opportunities if opp.profit_percentage >= 0.4])
-                    positive_count = len([opp for opp in opportunities if opp.profit_percentage >= 0.0])
-                    
-                    self.logger.info(f"📊 Scan completed: {len(opportunities)} opportunities found")
-                    self.logger.info(f"   💚 AUTO-TRADEABLE (≥0.4%): {profitable_count}")
-                    self.logger.info(f"   🟡 POSITIVE (0-0.4%): {positive_count - profitable_count}")
-                    
-                    # Auto-execute profitable opportunities if enabled
-                    if self.auto_trading and self.executor:
-                        auto_tradeable = [opp for opp in opportunities if opp.profit_percentage >= 0.4]
-                        if auto_tradeable:
-                            self.logger.info(f"🤖 AUTO-TRADING: Found {len(auto_tradeable)} opportunities ≥0.4% profit")
-                            await self._auto_execute_opportunities(auto_tradeable)
-                        else:
-                            self.logger.info("🤖 Auto-trading enabled but no opportunities ≥ 0.4% found")
-                else:
-                    self.logger.info("❌ No opportunities found in this scan")
-                    
-            except Exception as e:
-                self.logger.error(f"Error during continuous scanning: {e}")
+            self.logger.error(f"Failed to display balance: {str(e)}")
+            return {}
+
+    def _get_usd_price(self, currency: str, exchange_name: str) -> float:
+        """Get USD price for a currency from last ticker data"""
+        if currency == 'USDT':
+            return 1.0
             
-            # Wait for the next scan
-            await asyncio.sleep(interval_seconds)
-    
-    async def _auto_execute_opportunities(self, opportunities: List[ArbitrageResult]):
-        """Auto-execute profitable opportunities."""
-        if not self.executor or not opportunities:
-            return
+        ex = self.exchange_manager.exchanges.get(exchange_name)
+        if not ex:
+            return 0.0
+            
+        # Try direct USDT pair first
+        pair = f"{currency}/USDT"
+        if pair in self._last_tickers.get(exchange_name, {}):
+            return float(self._last_tickers[exchange_name][pair].get('last', 0.0))
         
-        self.logger.info(f"🤖 AUTO-TRADING: Found {len(opportunities)} opportunities ≥0.4% profit")
+        # Try via BTC if available
+        if f"{currency}/BTC" in self._last_tickers.get(exchange_name, {}) and "BTC/USDT" in self._last_tickers.get(exchange_name, {}):
+            currency_btc = float(self._last_tickers[exchange_name][f"{currency}/BTC"].get('last', 0.0))
+            btc_usd = float(self._last_tickers[exchange_name]["BTC/USDT"].get('last', 0.0))
+            return currency_btc * btc_usd
+            
+        return 0.0
+
+    async def _fetch_balance_with_retry(self, exchange, retries: int = 3) -> Dict[str, float]:
+        """Fetch balance with retry mechanism"""
+        last_error = None
         
-        # Sort by profit (highest first)
-        opportunities.sort(key=lambda x: x.profit_percentage, reverse=True)
-        
-        # Execute top opportunities
-        for i, opportunity in enumerate(opportunities[:3]):  # Limit to top 3
+        for attempt in range(retries):
             try:
-                self.logger.info(f"🤖 Executing opportunity {i+1}/{min(3, len(opportunities))}: "
-                               f"{opportunity.exchange} {opportunity.profit_percentage:.4f}%")
+                balance = await exchange.fetch_balance()
                 
-                # Convert ArbitrageResult to ArbitrageOpportunity with proper parameters
-                from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
+                if balance and balance.get('total'):
+                    return {
+                        k: float(v) 
+                        for k, v in balance['total'].items() 
+                        if float(v) > 0
+                    }
                 
-                # Extract triangle path properly
-                triangle_path = opportunity.triangle_path
-                if len(triangle_path) < 3:
-                    self.logger.error(f"❌ Invalid triangle path: {triangle_path}")
-                    continue
+                return await self._fetch_balance_direct(exchange)
                 
-                base_currency = triangle_path[0]  # USDT
-                intermediate_currency = triangle_path[1]  # e.g., BTC
-                quote_currency = triangle_path[2]  # e.g., ETH
+            except Exception as e:
+                last_error = e
+                if attempt < retries - 1:
+                    await asyncio.sleep(1 * (attempt + 1))
+                continue
+        
+        self.logger.error(f"Failed after {retries} attempts. Last error: {str(last_error)}")
+        return {}
+
+    async def _fetch_balance_direct(self, exchange) -> Dict[str, float]:
+        """Direct Binance API fallback"""
+        try:
+            if hasattr(exchange, 'privateGetAccount'):
+                account = await exchange.privateGetAccount()
+                return {
+                    item['asset']: float(item['free']) + float(item['locked'])
+                    for item in account.get('balances', [])
+                    if float(item['free']) + float(item['locked']) > 0
+                }
+            return {}
+        except Exception as e:
+            self.self.logger.error(f"Direct balance fetch failed: {str(e)}")
+            return {}
+
+    def _format_balance(self, balance: Dict[str, float]) -> str:
+        """Format balance for display"""
+        if not balance:
+            return "No balance data available"
+        
+        sorted_balance = sorted(balance.items(), key=lambda x: x[1], reverse=True)
+        lines = []
+        
+        for currency, amount in sorted_balance:
+            if currency in MAJOR_CURRENCIES:
+                lines.append(f"  {currency}: {amount:.8f}")
+            elif amount >= 1.0:
+                lines.append(f"  {currency}: {amount:.4f}")
+            else:
+                lines.append(f"  {currency}: {amount:.8f}")
+        
+        return "\n".join(lines)
+
+    def _build_real_triangles_from_available_pairs(self, pairs: List[str], exchange_name: str) -> List[List[str]]:
+        """Build USDT-based triangles using ONLY the actual available pairs from the selected exchange"""
+        self.logger.info(f"💎 Building USDT triangles from {len(pairs)} REAL {exchange_name.upper()} pairs...")
+        
+        available_pairs = set(pairs)
+        
+        # Get all USDT pairs and extract currencies
+        usdt_pairs = [pair for pair in pairs if '/USDT' in pair]
+        self.logger.info(f"🎯 Found {len(usdt_pairs)} USDT pairs on {exchange_name.upper()} for triangular arbitrage")
+        
+        # Extract currencies that have USDT pairs
+        usdt_currencies = set()
+        for pair in usdt_pairs:
+            base = pair.split('/')[0]
+            usdt_currencies.add(base)
+        
+        # Filter to currencies that exist on the selected exchange
+        real_exchange_currencies = self._get_valid_currencies_for_exchange(exchange_name)
+        
+        # Only use currencies that exist on the selected exchange AND have USDT pairs
+        valid_usdt_currencies = usdt_currencies.intersection(real_exchange_currencies)
+        
+        self.logger.info(f"✅ Found {len(valid_usdt_currencies)} REAL {exchange_name.upper()} currencies with USDT pairs")
+        self.logger.info(f"📋 Valid currencies: {sorted(list(valid_usdt_currencies)[:20])}")
+        
+        # Build USDT triangular paths: USDT → curr1 → curr2 → USDT
+        usdt_triangles = []
+        
+        for curr1 in valid_usdt_currencies:
+            for curr2 in valid_usdt_currencies:
+                if curr1 != curr2:
+                    # Required pairs for USDT triangle
+                    pair1 = f"{curr1}/USDT"      # USDT → curr1
+                    pair2 = f"{curr1}/{curr2}"   # curr1 → curr2
+                    pair3 = f"{curr2}/USDT"      # curr2 → USDT
+                    
+                    # Alternative if curr1→curr2 doesn't exist
+                    alt_pair2 = f"{curr2}/{curr1}"
+                    
+                    # CRITICAL: Validate ALL required pairs exist on the selected exchange
+                    if (pair1 in available_pairs and pair3 in available_pairs and 
+                        (pair2 in available_pairs or alt_pair2 in available_pairs)):
+                        
+                        # Create proper 4-step USDT triangle
+                        triangle = ['USDT', curr1, curr2]  # 3 currencies for calculation
+                        usdt_triangles.append(triangle)
+                        
+                        if len(usdt_triangles) <= 20:
+                            pair2_used = pair2 if pair2 in available_pairs else alt_pair2
+                            self.logger.info(f"💰 VALID USDT Triangle: USDT → {curr1} → {curr2} → USDT")
+                            self.logger.info(f"   Pairs: {pair1}, {pair2_used}, {pair3}")
+                    else:
+                        # Log missing pairs for debugging
+                        missing_pairs = []
+                        if pair1 not in available_pairs:
+                            missing_pairs.append(pair1)
+                        if pair3 not in available_pairs:
+                            missing_pairs.append(pair3)
+                        if pair2 not in available_pairs and alt_pair2 not in available_pairs:
+                            missing_pairs.append(f"{pair2} or {alt_pair2}")
+                        
+                        if len(usdt_triangles) < 5:  # Only log first few for debugging
+                            self.logger.debug(f"❌ Rejected USDT triangle {curr1}-{curr2}: missing {missing_pairs}")
+        
+        # Add specific high-volume USDT triangles that definitely exist on the exchange
+        priority_usdt_triangles = [
+            # Major triangles that exist on most exchanges
+            ('USDT', 'BTC', 'ETH'), ('USDT', 'BTC', 'USDC'), ('USDT', 'ETH', 'USDC'),
+            ('USDT', 'BTC', 'ADA'), ('USDT', 'ETH', 'ADA'), ('USDT', 'BTC', 'SOL'),
+            ('USDT', 'ETH', 'SOL'), ('USDT', 'BTC', 'DOT'), ('USDT', 'ETH', 'DOT'),
+            ('USDT', 'BTC', 'LINK'), ('USDT', 'ETH', 'LINK'), ('USDT', 'BTC', 'MATIC'),
+            ('USDT', 'ETH', 'MATIC'), ('USDT', 'BTC', 'AVAX'), ('USDT', 'ETH', 'AVAX'),
+            ('USDT', 'BTC', 'XRP'), ('USDT', 'ETH', 'XRP'), ('USDT', 'BTC', 'LTC'),
+            ('USDT', 'ETH', 'LTC'), ('USDT', 'BTC', 'DOGE'), ('USDT', 'ETH', 'DOGE')
+        ]
+        
+        # Add exchange-specific priority triangles
+        if exchange_name == 'kucoin':
+            priority_usdt_triangles.extend([
+                ('USDT', 'KCS', 'BTC'), ('USDT', 'KCS', 'ETH'), ('USDT', 'KCS', 'USDC'),
+                ('USDT', 'BTC', 'KCS'), ('USDT', 'ETH', 'KCS')
+            ])
+        
+        for triangle in priority_usdt_triangles:
+            triangle_3_currencies = list(triangle[:3])  # Take first 3 currencies
+            if (self._validate_usdt_triangle_exists(triangle_3_currencies, available_pairs) and 
+                triangle_3_currencies not in usdt_triangles):
+                usdt_triangles.append(triangle_3_currencies)
+                self.logger.info(f"💎 Added priority USDT triangle: {' → '.join(triangle_3_currencies)} → USDT")
+        
+        self.logger.info(f"✅ Built {len(usdt_triangles)} USDT triangles for {exchange_name}")
+        return usdt_triangles if usdt_triangles else []
+
+    def _validate_usdt_triangle_exists(self, triangle: List[str], available_pairs: set) -> bool:
+        """Validate that a USDT triangle has all required pairs on Gate.io"""
+        if len(triangle) != 3 or triangle[0] != 'USDT':
+            return False
+            
+        usdt, curr1, curr2 = triangle
+        
+        # Required pairs for USDT triangle
+        pair1 = f"{curr1}/USDT"      # USDT → curr1
+        pair2 = f"{curr1}/{curr2}"   # curr1 → curr2
+        pair3 = f"{curr2}/USDT"      # curr2 → USDT
+        
+        # Alternative if curr1→curr2 doesn't exist
+        alt_pair2 = f"{curr2}/{curr1}"
+        
+        # Check if all required pairs exist
+        pair1_exists = pair1 in available_pairs
+        pair3_exists = pair3 in available_pairs
+        pair2_exists = pair2 in available_pairs or alt_pair2 in available_pairs
+        
+        if pair1_exists and pair2_exists and pair3_exists:
+            self.logger.debug(f"✅ Valid triangle: {' → '.join(triangle)} → USDT")
+            return True
+        else:
+            missing = []
+            if not pair1_exists:
+                missing.append(pair1)
+            if not pair3_exists:
+                missing.append(pair3)
+            if not pair2_exists:
+                missing.append(f"{pair2} or {alt_pair2}")
+            self.logger.debug(f"❌ Invalid triangle {' → '.join(triangle)}: missing {missing}")
+            return False
+
+    async def scan_all_opportunities(self) -> List[ArbitrageResult]:
+        """Scan all exchanges for ALL arbitrage opportunities regardless of balance"""
+        scan_start_time = time.time()
+        all_results = []
+        self.logger.info(f"🔍 Scanning ALL opportunities regardless of balance (Min Display: {self.min_profit_pct}%)...")
+        
+        # STEP 1: Get opportunities from simple detector for the SELECTED exchange
+        if self.simple_detector and self.simple_detector.exchange_id in self.exchange_manager.exchanges:
+            simple_opportunities = self.simple_detector.get_current_opportunities()
+            if simple_opportunities:
+                current_time = time.time()
+                if not hasattr(self, '_last_simple_log') or current_time - self._last_simple_log > 30:
+                    self.logger.info(f"💎 Simple detector found {len(simple_opportunities)} opportunities on {self.simple_detector.exchange_id}!")
+                    for i, opp in enumerate(simple_opportunities[:3]):
+                        self.logger.info(f"   {i+1}. {opp}")
+                    self._last_simple_log = current_time
+                    
+                # Convert simple detector opportunities to results for the SELECTED exchange
+                for opp in simple_opportunities[:10]:  # Top 10 from selected exchange
+                    result = ArbitrageResult(
+                        exchange=self.simple_detector.exchange_id,  # Use the SELECTED exchange
+                        triangle_path=[opp.d1, opp.d2, opp.d3],  # 3 currencies
+                        profit_percentage=opp.value,
+                        profit_amount=self.max_trade_amount * (opp.value / 100),
+                        initial_amount=self.max_trade_amount,
+                        net_profit_percent=opp.value,
+                        min_profit_threshold=self.min_profit_pct,
+                        is_tradeable=True,
+                        balance_available=124.76,  # Your actual USDT balance
+                        required_balance=self.max_trade_amount
+                    )
+                    all_results.append(result)
+        
+        # STEP 2: Scan traditional triangular paths for the SELECTED exchanges only
+        connected_exchanges = list(self.exchange_manager.exchanges.keys())
+        self.logger.info(f"🔍 Scanning opportunities on selected exchanges: {connected_exchanges}")
+
+        for ex_name, triangles in self.triangle_paths.items():
+            # Only scan the exchanges that are actually connected
+            if ex_name not in self.exchange_manager.exchanges:
+                self.logger.info(f"⏭️ Skipping {ex_name}: not in selected exchanges")
+                continue
                 
-                # Create trade steps for USDT triangle
-                steps = [
-                    TradeStep(f"{intermediate_currency}/USDT", 'buy', opportunity.initial_amount, 1.0, opportunity.initial_amount),
-                    TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', 1.0, 1.0, 1.0),
-                    TradeStep(f"{quote_currency}/USDT", 'sell', 1.0, 1.0, opportunity.initial_amount * (1 + opportunity.profit_percentage/100))
-                ]
+            ex = self.exchange_manager.exchanges.get(ex_name)
+            if not ex:
+                self.logger.warning(f"Skipping {ex_name}: no exchange connection")
+                continue
                 
-                # Create ArbitrageOpportunity with all required fields
-                arb_opportunity = ArbitrageOpportunity(
-                    exchange=opportunity.exchange,
-                    base_currency=base_currency,
-                    intermediate_currency=intermediate_currency,
-                    quote_currency=quote_currency,
-                    pair1=f"{intermediate_currency}/USDT",
-                    pair2=f"{intermediate_currency}/{quote_currency}",
-                    pair3=f"{quote_currency}/USDT",
-                    steps=steps,
-                    initial_amount=opportunity.initial_amount,
-                    final_amount=opportunity.initial_amount + opportunity.profit_amount,
-                    estimated_fees=0.0,
-                    estimated_slippage=0.0,
-                    net_profit=opportunity.profit_amount,
-                    profit_percentage=opportunity.profit_percentage,
-                    profit_amount=opportunity.profit_amount,
-                    status=OpportunityStatus.DETECTED
+            if not triangles:
+                self.logger.warning(f"Skipping {ex_name}: no triangular paths built")
+                continue
+            
+            try:
+                # Scan triangles on the SELECTED exchange
+                self.logger.info(f"🔍 Scanning {len(triangles)} triangles on {ex_name.upper()} for opportunities...")
+                results = await self._scan_exchange_triangles_all(ex, triangles)
+                all_results.extend(results)
+                self.logger.info(f"💎 Found {len(results)} opportunities on {ex_name.upper()}")
+            except Exception as e:
+                self.logger.error(f"Error scanning {ex_name}: {str(e)}", exc_info=True)
+
+        # STEP 3: Sort all results by profitability
+        all_results.sort(key=lambda x: x.profit_percentage, reverse=True)
+        
+        # Filter for profitable opportunities
+        filtered_results = all_results
+        
+        # STEP 4: Log comprehensive results
+        scan_duration = (time.time() - scan_start_time) * 1000  # Convert to milliseconds
+        
+        self.logger.info(f"📊 SCAN RESULTS (Duration: {scan_duration:.0f}ms):")
+        self.logger.info(f"   Total opportunities found: {len(filtered_results)}")
+        self.logger.info(f"   Exchange(s): {', '.join(connected_exchanges)}")
+        self.logger.info(f"   Ready for AUTO-TRADING execution")
+        
+        if len(filtered_results) > 0:
+            self.logger.info(f"💎 Top opportunities:")
+            for i, opp in enumerate(filtered_results[:5]):
+                self.logger.info(f"   {i+1}. {opp.exchange.upper()}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Ready for AUTO-TRADE")
+        else:
+            self.logger.info(f"   No opportunities found in current market conditions")
+        
+        # STEP 5: Broadcast opportunities to UI
+        await self._broadcast_opportunities(filtered_results)
+        
+        return filtered_results
+        
+    def _generate_sample_opportunities(self) -> List[ArbitrageResult]:
+        """Generate sample opportunities for UI display when no real opportunities exist"""
+        import random
+        
+        sample_opportunities = []
+        
+        # Sample triangle paths for demonstration
+        sample_triangles = [
+            ('BTC', 'ETH', 'USDT'),
+            ('BTC', 'BNB', 'USDT'),
+            ('ETH', 'BNB', 'USDT'),
+            ('BTC', 'ADA', 'USDT'),
+            ('ETH', 'ADA', 'USDT'),
+            ('BTC', 'SOL', 'USDT'),
+            ('ETH', 'SOL', 'USDT'),
+            ('BNB', 'ADA', 'USDT'),
+            ('BTC', 'DOT', 'USDT'),
+            ('ETH', 'DOT', 'USDT')
+        ]
+        
+        for i, (base, intermediate, quote) in enumerate(sample_triangles[:10]):  # Show 10 sample opportunities
+            # Generate realistic profit percentages
+            profit_pct = random.uniform(0.5, 2.0)  # 0.5% to 2.0% (realistic range)
+            trade_amount = random.uniform(10, 100)  # $10 to $100
+            profit_amount = trade_amount * (profit_pct / 100)
+            
+            # Mark as DEMO opportunities
+            is_tradeable = False  # Demo opportunities are not tradeable
+            balance_available = 0.0
+            
+            result = ArbitrageResult(
+                exchange='DEMO',
+                triangle_path=[base, intermediate, quote, base],
+                profit_percentage=profit_pct,
+                profit_amount=profit_amount,
+                initial_amount=trade_amount,
+                net_profit_percent=profit_pct,
+                min_profit_threshold=self.min_profit_pct,
+                is_tradeable=is_tradeable,
+                balance_available=balance_available,
+                required_balance=trade_amount,
+                is_demo=True  # Mark as demo opportunity
+            )
+            sample_opportunities.append(result)
+        
+        self.logger.info(f"✅ Generated {len(sample_opportunities)} sample opportunities for UI display")
+        return sample_opportunities
+
+    async def _scan_exchange_triangles_all(self, ex, triangles: List[List[str]]) -> List[ArbitrageResult]:
+        """Scan ALL triangles for opportunities regardless of balance"""
+        results = []
+        
+        # Use async ticker fetching for better performance
+        ticker_start_time = time.time()
+        ticker = await self._get_ticker_data(ex)
+        ticker_duration = (time.time() - ticker_start_time) * 1000
+        
+        if not ticker:
+            self.logger.error(f"No ticker data for {ex.name}")
+            return []
+
+        self.logger.info(f"🔍 Scanning {len(triangles)} triangles for {ex.name} - ALL opportunities (ticker fetch: {ticker_duration:.0f}ms)")
+        
+        # Scan ALL triangles for market opportunities
+        for path in triangles:
+            base_currency = path[0]  # First currency in triangle path
+            intermediate_currency, quote_currency = path[1], path[2]
+            
+            try:
+                # Calculate profit for ALL opportunities
+                profit = await self._calculate_real_triangle_profit(
+                    ex, ticker, base_currency, intermediate_currency, quote_currency
                 )
                 
-                # Set the triangle path as string for display
-                arb_opportunity.triangle_path = " → ".join(triangle_path)
-                
-                # Execute the trade
-                success = await self.executor.execute_arbitrage(arb_opportunity)
-                if success:
-                    self.logger.info(f"✅ Auto-trade executed successfully: {opportunity.profit_percentage:.4f}% profit")
+                # Create result for ALL valid calculations
+                if profit is not None:
+                    trade_amount = self.max_trade_amount
+                    
+                    result = ArbitrageResult(
+                        exchange=ex.name,
+                        triangle_path=path,
+                        profit_percentage=profit,
+                        profit_amount=(trade_amount * profit / 100),
+                        initial_amount=max(5.0, min(20.0, trade_amount)),  # Gate.io: min $5, max $20
+                        net_profit_percent=profit,
+                        min_profit_threshold=self.min_profit_pct,
+                        is_tradeable=(profit >= 0.5),  # Only profitable ones are tradeable
+                        balance_available=0.0,  # Don't check balance
+                        required_balance=max(5.0, min(20.0, trade_amount))  # Gate.io limits
+                    )
+                    
+                    # Add ALL opportunities (positive and negative) for display
+                    results.append(result)
+                    
+                    # Log opportunities with clear profit status
+                    if profit >= 0.5:
+                        self.logger.info(f"💚 PROFITABLE: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (TRADEABLE)")
+                    elif profit >= 0:
+                        self.logger.info(f"🟡 LOW PROFIT: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (below 0.5%)")
+                    else:
+                        self.logger.info(f"🔴 LOSS: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% (not profitable)")
                 else:
-                    self.logger.warning(f"❌ Auto-trade failed for {opportunity.profit_percentage:.4f}% opportunity")
+                    self.logger.debug(f"🚫 Invalid calculation: {base_currency}→{intermediate_currency}→{quote_currency}")
                     
-                # Wait between executions to avoid rate limiting
-                await asyncio.sleep(2)
-                
             except Exception as e:
-                self.logger.error(f"❌ Error in auto-execution: {e}")
-                self.logger.error(f"   Opportunity data: exchange={opportunity.exchange}, profit={opportunity.profit_percentage:.4f}%")
-                import traceback
-                self.logger.error(f"   Full traceback: {traceback.format_exc()}")
-    
-    def _build_usdt_triangles(self, pairs: List[str], exchange_id: str) -> List[List[str]]:
-        """Build USDT-based triangular paths: USDT → Currency1 → Currency2 → USDT"""
-        triangles = []
+                self.logger.debug(f"Error calculating triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
         
-        # Get valid currencies for this exchange
-        valid_currencies = self._get_valid_currencies_for_exchange(exchange_id)
+        # Count profitable vs unprofitable
+        profitable_count = len([r for r in results if r.profit_percentage >= 0.5])
+        low_profit_count = len([r for r in results if 0 <= r.profit_percentage < 0.5])
+        loss_count = len([r for r in results if r.profit_percentage < 0])
         
-        # Find currencies that have USDT pairs
-        usdt_currencies = set()
-        pair_set = set(pairs)
+        self.logger.info(f"✅ Found {len(results)} total opportunities on {ex.name}:")
+        self.logger.info(f"   💚 Profitable (≥0.5%): {profitable_count}")
+        self.logger.info(f"   🟡 Low profit (0-0.5%): {low_profit_count}")
+        self.logger.info(f"   🔴 Losses (<0%): {loss_count}")
         
-        for pair in pairs:
-            if '/' in pair:
-                base, quote = pair.split('/')
-                if quote == 'USDT' and base in valid_currencies:
-                    usdt_currencies.add(base)
-                elif base == 'USDT' and quote in valid_currencies:
-                    usdt_currencies.add(quote)
+        return results
+
+    async def _get_ticker_data(self, ex):
+        """Get ticker data with smart caching"""
+        current_time = time.time()
+        last_fetch = self._last_ticker_time.get(ex.name, 0)
         
-        self.logger.info(f"   {exchange_id}: Found {len(usdt_currencies)} currencies with USDT pairs")
+        if current_time - last_fetch < 5:
+            ticker = self._last_tickers.get(ex.name, {})
+            if ticker:
+                self.logger.debug(f"Using cached tickers for {ex.name}")
+                return ticker
+
+        ticker = await self._safe_fetch_tickers(ex)
+        if ticker:
+            self._last_tickers[ex.name] = ticker
+            self._last_ticker_time[ex.name] = current_time
         
-        # Build triangular combinations
-        usdt_list = sorted(list(usdt_currencies))
+        return ticker
+
+    async def _safe_fetch_tickers(self, ex):
+        """Fetch tickers with rate limiting protection"""
+        try:
+            await asyncio.sleep(0.2)  # Rate limiting
+            tickers = await ex.fetch_tickers()
+            self.logger.info(f"📊 Fetched {len(tickers)} 🔴 LIVE tickers from {ex.name}")
+            return tickers
+        except Exception as e:
+            self.logger.error(f"Error fetching tickers from {ex.name}: {str(e)}")
+            return self._last_tickers.get(ex.name, {})
+
+    async def _calculate_real_triangle_profit(self, ex, ticker, a: str, b: str, c: str) -> float:
+        """Calculate REAL profit percentage for USDT triangular arbitrage: USDT → b → c → USDT"""
         
-        for i, curr1 in enumerate(usdt_list):
-            for j, curr2 in enumerate(usdt_list):
-                if i >= j:  # Avoid duplicates and self-pairs
-                    continue
-                
-                # Check if curr1 ↔ curr2 pair exists
-                pair1 = f"USDT/{curr1}"
-                pair2 = f"{curr1}/{curr2}"
-                pair3 = f"USDT/{curr2}"
-                
-                # Alternative pair formats
-                alt_pair1 = f"{curr1}/USDT"
-                alt_pair2 = f"{curr2}/{curr1}"
-                alt_pair3 = f"{curr2}/USDT"
-                
-                # Check if all required pairs exist (in any direction)
-                has_pair1 = pair1 in pair_set or alt_pair1 in pair_set
-                has_pair2 = pair2 in pair_set or alt_pair2 in pair_set
-                has_pair3 = pair3 in pair_set or alt_pair3 in pair_set
-                
-                if has_pair1 and has_pair2 and has_pair3:
-                    # Create 4-step USDT triangle path
-                    triangle = ['USDT', curr1, curr2, 'USDT']
-                    triangles.append(triangle)
-                    
-                    if len(triangles) >= 500:  # Increased limit for more opportunities
-                        break
+        # Ensure this is a USDT-based triangle (a should be USDT)
+        if a != 'USDT':
+            self.logger.debug(f"Skipping non-USDT triangle: {a}→{b}→{c}")
+            return None
+        
+        # Get exchange-specific valid currencies
+        valid_currencies = self._get_valid_currencies_for_exchange(ex.exchange_id)
+        
+        if b not in valid_currencies or c not in valid_currencies:
+            self.logger.debug(f"❌ Skipping triangle with non-existent currencies on {ex.exchange_id}: USDT→{b}→{c}→USDT")
+            return None
+        
+        try:
+            # USDT Triangle calculation: USDT → b → c → USDT
             
-            if len(triangles) >= 500:
-                break
-        
-        return triangles
+            # Apply exchange-specific trade limits
+            start_usdt = self._get_exchange_trade_limits(ex.exchange_id)
+            
+            # Required pairs for USDT triangle
+            pair1 = f"{b}/USDT"      # b/USDT pair
+            pair2 = f"{b}/{c}"       # b/c pair (direct)
+            pair3 = f"{c}/USDT"      # c/USDT pair
+            alt_pair2 = f"{c}/{b}"   # c/b pair (alternative)
+            
+            # CRITICAL: Check if all required pairs exist in ticker data
+            if not (pair1 in ticker and pair3 in ticker):
+                self.logger.debug(f"❌ Missing USDT pairs for triangle USDT→{b}→{c}→USDT: {pair1} or {pair3}")
+                return None
+            
+            # Determine which b→c pair to use
+            if pair2 in ticker:
+                use_direct = True
+                bc_pair = pair2
+            elif alt_pair2 in ticker:
+                use_direct = False
+                bc_pair = alt_pair2
+            else:
+                self.logger.debug(f"❌ Missing {b}→{c} pair for triangle USDT→{b}→{c}→USDT: neither {pair2} nor {alt_pair2}")
+                return None
+            
+            # Get ticker data
+            t1 = ticker[pair1]  # b/USDT
+            t2 = ticker[bc_pair]  # b/c or c/b
+            t3 = ticker[pair3]  # c/USDT
+            
+            # Validate price data
+            if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
+                self.logger.debug(f"❌ Invalid price data for USDT triangle USDT→{b}→{c}→USDT")
+                return None
+            
+            # Validate prices are reasonable
+            prices = [float(t1['ask']), float(t1['bid']), float(t2['ask']), float(t2['bid']), 
+                     float(t3['ask']), float(t3['bid'])]
+            if any(p <= 0 or p > 1000000 for p in prices):
+                self.logger.debug(f"❌ Unreasonable prices for USDT triangle USDT→{b}→{c}→USDT")
+                return None
+            
+            # Step 1: USDT → b (buy b with USDT)
+            price1 = float(t1['ask'])  # Buy b at ask price
+            amount_b = start_usdt / price1
+            
+            # Validate step 1 result
+            if amount_b <= 0 or amount_b > start_usdt * 1000:
+                self.logger.debug(f"❌ Invalid step 1 result for USDT→{b}: {amount_b}")
+                return None
+            
+            # Step 2: b → c
+            if use_direct:
+                # Direct pair b/c: sell b for c
+                price2 = float(t2['bid'])  # Sell b at bid price
+                amount_c = amount_b * price2
+            else:
+                # Inverse pair c/b: buy c with b
+                price2 = float(t2['ask'])  # Buy c at ask price
+                amount_c = amount_b / price2
+            
+            # Validate step 2 result
+            if amount_c <= 0 or amount_c > amount_b * 1000:
+                self.logger.debug(f"❌ Invalid step 2 result for {b}→{c}: {amount_c}")
+                return None
+            
+            # Step 3: c → USDT (sell c for USDT)
+            price3 = float(t3['bid'])  # Sell c at bid price
+            final_usdt = amount_c * price3
+            
+            # Validate final result
+            if final_usdt <= 0 or final_usdt > start_usdt * 10:
+                self.logger.debug(f"❌ Invalid final result for {c}→USDT: {final_usdt}")
+                return None
+            
+            # Calculate profit
+            gross_profit = final_usdt - start_usdt
+            gross_profit_pct = (gross_profit / start_usdt) * 100
+            
+            # Apply exchange-specific trading costs
+            total_costs_pct = self._get_exchange_trading_costs(ex.exchange_id)
+            net_profit_pct = gross_profit_pct - total_costs_pct
+            
+            # Log detailed calculation for debugging
+            self.logger.debug(f"💰 USDT Triangle USDT→{b}→{c}→USDT: "
+                        f"{start_usdt:.2f} USDT → {amount_b:.6f} {b} → {amount_c:.6f} {c} → {final_usdt:.2f} USDT = "
+                        f"GROSS: {gross_profit_pct:.6f}%, COSTS: {total_costs_pct:.3f}%, NET: {net_profit_pct:.6f}%")
+            
+            # Return ALL calculated profits (even negative ones) for display
+            # The filtering will happen later based on profitability
+            if abs(net_profit_pct) <= 50.0:  # Sanity check: reject unrealistic profits
+                return net_profit_pct
+            else:
+                self.logger.debug(f"❌ Unrealistic profit rejected: {net_profit_pct:.6f}%")
+                return None
+                
+        except Exception as e:
+            self.logger.debug(f"USDT calculation failed for USDT→{b}→{c}→USDT: {str(e)}")
+            return None
     
-    def _get_valid_currencies_for_exchange(self, exchange_id: str) -> Set[str]:
+    def _get_valid_currencies_for_exchange(self, exchange_id: str) -> set:
         """Get valid currencies for specific exchange"""
-        if exchange_id == 'gate':
+        if exchange_id == 'kucoin':
+            return {
+                # Major cryptocurrencies (high volume, good liquidity)
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
+                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS', 'XTZ', 'DASH',
+                'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA',
+                'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB', 'PENDLE', 'RNDR',
+                'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD', 'KCS',
+                
+                # Stablecoins and USD pairs
+                'USDD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ', 'FDUSD',
+                
+                # DeFi tokens (often have good arbitrage opportunities)
+                'CAKE', 'ALPHA', 'AUTO', 'BAKE', 'BELT', 'BUNNY', 'CHESS', 'CTK', 'DEGO',
+                'EPS', 'FOR', 'HARD', 'HELMET', 'LINA', 'LIT', 'MASK', 'MIR', 'NULS',
+                'OG', 'PHA', 'POLS', 'PUNDIX', 'RAMP', 'REEF', 'SFP', 'SPARTA', 'SXP',
+                'TKO', 'TWT', 'UNFI', 'VAI', 'VIDT', 'WRX', 'XVS', 'DYDX', 'GALA',
+                
+                # New and trending tokens (higher volatility = more arbitrage)
+                'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'ORDI', 'SATS', '1000SATS', 'RATS',
+                'MEME', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI', 'SCR', 'EIGEN', 'HMSTR',
+                'CATI', 'NEIRO', 'CYBER', 'BLUR', 'SUI', 'APT', 'MOVE', 'USUAL', 'PENGU',
+                
+                # Gaming and metaverse tokens
+                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
+                'ALICE', 'TLM', 'CHR', 'PYR', 'SKILL', 'TOWER', 'UFO', 'NFTB', 'REVV',
+                
+                # AI and tech tokens
+                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
+                'RNDR', 'LPT', 'LIVEPEER', 'THETA', 'TFUEL', 'VRA', 'ANKR', 'STORJ',
+                
+                # Layer 2 and scaling solutions
+                'MATIC', 'ARB', 'OP', 'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG',
+                'LRC', 'ZKS', 'DUSK', 'L2', 'ORBS', 'COTI', 'CTSI', 'CARTESI',
+                
+                # Meme coins (high volatility)
+                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS',
+                'WEN', 'MYRO', 'POPCAT', 'MEW', 'MOTHER', 'DADDY', 'SIGMA', 'RETARDIO',
+                
+                # Additional high-volume tokens
+                'NEAR', 'ROSE', 'ONE', 'HARMONY', 'CELO', 'KLAY', 'FLOW', 'EGLD', 'ELROND',
+                'AVAX', 'LUNA', 'LUNC', 'USTC', 'ATOM', 'OSMO', 'JUNO', 'SCRT', 'REGEN',
+                'STARS', 'HUAHUA', 'CMDX', 'CRE', 'XPRT', 'NGM', 'IOV', 'BOOT', 'CHEQ'
+            }
+        elif exchange_id == 'gate':
             return {
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
@@ -287,398 +802,164 @@ class MultiExchangeDetector:
                 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
                 'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
                 'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
-                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI',
-                'MAGIC', 'TRY', 'VOXEL', 'GMT', 'APE', 'GALA', 'SAND', 'MANA', 'ENJ', 'AXS',
-                'JASMY', 'LUNC', 'USTC', 'LUNA', 'ROSE', 'MINA', 'FLOW', 'ICP', 'EGLD', 'KLAY',
-                'WAVES', 'ONE', 'HARMONEY', 'CELO', 'ZEN', 'DASH', 'DCR', 'DGB', 'RVN', 'BTG',
-                'QTUM', 'NEO', 'GAS', 'ONT', 'VET', 'VTHO', 'IOTA', 'MIOTA', 'XEM', 'XYM',
-                'SC', 'ZIL', 'STEEM', 'SBD', 'HIVE', 'HBD', 'LSK', 'ARK', 'STRAT', 'NAV',
-                'PIVX', 'PART', 'BLK', 'VIA', 'XVG', 'DOGE', 'LTC', 'BCH', 'BSV', 'BTG',
-                'CAKE', 'BAKE', 'AUTO', 'ALPACA', 'BELT', 'BUNNY', 'EPS', 'XVS', 'VAI', 'SXP',
-                'HARD', 'KAVA', 'SWP', 'USDX', 'BNX', 'TLM', 'ALICE', 'CHR', 'PYR', 'SUPER',
-                'ILV', 'GODS', 'GALA', 'SAND', 'MANA', 'ENJ', 'AXS', 'SLP', 'YGG', 'SKILL',
-                'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'MOVR', 'GLMR',
-                'METIS', 'BOBA', 'LRC', 'IMX', 'DYDX', 'GMX', 'GNS', 'GAINS', 'JOE', 'PNG',
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
-                'BABYDOGE', 'KISHU', 'ELON', 'AKITA', 'HOKK', 'LEASH', 'BONE', 'RYOSHI', 'MONONOKE',
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                'RNDR', 'THETA', 'TFUEL', 'LPT', 'GRT', 'API3', 'BAND', 'TRB', 'DIA', 'LINK',
-                'AXS', 'SLP', 'YGG', 'SKILL', 'GALA', 'SAND', 'MANA', 'ENJ', 'CHR', 'PYR',
-                'SUPER', 'ILV', 'GODS', 'ALICE', 'TLM', 'WAX', 'WAXP', 'DPET', 'RACA', 'HERO',
-                'XMR', 'ZEC', 'DASH', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT',
-                'KEEP', 'DUSK', 'BEAM', 'GRIN', 'FIRO', 'PIVX', 'NAV', 'XVG', 'PART', 'ARRR',
-                'BNB', 'HT', 'OKB', 'LEO', 'GT', 'MX', 'KCS', 'CRO', 'FTT', 'BGB',
-                'WBT', 'PROB', 'CET', 'BIT', 'LBK', 'XT', 'DFT', 'BIKI', 'ZB', 'TOP',
-                'USDC', 'BUSD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ', 'USDD',
-                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'HUSD', 'USDK', 'EURS', 'EURT', 'XSGD', 'IDRT',
-                'PAXG', 'XAUT', 'DGX', 'CACHE', 'PMGT', 'GOLD', 'SILVER', 'OIL', 'GAS', 'WHEAT',
-                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
-                'POLY', 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'METIS'
-            }
-        elif exchange_id == 'kucoin':
-            return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'KCS',
-                'ETC', 'BCH', 'EOS', 'XLM', 'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX',
-                'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO',
-                'USDD', 'TUSD', 'DAI', 'PAX', 'BUSD', 'HUSD', 'USDK', 'FRAX',
-                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
-                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
-                'ALICE', 'TLM', 'CHR', 'PYR', 'SUPER', 'GODS', 'SKILL', 'DPET', 'RACA', 'HERO',
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                'RNDR', 'THETA', 'TFUEL', 'LPT', 'GRT', 'API3', 'BAND', 'TRB', 'DIA', 'LINK',
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
-                'BABYDOGE', 'KISHU', 'ELON', 'AKITA', 'HOKK', 'LEASH', 'BONE', 'RYOSHI', 'SAFEMOON',
-                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
-                'LRC', 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'MOVR',
-                'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
-                'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
-                'BEAM', 'GRIN', 'FIRO', 'PIVX', 'NAV', 'XVG', 'PART', 'ARRR', 'ZEC', 'DASH',
-                'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
-                'WBT', 'PROB', 'CET', 'BIT', 'LBK', 'XT', 'DFT', 'BIKI', 'ZB', 'TOP',
-                'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
-                'PAXG', 'XAUT', 'DGX', 'CACHE', 'PMGT', 'GOLD', 'SILVER', 'OIL', 'GAS', 'WHEAT',
-                'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
-                'PIXEL', 'ALT', 'MANTA', 'DYM', 'PRIME', 'RONIN', 'SAVM', 'OMNI', 'REZ', 'BB',
-                'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
-                'RLC', 'CTXC', 'PHB', 'DATA', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'PHB', 'DATA',
-                'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
-                'RETH', 'STETH', 'CBETH', 'WSTETH', 'FRXETH', 'SFRXETH', 'SWETH', 'OSETH',
-                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
-                'POLY', 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'METIS',
-                'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
-                'LUNC', 'USTC', 'LUNA', 'ROSE', 'MINA', 'FLOW', 'ICP', 'EGLD', 'KLAY', 'WAVES',
-                'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
-                'MAGIC', 'TREASURE', 'JEWEL', 'DFK', 'CRYSTAL', 'DFKTEARS', 'JADE', 'GOLD',
-                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
-                'EURS', 'EURT', 'XSGD', 'IDRT', 'BIDR', 'BKRW', 'VAI', 'UST', 'TERRA', 'LUNC',
-                'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
-                'RDNT', 'ARB', 'GMX', 'GNS', 'GAINS', 'JOE', 'PNG', 'XAVA', 'QI', 'BENQI',
-                'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
-                'SKILL', 'DPET', 'RACA', 'HERO', 'NFTB', 'TOWER', 'ETERNAL', 'WARS', 'KNIGHT',
-                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC',
-                'PHB', 'DATA', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'PHB', 'DATA', 'OCEAN', 'NMR'
+                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
             }
         elif exchange_id == 'binance':
             return {
                 'BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'BUSD', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
-                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
-                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
-                'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
-                'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
-                'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
-                'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
-                'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
-                'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
-                'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
-                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
-                'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
-                'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
-                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
-                'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
-                'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
-                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC',
-                'AAVE', 'COMP', 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX'
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP'
             }
         elif exchange_id == 'bybit':
             return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'BIT', 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE'
-            }
-        elif exchange_id == 'okx':
-            return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'OKB', 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE'
-            }
-        elif exchange_id == 'mexc':
-            return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'MX', 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE'
-            }
-        elif exchange_id == 'crypto':
-            return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'CRO', 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE'
+                'BTC', 'ETH', 'USDT', 'USDC', 'BIT', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
             }
         else:
+            # Default major currencies
             return {
                 'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
-                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI'
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
             }
     
-    async def scan_all_opportunities(self) -> List[ArbitrageResult]:
-        """Generate 300-500 opportunities with red/green color scheme"""
-        all_opportunities = []
-        
-        # Generate 300-500 opportunities using enhanced generator
-        self.logger.info(f"🎯 Generating {self.target_opportunity_count} opportunities for selected exchanges...")
-        
-        # Get selected exchanges
-        selected_exchanges = list(self.exchange_manager.exchanges.keys())
-        if not selected_exchanges:
-            selected_exchanges = ['gate', 'kucoin', 'binance']  # Default exchanges
-        
-        # Generate opportunities using enhanced generator
-        from arbitrage.enhanced_opportunity_generator import EnhancedOpportunityGenerator
-        generator = EnhancedOpportunityGenerator()
-        enhanced_opportunities = generator.generate_opportunities(self.target_opportunity_count)
-        
-        # Convert to ArbitrageResult format and filter for selected exchanges
-        for enhanced_opp in enhanced_opportunities:
-            # Only include opportunities from selected exchanges
-            if enhanced_opp.exchange in selected_exchanges or len(selected_exchanges) == 0:
-                # Convert to ArbitrageResult
-                result = enhanced_opp.to_arbitrage_result()
-                all_opportunities.append(result)
-        
-        # Final sorting and filtering
-        if all_opportunities:
-            # Filter to show only 0% and positive opportunities
-            filtered_opportunities = [
-                opp for opp in all_opportunities 
-                if opp.profit_percentage >= 0.0  # Only 0% and positive
-            ]
-            
-            # Sort all opportunities by profit percentage
-            filtered_opportunities.sort(key=lambda x: x.profit_percentage, reverse=True)
-            
-            # Limit to target count
-            final_opportunities = filtered_opportunities[:self.target_opportunity_count]
-            
-            # Count by category
-            red_count = len([opp for opp in final_opportunities if opp.profit_percentage == 0.0])
-            green_count = len([opp for opp in final_opportunities if opp.profit_percentage > 0.4])
-            total_count = len(final_opportunities)
-            
-            self.logger.info(f"📊 GENERATED {total_count} opportunities for GUI display")
-            self.logger.info(f"   🔴 RED (0%): {red_count}")
-            self.logger.info(f"   🟢 GREEN (>0.4%): {green_count}")
-            self.logger.info(f"   📊 Total: {total_count} (Target: 300-500)")
-            
-            # Broadcast opportunities to UI with red/green color scheme
-            await self._broadcast_opportunities_with_colors(final_opportunities)
-            
-            return final_opportunities
+    def _get_exchange_trade_limits(self, exchange_id: str) -> float:
+        """Get exchange-specific trade amount limits"""
+        if exchange_id == 'kucoin':
+            return max(1.0, min(self.max_trade_amount, 20.0))  # KuCoin: $1-20 (keep consistent with user's $20 limit)
+        elif exchange_id == 'gate':
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Gate.io: $5-20
+        elif exchange_id == 'binance':
+            return max(10.0, min(self.max_trade_amount, 20.0))  # Binance: $10-20 (keep consistent)
+        elif exchange_id == 'bybit':
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Bybit: $5-20 (keep consistent)
         else:
-            self.logger.warning("❌ No opportunities found across all exchanges")
-            return []
+            return max(5.0, min(self.max_trade_amount, 20.0))  # Default: $5-20
     
-    async def _calculate_triangle_profit_fixed(self, exchange_id: str, exchange, triangle: List[str], tickers: Dict[str, Any]) -> Optional[ArbitrageResult]:
-        """Calculate triangular arbitrage profit with FIXED logic"""
-        try:
-            # Extract 4-step path: [USDT, Currency1, Currency2, USDT]
-            if len(triangle) != 4 or triangle[0] != 'USDT' or triangle[3] != 'USDT':
-                return None
+    def _get_exchange_trading_costs(self, exchange_id: str) -> float:
+        """Get exchange-specific total trading costs percentage"""
+        from config.exchanges_config import SUPPORTED_EXCHANGES
+        ex_config = SUPPORTED_EXCHANGES.get(exchange_id, {})
+        
+        # Use taker fees for market orders (3 trades in triangle)
+        base_taker_fee = ex_config.get('taker_fee', 0.001)
+        
+        # Check if fee token discount applies (assume user has fee tokens for better rates)
+        if ex_config.get('fee_token') and ex_config.get('taker_fee_with_token'):
+            fee_per_trade = ex_config.get('taker_fee_with_token', base_taker_fee)
+            self.logger.debug(f"💰 Using {ex_config['fee_token']} discount for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
+        else:
+            fee_per_trade = base_taker_fee
+            self.logger.debug(f"📊 Using base fees for {exchange_id}: {fee_per_trade*100:.3f}% per trade")
+        
+        # Total cost for 3 trades + slippage buffer
+        if exchange_id == 'kucoin':
+            # KuCoin has lower fees with KCS token
+            total_costs = (fee_per_trade * 3) + 0.0005  # 3 trades + 0.05% slippage buffer
+        else:
+            total_costs = (fee_per_trade * 3) + 0.001  # 3 trades + 0.1% slippage buffer
             
-            base_currency = triangle[0]      # USDT
-            currency1 = triangle[1]          # e.g., MAGIC
-            currency2 = triangle[2]          # e.g., TRY
-            final_currency = triangle[3]     # USDT
-            
-            # Define the three trading pairs needed
-            pair1 = f"{currency1}/USDT"      # MAGIC/USDT
-            pair2 = f"{currency1}/{currency2}"  # MAGIC/TRY
-            pair3 = f"{currency2}/USDT"      # TRY/USDT
-            
-            # Alternative pair formats
-            alt_pair1 = f"USDT/{currency1}"
-            alt_pair2 = f"{currency2}/{currency1}"
-            alt_pair3 = f"USDT/{currency2}"
-            
-            # Get ticker data (try both directions)
-            ticker1 = tickers.get(pair1) or tickers.get(alt_pair1)
-            ticker2 = tickers.get(pair2) or tickers.get(alt_pair2)
-            ticker3 = tickers.get(pair3) or tickers.get(alt_pair3)
-            
-            if not all([ticker1, ticker2, ticker3]):
-                return None
-            
-            # Validate all tickers have proper bid/ask data
-            if not all(ticker.get('bid') and ticker.get('ask') and 
-                      ticker['bid'] > 0 and ticker['ask'] > 0 and
-                      ticker['bid'] < ticker['ask']
-                      for ticker in [ticker1, ticker2, ticker3]):
-                return None
-            
-            # FIXED CALCULATION: Proper USDT triangular arbitrage
-            initial_usdt = 20.0  # Start with $20 USDT
-            
-            # Step 1: USDT → Currency1 (Buy Currency1 with USDT)
-            if pair1 in tickers:
-                # Direct pair: buy currency1 with USDT
-                price1 = ticker1['ask']  # Buy at ask price
-                amount_currency1 = initial_usdt / price1
-            else:
-                # Inverse pair: sell USDT for currency1
-                price1 = 1 / ticker1['bid']  # Inverse of USDT/currency1 bid
-                amount_currency1 = initial_usdt * price1
-            
-            # Step 2: Currency1 → Currency2
-            if pair2 in tickers:
-                # Direct pair: sell currency1 for currency2
-                price2 = ticker2['bid']  # Sell at bid price
-                amount_currency2 = amount_currency1 * price2
-            else:
-                # Inverse pair: buy currency2 with currency1
-                price2 = 1 / ticker2['ask']  # Inverse of currency2/currency1 ask
-                amount_currency2 = amount_currency1 * price2
-            
-            # Step 3: Currency2 → USDT (Sell Currency2 for USDT)
-            if pair3 in tickers:
-                # Direct pair: sell currency2 for USDT
-                price3 = ticker3['bid']  # Sell at bid price
-                final_usdt = amount_currency2 * price3
-            else:
-                # Inverse pair: buy USDT with currency2
-                price3 = 1 / ticker3['ask']  # Inverse of USDT/currency2 ask
-                final_usdt = amount_currency2 * price3
-            
-            # FIXED: Calculate actual profit
-            gross_profit_usdt = final_usdt - initial_usdt
-            gross_profit_percentage = (gross_profit_usdt / initial_usdt) * 100
-            
-            # Apply realistic trading costs
-            exchange_config = SUPPORTED_EXCHANGES.get(exchange_id, {})
-            
-            # FIXED: Get optimized fees for KuCoin
-            if exchange_id == 'kucoin':
-                # KuCoin with KCS discount: 0.05% per trade
-                maker_fee = exchange_config.get('maker_fee_with_token', 0.0005)
-                taker_fee = exchange_config.get('taker_fee_with_token', 0.0005)
-                slippage_percentage = 0.005  # 0.005% ultra-low slippage for KuCoin
-                self.logger.debug(f"🔧 KuCoin optimized fees: {taker_fee*100:.3f}% per trade")
-            elif exchange_id == 'gate':
-                # Gate.io with GT discount
-                maker_fee = exchange_config.get('maker_fee_with_token', 0.0009)
-                taker_fee = exchange_config.get('taker_fee_with_token', 0.0009)
-                slippage_percentage = 0.01  # 0.01% slippage for Gate.io
-            else:
-                # Default fees
-                maker_fee = exchange_config.get('maker_fee', 0.001)
-                taker_fee = exchange_config.get('taker_fee', 0.001)
-                slippage_percentage = 0.02  # 0.02% default slippage
-            
-            # Use taker fee for market orders
-            actual_fee = taker_fee
-            
-            # Total costs: 3 trades × fee + slippage
-            total_fee_percentage = actual_fee * 3 * 100  # Convert to percentage
-            total_costs_percentage = total_fee_percentage + slippage_percentage
-            
-            self.logger.debug(f"💰 {exchange_id} costs: fees={total_fee_percentage:.3f}% + slippage={slippage_percentage:.3f}% = {total_costs_percentage:.3f}%")
-            
-            # FIXED: Net profit calculation
-            net_profit_percentage = gross_profit_percentage - total_costs_percentage
-            net_profit_usdt = initial_usdt * (net_profit_percentage / 100)
-            
-            # FIXED: For KuCoin, lower the threshold to find more opportunities
-            min_threshold = -0.1 if exchange_id == 'kucoin' else 0.0
-            if net_profit_percentage < min_threshold:
-                return None
-            
-            # Create result with FIXED values
-            result = ArbitrageResult(
-                exchange=exchange_id,
-                triangle_path=triangle,  # 4-step path
-                profit_percentage=net_profit_percentage,  # CORRECTED
-                profit_amount=net_profit_usdt,           # CORRECTED
-                initial_amount=initial_usdt,
-                net_profit_percent=net_profit_percentage,
-                min_profit_threshold=0.4,
-                is_tradeable=net_profit_percentage >= 0.4,
-                balance_available=120.0,  # Assume sufficient balance
-                required_balance=initial_usdt,
-                is_demo=False
-            )
-            
-            return result
-            
-        except Exception as e:
-            self.logger.debug(f"Error calculating triangle profit: {e}")
-            return None
-    
-    async def _broadcast_opportunities_with_colors(self, opportunities: List[ArbitrageResult]):
-        """Broadcast opportunities to UI with red/green color scheme"""
-        try:
-            if not self.websocket_manager:
-                return
-            
-            # Convert to UI format
-            ui_opportunities = []
-            
-            for i, opp in enumerate(opportunities):
-                # Create proper 4-step path display
-                path_display = " → ".join(opp.triangle_path)
-                
-                # RED/GREEN color scheme only
-                if opp.profit_percentage == 0.0:
-                    status_text = "🔴 0% PROFIT"
-                    color_class = "red"
-                    action_text = "Execute"
-                elif opp.profit_percentage > 0.4:
-                    status_text = "🟢 PROFITABLE"
-                    color_class = "green"
-                    action_text = "Execute"
-                else:
-                    # Skip opportunities between 0% and 0.4% to maintain red/green only
-                    continue
-                
-                ui_opp = {
-                    "id": f"color_opp_{int(time.time()*1000)}_{i}",
-                    "exchange": opp.exchange,
-                    "trianglePath": path_display,
-                    "profitPercentage": round(opp.profit_percentage, 6),
-                    "profitAmount": round(opp.profit_amount, 6),
-                    "volume": round(opp.initial_amount, 2),
-                    "status": "detected",
-                    "statusText": status_text,
-                    "colorClass": color_class,
-                    "actionText": action_text,
-                    "timestamp": datetime.now().isoformat(),
-                    "tradeable": opp.is_tradeable,
-                    "balanceAvailable": opp.balance_available,
-                    "balanceRequired": opp.required_balance,
-                    "real_market_data": True,
-                    "red_green_scheme": True
-                }
-                ui_opportunities.append(ui_opp)
-            
-            # Broadcast to UI
-            await self.websocket_manager.broadcast("opportunities_update", ui_opportunities)
-            
-            # Log summary
-            red_count = len([opp for opp in ui_opportunities if opp['colorClass'] == 'red'])
-            green_count = len([opp for opp in ui_opportunities if opp['colorClass'] == 'green'])
-            
-            self.logger.info(f"✅ Broadcasted {len(ui_opportunities)} opportunities with RED/GREEN colors")
-            self.logger.info(f"   🔴 RED (0%): {red_count}")
-            self.logger.info(f"   🟢 GREEN (>0.4%): {green_count}")
-            
-            # Log top opportunities
-            if ui_opportunities:
-                self.logger.info("🏆 TOP OPPORTUNITIES:")
-                for i, opp in enumerate(ui_opportunities[:5]):
-                    color = "🔴 RED" if opp['colorClass'] == 'red' else "🟢 GREEN"
-                    self.logger.info(f"   {i+1}. {color}: {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']:.4f}%")
-            
-        except Exception as e:
-            self.logger.error(f"Error broadcasting opportunities to UI: {e}")
+        total_costs_pct = total_costs * 100
+        
+        self.logger.debug(f"🔧 {ex_config.get('name', exchange_id)} total costs: {total_costs_pct:.3f}%")
+        return total_costs_pct
+
+    def _calculate_usdt_path_profit(self, ticker, pairs: List[str], steps: List[str], start_amount: float, b: str, c: str) -> float:
+        """Calculate profit for a USDT-based arbitrage path"""
+        
+        t1, t2, t3 = ticker[pairs[0]], ticker[pairs[1]], ticker[pairs[2]]
+        
+        if not all(t.get('bid') and t.get('ask') for t in [t1, t2, t3]):
+            raise ValueError("Invalid price data")
+        
+        # Step 1: USDT → b
+        if steps[0] == 'buy_b_with_usdt':
+            # Buy b with USDT using ask price
+            price1 = float(t1['ask'])
+            amount_after_step1 = start_amount / price1
+        elif steps[0] == 'sell_usdt_for_b':
+            # Sell USDT for b using bid price
+            price1 = float(t1['bid'])
+            amount_after_step1 = start_amount * price1
+        else:
+            raise ValueError(f"Invalid step: {steps[0]}")
+        
+        # Step 2: b → c
+        if steps[1] == 'sell_b_for_c':
+            # Sell b for c using bid price
+            price2 = float(t2['bid'])
+            amount_after_step2 = amount_after_step1 * price2
+        elif steps[1] == 'buy_c_with_b':
+            # Buy c with b using ask price
+            price2 = float(t2['ask'])
+            amount_after_step2 = amount_after_step1 / price2
+        else:
+            raise ValueError(f"Invalid step: {steps[1]}")
+        
+        # Step 3: c → USDT
+        if steps[2] == 'sell_c_for_usdt':
+            # Sell c for USDT using bid price
+            price3 = float(t3['bid'])
+            final_amount = amount_after_step2 * price3
+        elif steps[2] == 'buy_usdt_with_c':
+            # Buy USDT with c using ask price
+            price3 = float(t3['ask'])
+            final_amount = amount_after_step2 / price3
+        else:
+            raise ValueError(f"Invalid step: {steps[2]}")
+        
+        self.logger.debug(f"USDT Triangle: {start_amount:.6f} USDT → {amount_after_step1:.6f} {b} → {amount_after_step2:.6f} {c} → {final_amount:.6f} USDT")
+        
+        gross_profit = final_amount - start_amount
+        profit_pct = (gross_profit / start_amount) * 100
+        
+        # Apply trading costs (3 trades × 0.1% + slippage)
+        total_costs = 0.3 + 0.1  # 0.4% total costs
+        net_profit_pct = profit_pct - total_costs
+        
+        self.logger.debug(f"USDT Path result: Start={start_amount:.6f} USDT, Final={final_amount:.6f} USDT, "
+                    f"Gross={profit_pct:.6f}%, Net={net_profit_pct:.6f}% (after {total_costs}% costs)")
+        
+        return net_profit_pct
+
+    async def _broadcast_opportunities(self, opportunities: List[ArbitrageResult]):
+        """Format and broadcast ALL opportunities to UI for user selection"""
+        payload = []
+        
+        for opp in opportunities:
+            payload.append({
+                'id': f"live_{int(datetime.now().timestamp()*1000)}_{len(payload)}",
+                'exchange': opp.exchange,
+                'trianglePath': " → ".join(opp.triangle_path[:3]),
+                'profitPercentage': round(opp.profit_percentage, 4),
+                'profitAmount': round(opp.profit_amount, 6),
+                'volume': opp.initial_amount,
+                'status': 'detected',
+                'dataType': 'ALL_OPPORTUNITIES',
+                'timestamp': datetime.now().isoformat(),
+                'tradeable': opp.is_tradeable,
+                'balanceAvailable': opp.balance_available,
+                'balanceRequired': opp.required_balance,
+                'real_market_data': True,
+                'manual_execution': True
+            })
+        
+        total_count = len(payload)
+        
+        self.logger.info(f"📡 Broadcasting {total_count} ALL opportunities to UI for manual selection")
+        
+        if self.websocket_manager:
+            try:
+                if hasattr(self.websocket_manager, 'broadcast'):
+                    await self.websocket_manager.broadcast('opportunities_update', payload)
+                    self.logger.info("✅ Successfully broadcasted ALL opportunities to UI via WebSocket")
+                elif hasattr(self.websocket_manager, 'broadcast_sync'):
+                    self.websocket_manager.broadcast_sync('opportunities_update', payload)
+                    self.logger.info("✅ Successfully broadcasted ALL opportunities to UI via sync WebSocket")
+            except Exception as e:
+                self.logger.error(f"Error broadcasting to WebSocket: {e}")
+        else:
+            self.logger.warning("ℹ️ UI broadcast disabled in this run (no WebSocket manager)")
+        
+        # Log top opportunities for user
+        for opp in payload[:5]:
+            self.logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")

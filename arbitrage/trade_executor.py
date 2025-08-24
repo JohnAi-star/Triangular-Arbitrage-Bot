@@ -55,7 +55,7 @@ class TradeExecutor:
         trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
         self.logger.info(f"TradeExecutor initialized: {trading_mode}")
         self.logger.info(f"Auto-trading: {'ENABLED' if self.auto_trading else 'DISABLED'}")
-        self.logger.info(f"🔴 LIVE TRADING: All trades will be executed with REAL money (≥0.4% profit threshold)!")
+        self.logger.info(f"🔴 LIVE TRADING: All trades will be executed with REAL money on your exchange account!")
         self.logger.info(f"✅ READY: Real-money trading enabled with enforced profit/amount limits.")
     
     def set_websocket_manager(self, websocket_manager):
@@ -100,29 +100,23 @@ class TradeExecutor:
     async def _verify_sufficient_balance(self, exchange, base_currency: str, required_amount: float) -> bool:
         """Verify sufficient balance for trading."""
         try:
-            self.logger.info(f"🔍 Checking REAL {exchange.exchange_id.upper()} balance for {base_currency}: need {required_amount:.2f}")
+            self.logger.info(f"🔍 Checking balance for {base_currency}: need {required_amount:.2f}")
             balance = await exchange.get_account_balance()
-            
-            if not balance:
-                self.logger.error(f"❌ Failed to fetch balance from {exchange.exchange_id}")
-                return False
-            
             available = balance.get(base_currency, 0.0)
             
-            self.logger.info(f"💰 REAL {exchange.exchange_id.upper()} balance: {available:.6f} {base_currency}")
+            self.logger.info(f"💰 Available balance: {available:.6f} {base_currency}")
             
             if available >= required_amount:
                 self.logger.info(f"✅ Sufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
                 return True
             else:
                 self.logger.warning(f"⚠️ Low balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
-                # Allow trading with available balance if > minimum
-                min_balance = 0.5 if exchange.exchange_id == 'kucoin' else 3.0
-                if available >= min_balance and base_currency == 'USDT':
-                    self.logger.info(f"✅ Proceeding with available balance: ${available:.2f} USDT (min: ${min_balance})")
+                # For Gate.io, allow trading with available balance if > $5
+                if available >= 5.0 and base_currency == 'USDT':
+                    self.logger.info(f"✅ Proceeding with available balance: ${available:.2f} USDT")
                     return True
                 else:
-                    self.logger.error(f"❌ Insufficient balance: {available:.6f} {base_currency} (need min ${min_balance})")
+                    self.logger.error(f"❌ Insufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
                     return False
         except Exception as e:
             self.logger.error(f"Error checking balance: {e}")
@@ -288,55 +282,14 @@ class TradeExecutor:
         """Get valid currencies for specific exchange"""
         if exchange_id == 'kucoin':
             return {
-                # Major cryptocurrencies (high volume, good liquidity)
-                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'USDT', 'BTC', 'ETH', 'USDC', 'KCS', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'KCS',  # KuCoin's native token
-                # Additional major cryptocurrencies
-                'ETC', 'BCH', 'EOS', 'XLM', 'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX',
-                'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO',
-                # Stablecoins
-                'USDD', 'TUSD', 'DAI', 'PAX', 'BUSD', 'HUSD', 'USDK', 'FRAX',
-                # DeFi tokens
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
-                # NFT/Gaming tokens
-                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
-                # AI/Web3 tokens
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                # Meme coins (high volatility for arbitrage)
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
-                # Layer 2/Rollups
-                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
-                # Oracles
-                'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
-                # Privacy coins
-                'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
-                # Exchange tokens
-                'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
-                # Real-world assets
-                'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
-                # New listings (high volatility)
-                'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
-                # AI and Big Data
-                'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
-                # Liquid Staking
-                'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
-                # Bridges
-                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
-                # Additional popular tokens
-                'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
-                # Metaverse
-                'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
-                # Additional stablecoins
-                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
-                # Additional DeFi
-                'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
-                # Additional gaming
-                'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
-                # Additional AI
-                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC'
+                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
+                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
+                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
+                'PENDLE', 'RNDR', 'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD'
             }
         elif exchange_id == 'gate':
             return {
@@ -367,7 +320,7 @@ class TradeExecutor:
     def _get_exchange_minimum_order(self, exchange_id: str) -> float:
         """Get minimum order value for specific exchange"""
         if exchange_id == 'kucoin':
-            return 0.5  # KuCoin minimum $0.5 USD (reduced for better execution)
+            return 1.0  # KuCoin minimum $1 USD
         elif exchange_id == 'gate':
             return 3.0  # Gate.io minimum $3 USD
         elif exchange_id == 'binance':
@@ -394,22 +347,22 @@ class TradeExecutor:
                 if side.lower() == 'buy':
                     # For BUY: quantity should be USDT amount to spend
                     order_value = quantity
-                    if order_value < 0.5:  # KuCoin minimum $0.5 USD (reduced)
-                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $0.50 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $0.50'}
+                    if order_value < 1.0:  # KuCoin minimum $1 USD
+                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $1.00 required")
+                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $1.00'}
                 else:
                     # For SELL: quantity is base currency amount
                     order_value = quantity * current_price if current_price > 0 else quantity
-                    if order_value < 0.5:
-                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $0.50 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $0.50'}
+                    if order_value < 1.0:
+                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $1.00 required")
+                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $1.00'}
                     
                     # Additional safety check for very small quantities
                     if quantity < 0.0001:  # Minimum quantity threshold for KuCoin
                         self.logger.error(f"❌ KuCoin minimum quantity: {quantity:.8f} too small")
                         return {'success': False, 'error': f'Quantity too small: {quantity:.8f}'}
                 
-                self.logger.info(f"✅ KuCoin order validation: ${order_value:.2f} ≥ $0.50")
+                self.logger.info(f"✅ KuCoin order validation: ${order_value:.2f} ≥ $1.00")
             elif exchange.exchange_id == 'gate':
                 # Get current price for validation
                 ticker = await exchange.get_ticker(symbol)
@@ -542,17 +495,15 @@ class TradeExecutor:
             self.logger.info(f"❌ REJECTED: Opportunity below profit threshold")
             return False
         
-        # Enforce maximum trade amount
-        max_amount = 20.0
-        if opportunity.initial_amount > max_amount:
-            self.logger.warning(f"{exchange_id}: Trade amount ${opportunity.initial_amount:.2f} exceeds ${max_amount} limit, adjusting...")
-            opportunity.initial_amount = max_amount
+        # Enforce maximum trade amount (reduced to $20)
+        if opportunity.initial_amount > 20:
+            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $20 limit, adjusting...")
+            opportunity.initial_amount = 20
         
-        # Ensure minimum trade amount per exchange
-        min_amount = 0.5 if hasattr(opportunity, 'exchange') and opportunity.exchange == 'kucoin' else 3.0
-        if opportunity.initial_amount < min_amount:
-            self.logger.warning(f"{getattr(opportunity, 'exchange', 'unknown')}: Trade amount ${opportunity.initial_amount:.2f} below ${min_amount} minimum, adjusting...")
-            opportunity.initial_amount = min_amount
+        # Ensure minimum trade amount for Gate.io
+        if opportunity.initial_amount < 5:
+            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} below $5 minimum, adjusting...")
+            opportunity.initial_amount = 5
             
         start_time = datetime.now()
         trade_start_ms = time.time() * 1000
@@ -624,24 +575,26 @@ class TradeExecutor:
             # Verify sufficient balance before starting
             if not await self._verify_sufficient_balance(exchange, opportunity.base_currency, opportunity.initial_amount):
                 self.logger.error("❌ Insufficient balance for trade execution")
+                opportunity.status = OpportunityStatus.FAILED
                 return False
             
-            # Filter for profitable USDT triangles from any exchange
-            auto_tradeable_opportunities = []
+            # Log trade attempt
+            execution_type = "AUTO" if self.auto_trading else "MANUAL"
+            trading_mode = "🔴 LIVE USDT TRIANGLE"
             
-            self.trade_logger.info(f"TRADE_ATTEMPT ({'AUTO' if self.auto_trading else 'MANUAL'}): {opportunity.to_dict()}")
-            
-            self.logger.info(f"🎯 USDT Triangle: Will execute 3 sequential trades on {exchange_id}")
+            self.trade_logger.info(f"TRADE_ATTEMPT ({execution_type}): {opportunity.to_dict()}")
+            self.logger.info(f"Starting {trading_mode} trade execution ({execution_type}): {opportunity.triangle_path}")
+            self.logger.info(f"🎯 USDT Triangle: Will execute 3 sequential trades on Gate.io")
             self.logger.info(f"💰 Expected to turn {opportunity.initial_amount:.2f} USDT into {opportunity.final_amount:.2f} USDT")
             
+            # Execute each step with REAL orders and enhanced validation
             execution_results = []
             current_balance = opportunity.initial_amount
-            order_ids = []
+            order_ids = []  # Track all order IDs for verification
             
-            # Execute all steps of the triangle
             for i, step in enumerate(opportunity.steps):
                 try:
-                    self.logger.info(f"🔄 EXECUTING USDT TRIANGLE STEP {i+1}/{len(opportunity.steps)}")
+                    self.logger.info(f"🔄 EXECUTING USDT TRIANGLE STEP {i+1}/{len(opportunity.steps)} ({trading_mode}/{execution_type})")
                     self.logger.info(f"   Action: {step.side.upper()} {step.quantity:.6f} {step.symbol}")
                     self.logger.info(f"   Expected Price: {step.price:.8f}")
                     self.logger.info(f"🔴 REAL {exchange_id.upper()} ORDER: This will appear in your account immediately")
@@ -712,10 +665,7 @@ class TradeExecutor:
                     
                     # Calculate slippage
                     expected_price = step.price
-                    slippage_amount = abs(avg_price - expected_price)
-                    slippage_pct = (slippage_amount / expected_price) * 100 if expected_price > 0 else 0
-                    
-                    self.logger.info(f"   Triangle: {' → '.join(opportunity.triangle_path[:3])}")
+                    slippage_pct = abs((avg_price - expected_price) / expected_price) * 100 if expected_price > 0 else 0
                     
                     # Log detailed step execution
                     self.logger.info(f"✅ USDT TRIANGLE STEP {i+1} COMPLETED SUCCESSFULLY:")
@@ -738,15 +688,15 @@ class TradeExecutor:
                         actual_quantity=filled_qty,
                         expected_amount_out=step.expected_amount,
                         actual_amount_out=filled_qty if step.side == 'sell' else filled_qty * avg_price,
-                        slippage_percentage=slippage_pct,
                         fees_paid=fees_paid,
                         execution_time_ms=execution_time_ms,
-                        order_id=order_id
+                        slippage_percentage=slippage_pct
                     )
                     
                     trade_log.steps.append(step_log)
                     trade_log.total_fees_paid += fees_paid
                     
+                    # Update current balance for next step
                     if step.side == 'sell':
                         current_balance = filled_qty * avg_price  # Got quote currency
                     else:
@@ -769,7 +719,7 @@ class TradeExecutor:
                     trade_log.final_amount = current_balance
                     
                     # Log failed trade
-                    self.trade_logger.error(f"TRADE_FAILED ({'AUTO' if self.auto_trading else 'MANUAL'}): {opportunity.to_dict()} | Error: {str(e)}")
+                    self.trade_logger.error(f"TRADE_FAILED ({trading_mode}/{execution_type}): {opportunity.to_dict()} | Error: {str(e)}")
                     
                     # Calculate final metrics and log
                     trade_end_ms = time.time() * 1000
@@ -781,8 +731,8 @@ class TradeExecutor:
             # All steps completed successfully
             self.logger.info(f"🎉 ALL USDT TRIANGLE STEPS COMPLETED SUCCESSFULLY!")
             self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
-            self.logger.info(f"🔴 {exchange_id.upper()}: Check your Spot Orders for these {len(order_ids)} trades!")
-            self.logger.info(f"🔴 {exchange_id.upper()}: All trades are now visible in your Trade History")
+            self.logger.info(f"🔴 GATE.IO: Check your Spot Orders for these {len(order_ids)} trades!")
+            self.logger.info(f"🔴 GATE.IO: All trades are now visible in your Trade History")
             
             # Calculate actual profit
             actual_profit = current_balance - opportunity.initial_amount
@@ -816,7 +766,7 @@ class TradeExecutor:
             self.logger.info(f"🔴 {exchange_id.upper()} BALANCE: Your USDT balance has been updated with the profit!")
             
             # Log successful trade
-            self.trade_logger.info(f"TRADE_SUCCESS ({'AUTO' if self.auto_trading else 'MANUAL'}): {opportunity.to_dict()}")
+            self.trade_logger.info(f"TRADE_SUCCESS ({trading_mode}/{execution_type}): {opportunity.to_dict()}")
             
             # Log detailed trade
             await self.detailed_trade_logger.log_trade(trade_log)

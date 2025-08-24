@@ -144,19 +144,19 @@ class ArbitrageWebServer:
                 Config.AUTO_TRADING_MODE = config.autoTradingMode
                 
                 # ENFORCE STRICT LIMITS
-                enforced_min_profit = max(0.4, config.minProfitPercentage)  # 0.4% minimum as requested
-                enforced_max_trade = min(20.0, max(5.0, config.maxTradeAmount))  # Multi-exchange: min $5, max $20
+                enforced_min_profit = max(0.8, config.minProfitPercentage)  # Gate.io minimum 0.8% for safety
+                enforced_max_trade = min(20.0, max(5.0, config.maxTradeAmount))  # Gate.io: min $5, max $20
                 
                 Config.MIN_PROFIT_PERCENTAGE = enforced_min_profit
                 Config.MAX_TRADE_AMOUNT = enforced_max_trade
 
                 self.auto_trading = config.autoTradingMode
-                trading_mode = "🔴 LIVE MULTI-EXCHANGE"
+                trading_mode = "🔴 LIVE GATE.IO"
                 
-                self.logger.info(f"🚀 Starting multi-exchange bot with ENFORCED config:")
+                self.logger.info(f"🚀 Starting Gate.io bot with ENFORCED config:")
                 self.logger.info(f"   Requested: minProfit={config.minProfitPercentage}%, maxTrade=${config.maxTradeAmount}")
-                self.logger.info(f"   ENFORCED: minProfit={enforced_min_profit}% (0.4% minimum), maxTrade=${enforced_max_trade}")
-                self.logger.info(f"   Filter: Only show opportunities ≥ 0% profit (no negative opportunities)")
+                self.logger.info(f"   ENFORCED: minProfit={enforced_min_profit}%, maxTrade=${enforced_max_trade}")
+                self.logger.info(f"   Gate.io Limits: min $5 order, max $20 trade (reduced for safety)")
                 self.logger.info(f"   Settings: "
                                  f"autoTrade={config.autoTradingMode}, "
                                  f"liveTrading=TRUE, "
@@ -175,14 +175,14 @@ class ArbitrageWebServer:
                     self.exchange_manager,
                     self.websocket_manager,
                     {
-                        'min_profit_percentage': 0.4,  # Fixed to 0.4% as requested
+                        'min_profit_percentage': enforced_min_profit,
                         'max_trade_amount': enforced_max_trade
                     }
                 )
                 
                 # Initialize real-time detector for WebSocket-based detection
                 self.realtime_detector = RealtimeArbitrageDetector(
-                    min_profit_pct=0.0,   # Show all opportunities ≥ 0%
+                    min_profit_pct=0.01,  # Lower threshold to show more opportunities
                     max_trade_amount=100.0  # Fixed $100 maximum
                 )
                 
@@ -293,27 +293,10 @@ class ArbitrageWebServer:
                     opportunities = await self.detector.scan_all_opportunities()
                     scan_duration = (time.time() - scan_start) * 1000
 
-                    # CRITICAL: Filter out negative opportunities before UI
-                    red_green_opportunities = [
-                        opp for opp in opportunities 
-                        if opp.profit_percentage == 0.0 or opp.profit_percentage > 0.4  # RED/GREEN only
-                    ]
-                    
-                    # Convert to UI format with RED/GREEN colors
+                    # Convert ALL opportunities to UI format
                     ui_opportunities = []
-                    for i, opp in enumerate(red_green_opportunities):
-                        opp_id = f"redgreen_opp_{int(time.time()*1000)}_{i}"
-                        
-                        # RED/GREEN status only
-                        if opp.profit_percentage == 0.0:
-                            status_text = "🔴 RED (0%)"
-                            color_class = "red"
-                        elif opp.profit_percentage > 0.4:
-                            status_text = "🟢 GREEN (>0.4%)"
-                            color_class = "green"
-                        else:
-                            continue  # Skip opportunities between 0% and 0.4%
-                        
+                    for i, opp in enumerate(opportunities):
+                        opp_id = f"real_opp_{int(time.time()*1000)}_{i}"
                         ui_opp = {
                             "id": opp_id,
                             "exchange": opp.exchange,
@@ -322,16 +305,13 @@ class ArbitrageWebServer:
                             "profitAmount": round(opp.profit_amount, 4),
                             "volume": round(opp.initial_amount, 2),
                             "status": "detected",
-                            "statusText": status_text,
-                            "colorClass": color_class,
-                            "dataType": "RED_GREEN_OPPORTUNITIES",
+                            "dataType": "ALL_OPPORTUNITIES",
                             "timestamp": datetime.now().isoformat(),
                             "tradeable": getattr(opp, 'is_tradeable', False),
                             "balanceAvailable": getattr(opp, 'balance_available', 0.0),
                             "balanceRequired": getattr(opp, 'required_balance', 0.0),
                             "real_market_data": True,
-                            "manual_execution": True,
-                            "red_green_scheme": True
+                            "manual_execution": True
                         }
                         ui_opportunities.append(ui_opp)
                         self.opportunities_cache[opp_id] = {
@@ -339,7 +319,7 @@ class ArbitrageWebServer:
                             'ui_data': ui_opp
                         }
 
-                    self.opportunities = ui_opportunities  # Show all generated opportunities
+                    self.opportunities = ui_opportunities[:100]  # Show up to 100 opportunities
 
                     if len(self.opportunities_cache) > 500:
                         old_keys = list(self.opportunities_cache.keys())[:-500]
@@ -352,31 +332,21 @@ class ArbitrageWebServer:
                     await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
 
                     if self.opportunities:
-                        # Count RED/GREEN
-                        red_count = len([opp for opp in ui_opportunities if opp.get('colorClass') == 'red'])
-                        green_count = len([opp for opp in ui_opportunities if opp.get('colorClass') == 'green'])
-                        
-                        self.logger.info(f"💎 Generated {total_count} opportunities with RED/GREEN scheme")
-                        self.logger.info(f"   🔴 RED (0%): {red_count}")
-                        self.logger.info(f"   🟢 GREEN (>0.4%): {green_count}")
+                        self.logger.info(f"💎 Scan complete ({scan_duration:.0f}ms): {total_count} ALL opportunities found")
                         
                         # Show top 5 opportunities
-                        for i, opp in enumerate(self.opportunities[:5]):
-                            color = "🔴 RED" if opp.get('colorClass') == 'red' else "🟢 GREEN"
-                            self.logger.info(f"   {i+1}. {status}: {opp['exchange']}: {opp['trianglePath']} = {opp['profitPercentage']:.4f}%")
+                        for i, opp in enumerate(self.opportunities[:3]):
+                            self.logger.info(f"   {i+1}. {opp['exchange']}: {opp['trianglePath']} = {opp['profitPercentage']:.4f}% | Available for execution")
                     else:
-                        self.logger.info(f"💎 No opportunities generated")
+                        self.logger.info(f"💎 Scan complete ({scan_duration:.0f}ms): No opportunities found in current market")
 
                     if self.auto_trading and self.executor:
-                        # Auto-execute profitable opportunities ≥0.4%
-                        auto_tradeable = [opp for opp in self.opportunities if 
-                                        hasattr(opp, 'profit_percentage') and 
-                                        opp.profit_percentage >= 0.4]
-                        if auto_tradeable:
-                            self.logger.info(f"🤖 AUTO-TRADING: Found {len(auto_tradeable)} opportunities ≥0.4% profit")
-                            await self._auto_execute_opportunities(auto_tradeable)
+                        # Auto-execute profitable opportunities
+                        profitable_opportunities = [opp for opp in opportunities if opp.profit_percentage >= 0.1]
+                        if profitable_opportunities:
+                            await self._auto_execute_opportunities(profitable_opportunities)
                         else:
-                            self.logger.info("🤖 Auto-trading enabled but no opportunities ≥ 0.4% found")
+                            self.logger.info("🤖 Auto-trading enabled but no profitable opportunities found")
                 
                 await asyncio.sleep(5)  # Scan every 5 seconds
             except Exception as e:
@@ -468,65 +438,64 @@ class ArbitrageWebServer:
 
     async def _auto_execute_opportunities(self, opportunities):
         try:
-            # Filter for profitable opportunities from any exchange
-            executable_opportunities = [
+            # Filter for Gate.io USDT triangles only
+            usdt_opportunities = [
                 opp for opp in opportunities
-                if (getattr(opp, 'profit_percentage', 0) >= 0.4 and  # 0.4% minimum
-                    getattr(opp, 'initial_amount', 0) >= 5.0 and     # Minimum $5
-                    getattr(opp, 'initial_amount', 0) <= 20.0)       # Maximum $20
+                if (opp.profit_percentage >= 0.5 and  # Use 0.5% minimum for trading
+                    opp.initial_amount >= 5.0 and     # Minimum $5
+                    opp.initial_amount <= 20.0 and    # Maximum $20 (reduced for safety)
+                    hasattr(opp, 'triangle_path') and
+                    len(opp.triangle_path) >= 3 and
+                    opp.triangle_path[0] == 'USDT')  # Only USDT triangles
             ]
 
-            if not executable_opportunities:
-                self.logger.debug(f"🚫 AUTO-TRADE: No valid opportunities (need ≥0.4% profit, $5-$20 amount)")
+            if not usdt_opportunities:
+                self.logger.debug(f"🚫 AUTO-TRADE: No valid USDT triangles (need ≥0.5% profit, $5-$20 amount, start with USDT)")
                 return
 
-            # Execute top 2 most profitable opportunities
-            sorted_opportunities = sorted(executable_opportunities, key=lambda x: getattr(x, 'profit_percentage', 0), reverse=True)
+            # Execute top 2 most profitable USDT triangles
+            sorted_opportunities = sorted(usdt_opportunities, key=lambda x: x.profit_percentage, reverse=True)
             for i, opportunity in enumerate(sorted_opportunities[:2]):
                 try:
-                    # ENFORCE trading limits
-                    initial_amount = getattr(opportunity, 'initial_amount', 20.0)
-                    profit_pct = getattr(opportunity, 'profit_percentage', 0)
-                    exchange = getattr(opportunity, 'exchange', 'unknown')
-                    triangle_path = getattr(opportunity, 'triangle_path', 'Unknown Path')
-                    
-                    trade_amount = max(5.0, min(initial_amount, 20.0))
-                    expected_profit_usd = trade_amount * (profit_pct / 100)
+                    # ENFORCE Gate.io LIMITS  
+                    trade_amount = max(5.0, min(opportunity.initial_amount, 20.0))
+                    expected_profit_usd = trade_amount * (opportunity.profit_percentage / 100)
                     
                     self.logger.info(f"🤖 AUTO-EXECUTING TRADE #{i+1}:")
-                    self.logger.info(f"   Exchange: {exchange}")
-                    self.logger.info(f"   Triangle: {triangle_path}")
-                    self.logger.info(f"   Profit: {profit_pct:.4f}%")
+                    self.logger.info(f"   Exchange: {opportunity.exchange}")
+                    self.logger.info(f"   Triangle: USDT → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → USDT")
+                    self.logger.info(f"   Profit: {opportunity.profit_percentage:.4f}%")
                     self.logger.info(f"   Amount: ${trade_amount}")
                     self.logger.info(f"   Expected Profit: ${expected_profit_usd:.2f}")
                     
-                    # Execute the opportunity directly
-                    success = await self._execute_opportunity_directly(opportunity, trade_amount)
+                    # Create executable opportunity with proper format
+                    executable_opp = self._create_executable_opportunity(opportunity, trade_amount)
+                    success = await self.executor.execute_arbitrage(executable_opp)
 
                     if success:
                         self.stats['tradesExecuted'] += 1
                         self.stats['totalProfit'] += expected_profit_usd
                         await self.websocket_manager.broadcast('opportunity_executed', {
                             'id': f"auto_{int(time.time()*1000)}",
-                            'exchange': exchange,
-                            'trianglePath': triangle_path,
-                            'profitPercentage': profit_pct,
+                            'exchange': opportunity.exchange,
+                            'trianglePath': f"USDT → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → USDT",
+                            'profitPercentage': opportunity.profit_percentage,
                             'profitAmount': expected_profit_usd,
                             'volume': trade_amount,
                             'status': 'completed',
                             'timestamp': datetime.now().isoformat(),
                             'auto_executed': True
                         })
-                        self.logger.info(f"✅ AUTO-TRADE SUCCESS: {exchange} triangle {profit_pct:.4f}% profit, ${expected_profit_usd:.2f} earned!")
+                        self.logger.info(f"✅ AUTO-TRADE SUCCESS: USDT triangle {opportunity.profit_percentage:.4f}% profit, ${expected_profit_usd:.2f} earned!")
                     else:
-                        self.logger.warning(f"❌ AUTO-TRADE FAILED for triangle on {exchange}")
+                        self.logger.warning(f"❌ AUTO-TRADE FAILED for USDT triangle on {opportunity.exchange}")
                         
                         # Log failed auto-trade
                         await self.websocket_manager.broadcast('opportunity_executed', {
                             'id': f"auto_fail_{int(time.time()*1000)}",
-                            'exchange': exchange,
-                            'trianglePath': triangle_path,
-                            'profitPercentage': profit_pct,
+                            'exchange': opportunity.exchange,
+                            'trianglePath': f"USDT → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → USDT",
+                            'profitPercentage': opportunity.profit_percentage,
                             'profitAmount': 0,
                             'volume': trade_amount,
                             'status': 'failed',
@@ -541,102 +510,6 @@ class ArbitrageWebServer:
                     self.logger.error(f"❌ Error in auto-execution #{i+1}: {str(e)}")
         except Exception as e:
             self.logger.error(f"Error in auto-execute opportunities: {str(e)}")
-    
-    async def _execute_opportunity_directly(self, opportunity, trade_amount: float) -> bool:
-        """Execute opportunity directly using the exchange manager"""
-        try:
-            exchange_id = getattr(opportunity, 'exchange', 'kucoin')
-            triangle_path = getattr(opportunity, 'triangle_path', [])
-            
-            # Get the exchange instance
-            exchange = self.exchange_manager.get_exchange(exchange_id) if self.exchange_manager else None
-            
-            if not exchange:
-                self.logger.error(f"❌ Exchange {exchange_id} not available for trading")
-                return False
-            
-            # Parse triangle path
-            if isinstance(triangle_path, str):
-                path_parts = triangle_path.split(' → ')
-            elif isinstance(triangle_path, list):
-                path_parts = triangle_path
-            else:
-                self.logger.error(f"❌ Invalid triangle path format: {triangle_path}")
-                return False
-            
-            if len(path_parts) < 3:
-                self.logger.error(f"❌ Triangle path too short: {path_parts}")
-                return False
-            
-            # Extract currencies
-            base_currency = path_parts[0]      # USDT
-            intermediate_currency = path_parts[1]  # e.g., EPS
-            quote_currency = path_parts[2]     # e.g., MANA
-            
-            self.logger.info(f"🚀 EXECUTING REAL TRADE ON {exchange_id.upper()}:")
-            self.logger.info(f"   Path: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
-            self.logger.info(f"   Amount: ${trade_amount}")
-            
-            # Define the three trading pairs
-            pair1 = f"{intermediate_currency}/{base_currency}"  # EPS/USDT
-            pair2 = f"{intermediate_currency}/{quote_currency}"  # EPS/MANA
-            pair3 = f"{quote_currency}/{base_currency}"         # MANA/USDT
-            
-            # Step 1: Buy intermediate currency with base currency
-            self.logger.info(f"📊 Step 1: Buy {intermediate_currency} with {trade_amount:.2f} {base_currency}")
-            order1 = await exchange.place_market_order(pair1, 'buy', trade_amount)
-            
-            if not order1 or not order1.get('success'):
-                self.logger.error(f"❌ Step 1 failed: {order1}")
-                return False
-            
-            amount_intermediate = order1.get('filled', 0)
-            self.logger.info(f"✅ Step 1 completed: Got {amount_intermediate:.8f} {intermediate_currency}")
-            
-            # Small delay between trades
-            await asyncio.sleep(1)
-            
-            # Step 2: Trade intermediate for quote currency
-            self.logger.info(f"📊 Step 2: Trade {amount_intermediate:.8f} {intermediate_currency} for {quote_currency}")
-            order2 = await exchange.place_market_order(pair2, 'sell', amount_intermediate)
-            
-            if not order2 or not order2.get('success'):
-                self.logger.error(f"❌ Step 2 failed: {order2}")
-                return False
-            
-            amount_quote = order2.get('filled', 0)
-            self.logger.info(f"✅ Step 2 completed: Got {amount_quote:.8f} {quote_currency}")
-            
-            # Small delay between trades
-            await asyncio.sleep(1)
-            
-            # Step 3: Sell quote currency for base currency
-            self.logger.info(f"📊 Step 3: Sell {amount_quote:.8f} {quote_currency} for {base_currency}")
-            order3 = await exchange.place_market_order(pair3, 'sell', amount_quote)
-            
-            if not order3 or not order3.get('success'):
-                self.logger.error(f"❌ Step 3 failed: {order3}")
-                return False
-            
-            final_amount = order3.get('cost', 0)  # Final USDT amount
-            self.logger.info(f"✅ Step 3 completed: Got {final_amount:.2f} {base_currency}")
-            
-            # Calculate actual profit
-            actual_profit = final_amount - trade_amount
-            actual_profit_pct = (actual_profit / trade_amount) * 100
-            
-            self.logger.info(f"🎉 TRADE COMPLETED SUCCESSFULLY!")
-            self.logger.info(f"   Initial: {trade_amount:.2f} {base_currency}")
-            self.logger.info(f"   Final: {final_amount:.2f} {base_currency}")
-            self.logger.info(f"   Actual Profit: {actual_profit:.4f} {base_currency} ({actual_profit_pct:.4f}%)")
-            self.logger.info(f"   Order IDs: {order1.get('id')}, {order2.get('id')}, {order3.get('id')}")
-            self.logger.info(f"🔴 {exchange_id.upper()}: Check your account for these trades!")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ Direct execution failed: {e}")
-            return False
 
     def _create_executable_opportunity(self, opportunity, trade_amount):
         """Create executable opportunity from ArbitrageResult"""

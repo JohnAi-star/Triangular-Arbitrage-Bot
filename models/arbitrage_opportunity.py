@@ -53,7 +53,6 @@ class TradeStep:
 @dataclass
 class ArbitrageOpportunity:
     """Represents a triangular arbitrage opportunity."""
-    # REQUIRED FIELDS (without defaults) MUST COME FIRST
     base_currency: str
     intermediate_currency: str
     quote_currency: str
@@ -62,9 +61,6 @@ class ArbitrageOpportunity:
     pair1: str  # BASE/INTERMEDIATE
     pair2: str  # INTERMEDIATE/QUOTE
     pair3: str  # BASE/QUOTE
-    
-    # FIELDS WITH DEFAULTS COME AFTER
-    exchange: str = "unknown"
     
     # Trade steps
     steps: List[TradeStep] = field(default_factory=list)
@@ -116,7 +112,6 @@ class ArbitrageOpportunity:
     def to_dict(self) -> Dict[str, Any]:
         """Convert opportunity to dictionary for logging/serialization."""
         return {
-            'exchange': self.exchange,
             'triangle_path': self.triangle_path,
             'pairs': [self.pair1, self.pair2, self.pair3],
             'initial_amount': self.initial_amount,
