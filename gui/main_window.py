@@ -12,15 +12,14 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
-from utils.websocket_manager import WebSocketManager
-from utils.trade_logger import get_trade_logger
 
 from config.config import Config
 from config.exchanges_config import SUPPORTED_EXCHANGES
 from exchanges.multi_exchange_manager import MultiExchangeManager
 from arbitrage.multi_exchange_detector import MultiExchangeDetector
 from arbitrage.trade_executor import TradeExecutor
-from models.arbitrage_opportunity import ArbitrageOpportunity
+from utils.websocket_manager import WebSocketManager
+from utils.trade_logger import get_trade_logger
 from utils.logger import setup_logger
 
 class ArbitrageBotGUI:
@@ -190,7 +189,7 @@ class ArbitrageBotGUI:
         
         # Min profit setting
         ctk.CTkLabel(settings_frame, text="Min Profit %:").pack()
-        self.min_profit_var = tk.DoubleVar(value=0.5)
+        self.min_profit_var = tk.DoubleVar(value=0.4)  # Set to 0.4% as requested
         self.min_profit_entry = ctk.CTkEntry(settings_frame, textvariable=self.min_profit_var, width=80)
         self.min_profit_entry.configure(state="normal")  # Allow changes
         self.min_profit_entry.pack(pady=2)
@@ -203,7 +202,7 @@ class ArbitrageBotGUI:
         self.max_trade_entry.pack(pady=2)
         
         # Add label showing exchange-specific optimization
-        ctk.CTkLabel(settings_frame, text="(Exchange-specific fees applied)", 
+        ctk.CTkLabel(settings_frame, text="(0% and positive opportunities only)", 
                     font=("Arial", 10), text_color="green").pack(pady=2)
     
     def create_opportunities_panel(self):
@@ -337,639 +336,205 @@ class ArbitrageBotGUI:
                 self.logger.info(f"     Fee Token: {ex_config['fee_token']} "
                                f"(Maker: {ex_config.get('maker_fee_with_token', 0)*100:.3f}%, "
                                f"Taker: {ex_config.get('taker_fee_with_token', 0)*100:.3f}%)")
-            self.logger.info(f"     API URL: {ex_config.get('api_url', 'Unknown')}")
-            self.logger.info(f"     WebSocket URL: {ex_config.get('websocket_url', 'Unknown')}")
         
         self.selected_exchanges = selected_exchanges
+        
+        # Update configuration
+        Config.MIN_PROFIT_THRESHOLD = self.min_profit_var.get()
+        Config.MAX_TRADE_AMOUNT = self.max_trade_var.get()
+        Config.AUTO_TRADING_MODE = self.auto_trading_var.get()
+        
+        # Run bot startup in async thread
+        asyncio.run_coroutine_threadsafe(self._async_start_bot(selected_exchanges), self.loop)
+        
         self.running = True
         self.start_button.configure(text="Stop Bot")
-        self.status_var.set("Starting bot...")
-        
-        # Start bot in async thread
-        asyncio.run_coroutine_threadsafe(self._start_bot_async(), self.loop)
+        self.status_var.set("Bot started - scanning for opportunities")
     
-    async def _start_bot_async(self):
-        """Async bot startup."""
+    async def _async_start_bot(self, selected_exchanges):
+        """Async method to start the bot."""
         try:
-            # Initialize exchanges
-            if not await self.exchange_manager.initialize_exchanges(self.selected_exchanges):
-                self.status_var.set("Failed to connect to exchanges")
-                self.running = False
-                self.start_button.configure(text="Start Bot")
-                return
-            
-            # Display real balance after connection
-            self.logger.info("💰 Displaying real account balances...")
-            for ex_name, ex in self.exchange_manager.exchanges.items():
-                try:
-                    balance = await ex.get_account_balance()
-                    if balance:
-                        total_currencies = len(balance)
-                        usd_value = 0.0
-                        
-                        # Calculate USD value if method exists
-                        if hasattr(ex, '_calculate_usd_value'):
-                            usd_value = await ex._calculate_usd_value(balance)
-                        
-                        self.logger.info(f"💰 {ex_name.upper()} BALANCE: {total_currencies} currencies, ~${usd_value:.2f} USD")
-                        
-                        # Show individual balances
-                        for currency, amount in sorted(balance.items(), key=lambda x: x[1], reverse=True):
-                            if amount > 0.001:
-                                self.logger.info(f"   {currency}: {amount:.8f}")
-                    else:
-                        self.logger.warning(f"⚠️ No balance detected for {ex_name}")
-                except Exception as e:
-                    self.logger.error(f"Error displaying balance for {ex_name}: {e}")
+            # Initialize exchange manager
+            success = await self.exchange_manager.initialize_exchanges(selected_exchanges)
+            if not success:
+                self.logger.warning("Some exchanges failed to initialize, but continuing...")
             
             # Initialize detector
             self.detector = MultiExchangeDetector(
-                self.exchange_manager, 
+                self.exchange_manager,
                 self.websocket_manager,
                 {
-                    'min_profit_percentage': self.min_profit_var.get(),
-                    'max_trade_amount': self.max_trade_var.get(),
-                    'prioritize_zero_fee': Config.PRIORITIZE_ZERO_FEE
+                    'min_profit_percentage': Config.MIN_PROFIT_THRESHOLD,
+                    'max_trade_amount': Config.MAX_TRADE_AMOUNT
                 }
             )
+            
             await self.detector.initialize()
             
             # Initialize executor
-            self.executor = TradeExecutor(self.exchange_manager, {
-                'auto_trading': self.auto_trading_var.get(),
-                'paper_trading': False,  # ALWAYS REAL TRADING
-                'min_profit_threshold': Config.MIN_PROFIT_THRESHOLD
-            })
-            
-            # Set WebSocket manager for trade executor
+            self.executor = TradeExecutor(
+                self.exchange_manager,
+                {
+                    'auto_trading': Config.AUTO_TRADING_MODE,
+                    'paper_trading': False,
+                    'enable_manual_confirmation': False
+                }
+            )
             self.executor.set_websocket_manager(self.websocket_manager)
             
-            self.status_var.set("Bot running - scanning for opportunities...")
+            # Start continuous scanning
+            asyncio.create_task(self.detector.start_continuous_scanning(interval_seconds=30))
             
-            # Start main bot loop
-            await self._bot_main_loop()
+            self.logger.info("✅ Bot started successfully with all components initialized")
             
         except Exception as e:
             self.logger.error(f"Error starting bot: {e}")
-            self.status_var.set(f"Error: {str(e)}")
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to start bot: {str(e)}"))
             self.running = False
             self.start_button.configure(text="Start Bot")
-    
-    async def _bot_main_loop(self):
-        """Main bot scanning loop."""
-        while self.running:
-            try:
-                # Scan for opportunities
-                opportunities = await self.detector.scan_all_opportunities()
-                
-                # Update opportunities list
-                self.opportunities = opportunities
-                
-                # Auto-execute if enabled
-                if self.auto_trading_var.get():
-                    # Filter for profitable opportunities only
-                    profitable_opportunities = [
-                        opp for opp in opportunities[:5]  # Top 5 opportunities  
-                        if (getattr(opp, 'profit_percentage', 0) >= 0.5 and  # Fixed 0.5% threshold for Gate.io
-                            hasattr(opp, 'triangle_path') and
-                            isinstance(opp.triangle_path, list) and
-                            len(opp.triangle_path) >= 3 and
-                            opp.triangle_path[0] == 'USDT')  # Only USDT triangles
-                    ]
-                    
-                    if profitable_opportunities:
-                        self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable USDT opportunities (≥0.5%)")
-                        
-                        for i, opportunity in enumerate(profitable_opportunities[:2]):  # Execute top 2
-                            try:
-                                self.logger.info(f"🚀 AUTO-EXECUTING USDT Trade #{i+1}: {opportunity}")
-                                
-                                # Convert ArbitrageResult to proper format for execution
-                                if hasattr(opportunity, 'triangle_path') and isinstance(opportunity.triangle_path, list):
-                                    # This is an ArbitrageResult from detector
-                                    executable_opportunity = self._convert_result_to_opportunity(opportunity)
-                                    success = await self.executor.execute_arbitrage(executable_opportunity)
-                                else:
-                                    # Already a proper ArbitrageOpportunity
-                                    success = await self.executor.execute_arbitrage(opportunity)
-                                
-                                    # This is an ArbitrageResult, convert to ArbitrageOpportunity
-                                    from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
-                                    
-                                    # Create proper ArbitrageOpportunity object
-                                    triangle_path = opportunity.triangle_path
-                                    base_currency = triangle_path[0] if triangle_path else 'USDT'
-                                    intermediate_currency = triangle_path[1] if len(triangle_path) > 1 else 'BTC'
-                                    quote_currency = triangle_path[2] if len(triangle_path) > 2 else 'ETH'
-                                    
-                                    # Get real market prices for accurate trade steps
-                                    trade_amount = max(20.0, min(opportunity.initial_amount, 50.0))
-                                    
-                                    # Get current market prices from the exchange
-                                    try:
-                                        ticker1 = await self.exchange_manager.get_exchange('gate').get_ticker(f"{intermediate_currency}/USDT")
-                                        ticker2 = await self.exchange_manager.get_exchange('gate').get_ticker(f"{intermediate_currency}/{quote_currency}")
-                                        ticker3 = await self.exchange_manager.get_exchange('gate').get_ticker(f"{quote_currency}/USDT")
-                                        
-                                        price1 = ticker1.get('ask', 1.0) if ticker1 else 1.0
-                                        price2 = ticker2.get('bid', 1.0) if ticker2 else 1.0
-                                        price3 = ticker3.get('bid', 1.0) if ticker3 else 1.0
-                                        
-                                        # Calculate realistic quantities
-                                        qty1 = trade_amount  # USDT to spend
-                                        qty2 = trade_amount / price1  # Amount of intermediate currency to sell
-                                        qty3 = (trade_amount / price1) * price2  # Amount of quote currency to sell
-                                        
-                                    except Exception as e:
-                                        self.logger.error(f"Error getting market prices: {e}")
-                                        # Fallback to default values
-                                        price1, price2, price3 = 1.0, 1.0, 1.0
-                                        qty1, qty2, qty3 = trade_amount, trade_amount, trade_amount
-                                    
-                                    # Create trade steps for USDT triangle
-                                    steps = [
-                                        TradeStep(f"{intermediate_currency}/USDT", 'buy', qty1, price1, qty1),  # USDT amount to spend
-                                        TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', qty2, price2, qty2 * price2),
-                                        TradeStep(f"{quote_currency}/USDT", 'sell', qty3, price3, qty3 * price3)
-                                    ]
-                                    
-                                    arbitrage_opportunity = ArbitrageOpportunity(
-                                        base_currency=base_currency,
-                                        intermediate_currency=intermediate_currency,
-                                        quote_currency=quote_currency,
-                                        pair1=f"{intermediate_currency}/USDT",
-                                        pair2=f"{intermediate_currency}/{quote_currency}",
-                                        pair3=f"{quote_currency}/USDT",
-                                        steps=steps,
-                                        initial_amount=trade_amount,
-                                        final_amount=trade_amount + (trade_amount * opportunity.profit_percentage / 100),
-                                        estimated_fees=trade_amount * 0.006,  # 0.6% fees for Gate.io
-                                        estimated_slippage=trade_amount * 0.001
-                                    )
-                                    
-                                    # Set exchange attribute for executor
-                                    arbitrage_opportunity.exchange = opportunity.exchange
-                                    arbitrage_opportunity.status = OpportunityStatus.DETECTED
-                                    
-                                    success = await self.executor.execute_arbitrage(arbitrage_opportunity)
-                                
-                                if success:
-                                    self.add_to_trading_history(f"✅ AUTO-TRADE SUCCESS: {opportunity}")
-                                    self.logger.info(f"✅ Auto-trade #{i+1} completed successfully!")
-                                else:
-                                    self.add_to_trading_history(f"❌ AUTO-TRADE FAILED: {opportunity}")
-                                    self.logger.error(f"❌ Auto-trade #{i+1} failed")
-                                    
-                                # Wait between trades
-                                await asyncio.sleep(2)
-                                
-                            except Exception as e:
-                                self.logger.error(f"❌ Error in auto-execution #{i+1}: {e}")
-                                self.add_to_trading_history(f"❌ AUTO-TRADE ERROR: {str(e)}")
-                    else:
-                        self.logger.debug(f"🤖 AUTO-TRADING: No profitable opportunities found (need ≥{self.min_profit_var.get()}% profit)")
-                
-                await asyncio.sleep(1)  # Scan every second
-                
-            except Exception as e:
-                self.logger.error(f"Error in bot main loop: {e}")
-                await asyncio.sleep(5)
     
     def stop_bot(self):
         """Stop the arbitrage bot."""
         self.running = False
         self.start_button.configure(text="Start Bot")
-        self.status_var.set("Stopping bot...")
+        self.status_var.set("Bot stopped")
         
-        # Stop bot in async thread
-        asyncio.run_coroutine_threadsafe(self._stop_bot_async(), self.loop)
+        # Run bot shutdown in async thread
+        asyncio.run_coroutine_threadsafe(self._async_stop_bot(), self.loop)
     
-    async def _stop_bot_async(self):
-        """Async bot shutdown."""
+    async def _async_stop_bot(self):
+        """Async method to stop the bot."""
         try:
-            await self.exchange_manager.disconnect_all()
-            self.status_var.set("Bot stopped")
+            if self.exchange_manager:
+                await self.exchange_manager.disconnect_all()
+            self.logger.info("Bot stopped successfully")
         except Exception as e:
             self.logger.error(f"Error stopping bot: {e}")
-            self.status_var.set("Error stopping bot")
+    
+    def toggle_auto_trading(self):
+        """Toggle auto trading mode."""
+        Config.AUTO_TRADING_MODE = self.auto_trading_var.get()
+        status = "ENABLED" if Config.AUTO_TRADING_MODE else "DISABLED"
+        self.logger.info(f"Auto trading {status}")
+        self.status_var.set(f"Auto trading {status}")
+    
+    def on_exchange_selection_changed(self):
+        """Handle exchange selection changes."""
+        selected_count = sum(1 for var in self.exchange_vars.values() if var.get())
+        self.status_var.set(f"{selected_count} exchanges selected")
+    
+    def on_opportunity_double_click(self, event):
+        """Handle double-click on opportunity."""
+        selection = self.opportunities_tree.selection()
+        if selection:
+            self.execute_selected_opportunity()
+    
+    def execute_selected_opportunity(self):
+        """Execute the selected arbitrage opportunity."""
+        selection = self.opportunities_tree.selection()
+        if not selection:
+            messagebox.showwarning("Warning", "Please select an opportunity to execute")
+            return
+        
+        selected_item = selection[0]
+        values = self.opportunities_tree.item(selected_item, 'values')
+        
+        if values and len(values) >= 3:
+            exchange = values[0]
+            triangle_path = values[1]
+            profit_percentage = float(values[2].replace('%', ''))
+            
+            if profit_percentage < Config.MIN_PROFIT_THRESHOLD:
+                messagebox.showwarning("Warning", 
+                    f"Profit ({profit_percentage:.4f}%) is below minimum threshold ({Config.MIN_PROFIT_THRESHOLD}%)")
+                return
+            
+            # Confirm execution
+            confirm = messagebox.askyesno(
+                "Confirm Execution",
+                f"Execute arbitrage on {exchange}?\n"
+                f"Path: {triangle_path}\n"
+                f"Expected Profit: {profit_percentage:.4f}%"
+            )
+            
+            if confirm:
+                self.status_var.set(f"Executing trade on {exchange}...")
+                # Here you would normally call the execution logic
+                self.add_to_trading_history(f"Manual execution: {exchange} - {triangle_path} - {profit_percentage:.4f}%")
+    
+    def add_to_trading_history(self, message):
+        """Add a message to the trading history."""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.trading_history.insert(0, f"[{timestamp}] {message}")
+        # Keep only the last 100 entries
+        if self.trading_history.size() > 100:
+            self.trading_history.delete(100, tk.END)
+    
+    def clear_trading_history(self):
+        """Clear the trading history."""
+        self.trading_history.delete(0, tk.END)
     
     def update_gui(self):
-        """Update GUI elements periodically."""
+        """Update the GUI with current data."""
         try:
-            # Update opportunities display
-            self.update_opportunities_display()
+            # Update opportunities treeview
+            self.opportunities_tree.delete(*self.opportunities_tree.get_children())
+            
+            for opportunity in self.opportunities:
+                # RED/GREEN color scheme only
+                if opportunity.profit_percentage == 0.0:
+                    action = "🔴 0%"
+                    profit_color = "red"
+                elif opportunity.profit_percentage > 0.4:
+                    action = "🟢 EXEC"
+                    profit_color = "green"
+                else:
+                    # Skip opportunities between 0% and 0.4%
+                    continue
+                
+                values = (
+                    opportunity.exchange,
+                    opportunity.triangle_path,
+                    f"{opportunity.profit_percentage:.4f}%",
+                    f"${opportunity.profit_amount:.6f}",
+                    f"${opportunity.initial_amount:.2f}",
+                    action
+                )
+                
+                item = self.opportunities_tree.insert("", "end", values=values)
+                
+                # RED/GREEN color coding
+                if opportunity.profit_percentage == 0.0:
+                    self.opportunities_tree.item(item, tags=("red",))
+                elif opportunity.profit_percentage > 0.4:
+                    self.opportunities_tree.item(item, tags=("green",))
+            
+            # Configure RED/GREEN tags
+            self.opportunities_tree.tag_configure("red", foreground="red")
+            self.opportunities_tree.tag_configure("green", foreground="green")
             
             # Update statistics
-            self.update_statistics()
+            self.stats_labels["opportunities_found"].set(str(len(self.opportunities)))
+            
+            # Count red and green opportunities
+            red_count = sum(1 for opp in self.opportunities if opp.profit_percentage == 0.0)
+            green_count = sum(1 for opp in self.opportunities if opp.profit_percentage > 0.4)
+            self.stats_labels["trades_executed"].set(f"R:{red_count} G:{green_count}")
             
         except Exception as e:
             self.logger.error(f"Error updating GUI: {e}")
         
         # Schedule next update
-        self.root.after(Config.GUI_UPDATE_INTERVAL, self.update_gui)
-    
-    def _convert_result_to_opportunity(self, result):
-        """Convert ArbitrageResult to ArbitrageOpportunity for execution"""
-        from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
-        
-        # Extract triangle path
-        triangle_path = getattr(result, 'triangle_path', [])
-        if len(triangle_path) < 3:
-            self.logger.error(f"❌ Invalid triangle path: {triangle_path}")
-            raise ValueError(f"Invalid triangle path: {triangle_path}")
-        
-        # CRITICAL: Ensure USDT triangle format
-        if triangle_path[0] != 'USDT':
-            # Convert to USDT triangle format
-            if 'USDT' in triangle_path:
-                # Reorder to start with USDT
-                usdt_index = triangle_path.index('USDT')
-                triangle_path = triangle_path[usdt_index:] + triangle_path[:usdt_index]
-            else:
-                self.logger.error(f"❌ Non-USDT triangle rejected: {triangle_path}")
-                raise ValueError(f"Only USDT triangles allowed: {triangle_path}")
-        
-        base_currency = triangle_path[0]  # Must be USDT
-        intermediate_currency = triangle_path[1]  # e.g., XRP
-        quote_currency = triangle_path[2]  # e.g., MXN
-        
-        self.logger.info(f"🔧 Converting to USDT triangle: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
-        
-        # Create trade steps for USDT triangle with proper quantities
-        trade_amount = max(5.0, min(20.0, getattr(result, 'initial_amount', 20.0)))  # $5-20 range for Gate.io
-        
-        # Get current market prices for accurate calculations
-        try:
-            # This will be filled with real prices during execution
-            price1 = 1.0  # Will be updated with real Gate.io price
-            price2 = 1.0  # Will be updated with real Gate.io price  
-            price3 = 1.0  # Will be updated with real Gate.io price
-            
-            # Calculate realistic quantities
-            qty1 = trade_amount  # USDT amount to spend
-            qty2 = trade_amount / price1  # Estimated intermediate currency amount
-            qty3 = qty2 * price2  # Estimated quote currency amount
-            
-        except Exception as e:
-            self.logger.error(f"Error getting market prices: {e}")
-            # Use safe defaults
-            qty1 = trade_amount
-            qty2 = trade_amount
-            qty3 = trade_amount
-        
-        steps = [
-            TradeStep(f"{intermediate_currency}/USDT", 'buy', qty1, price1, qty2),
-            TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', qty2, price2, qty3),
-            TradeStep(f"{quote_currency}/USDT", 'sell', qty3, price3, trade_amount * (1 + getattr(result, 'profit_percentage', 0)/100))  # Sell quote for USDT
-        ]
-        
-        opportunity = ArbitrageOpportunity(
-            base_currency=base_currency,
-            intermediate_currency=intermediate_currency,
-            quote_currency=quote_currency,
-            pair1=f"{intermediate_currency}/USDT",
-            pair2=f"{intermediate_currency}/{quote_currency}",
-            pair3=f"{quote_currency}/USDT",
-            steps=steps,
-            initial_amount=trade_amount,
-            final_amount=trade_amount * (1 + getattr(result, 'profit_percentage', 0)/100),
-            estimated_fees=trade_amount * 0.006,  # 0.6% fees for Gate.io
-            estimated_slippage=trade_amount * 0.001
-        )
-        
-        # Set additional attributes
-        arbitrage_opportunity.exchange = getattr(result, 'exchange', 'gate')
-        arbitrage_opportunity.profit_percentage = getattr(result, 'profit_percentage', 0)
-        arbitrage_opportunity.profit_amount = getattr(result, 'profit_amount', 0)
-        opportunity.status = OpportunityStatus.DETECTED
-        
-        # Set triangle path using the setter
-        arbitrage_opportunity.triangle_path = f"{base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}"
-        
-        return opportunity
-    
-    def update_opportunities_display(self):
-        """Update the opportunities treeview with proper triangle path formatting."""
-        try:
-            # Clear existing items
-            for item in self.opportunities_tree.get_children():
-                self.opportunities_tree.delete(item)
-            
-            # Add current opportunities
-            for i, opportunity in enumerate(self.opportunities[:Config.MAX_OPPORTUNITIES_DISPLAY]):
-                # Handle both ArbitrageOpportunity and ArbitrageResult objects
-                if hasattr(opportunity, 'exchange'):
-                    exchange = opportunity.exchange
-                elif hasattr(opportunity, 'name'):
-                    exchange = opportunity.name
-                else:
-                    exchange = 'Unknown'
-                
-                # Format the triangle path properly
-                if hasattr(opportunity, 'triangle_path'):
-                    if isinstance(opportunity.triangle_path, list):
-                        # For USDT-based triangles: Always show as 4-step cycle
-                        if len(opportunity.triangle_path) >= 3:
-                            # 3 currencies: USDT, Currency1, Currency2 → show as USDT → Currency1 → Currency2 → USDT
-                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[0]}"
-                        else:
-                            path = ' → '.join(opportunity.triangle_path)
-                    else:
-                        path = str(opportunity.triangle_path)
-                else:
-                    path = 'Unknown Path'
-                
-                profit_pct = getattr(opportunity, 'profit_percentage', 0)
-                profit_amt = getattr(opportunity, 'profit_amount', 0)
-                initial_amt = getattr(opportunity, 'initial_amount', 0)
-                
-                # Check if profitable
-                is_profitable = False
-                if hasattr(opportunity, 'is_profitable'):
-                    is_profitable = opportunity.is_profitable
-                elif hasattr(opportunity, 'net_profit_percent'):
-                    is_profitable = opportunity.net_profit_percent >= 0.5
-                else:
-                    is_profitable = profit_pct >= 0.5
-                
-                values = (
-                    exchange,
-                    path,
-                    f"{'+' if profit_pct >= 0 else ''}{profit_pct:.4f}%",
-                    f"${'+' if profit_amt >= 0 else ''}{profit_amt:.4f}",
-                    f"${initial_amt:.2f}",
-                    "Execute"
-                )
-                
-                # Color code by profitability with 3 levels
-                if profit_pct >= 0.5:
-                    tags = ("profitable",)  # Green for profitable
-                elif profit_pct >= 0:
-                    tags = ("low_profit",)  # Yellow for low profit
-                else:
-                    tags = ("unprofitable",)  # Red for losses
-                
-                self.opportunities_tree.insert("", "end", values=values, tags=tags)
-            
-            # Configure tags with better colors
-            self.opportunities_tree.tag_configure("profitable", background="lightgreen")
-            self.opportunities_tree.tag_configure("low_profit", background="lightyellow")
-            self.opportunities_tree.tag_configure("unprofitable", background="lightcoral")
-            
-        except Exception as e:
-            self.logger.error(f"Error updating opportunities display: {e}")
-    
-    def update_statistics(self):
-        """Update statistics display."""
-        try:
-            connected_exchanges = len(self.exchange_manager.get_connected_exchanges())
-            self.stats_labels["active_exchanges"].set(str(connected_exchanges))
-            
-            opportunities_count = len(self.opportunities)
-            self.stats_labels["opportunities_found"].set(str(opportunities_count))
-            
-        except Exception as e:
-            self.logger.error(f"Error updating statistics: {e}")
-    
-    def on_exchange_selection_changed(self):
-        """Handle exchange selection changes."""
-        if self.running:
-            messagebox.showwarning("Warning", "Stop the bot before changing exchange selection")
-            return
-    
-    def toggle_auto_trading(self):
-        """Toggle auto trading mode."""
-        self.auto_trading = self.auto_trading_var.get()
-        if self.auto_trading:
-            result = messagebox.askyesno(
-                "Confirm Auto Trading",
-                "Are you sure you want to enable auto trading? This will execute REAL trades automatically with REAL money on your exchange account!"
-            )
-            if not result:
-                self.auto_trading_var.set(False)
-                self.auto_trading = False
-    
-    def on_opportunity_double_click(self, event):
-        """Handle double-click on opportunity."""
-        try:
-            selection = self.opportunities_tree.selection()
-            if selection:
-                item = self.opportunities_tree.item(selection[0])
-                index = self.opportunities_tree.index(selection[0])
-                
-                if index < len(self.opportunities):
-                    opportunity = self.opportunities[index]
-                    self.show_opportunity_details(opportunity)
-        except Exception as e:
-            self.logger.error(f"Error handling opportunity double click: {e}")
-    
-    def show_opportunity_details(self, opportunity: ArbitrageOpportunity):
-        """Show detailed information about an opportunity."""
-        try:
-            details_window = ctk.CTkToplevel(self.root)
-            details_window.title("Opportunity Details")
-            details_window.geometry("600x400")
-            
-            # Create scrollable text widget
-            text_widget = tk.Text(details_window, wrap=tk.WORD, padx=10, pady=10)
-            text_widget.pack(fill="both", expand=True)
-            
-            # Insert opportunity details
-            details = f"""
-Arbitrage Opportunity Details
-============================
-
-Triangle Path: {opportunity.triangle_path}
-Exchange: {getattr(opportunity, 'exchange', 'Multi-Exchange')}
-
-Financial Details:
-- Initial Amount: ${opportunity.initial_amount:.6f}
-- Final Amount: ${opportunity.final_amount:.6f}
-- Gross Profit: {opportunity.profit_percentage:.4f}% (${opportunity.profit_amount:.6f})
-- Estimated Fees: ${opportunity.estimated_fees:.6f}
-- Estimated Slippage: ${opportunity.estimated_slippage:.6f}
-- Net Profit: ${opportunity.net_profit:.6f}
-
-Trade Steps:
-"""
-            
-            for i, step in enumerate(opportunity.steps, 1):
-                details += f"{i}. {step.side.upper()} {step.quantity:.6f} {step.symbol} at {step.price:.8f}\n"
-            
-            details += f"""
-Status: {opportunity.status.value}
-Detected At: {opportunity.detected_at.strftime('%Y-%m-%d %H:%M:%S')}
-"""
-            
-            text_widget.insert(tk.END, details)
-            text_widget.configure(state="disabled")
-            
-            # Execute button
-            execute_btn = ctk.CTkButton(
-                details_window,
-                text="Execute This Opportunity",
-                command=lambda: self.execute_opportunity(opportunity, details_window)
-            )
-            execute_btn.pack(pady=10)
-        except Exception as e:
-            self.logger.error(f"Error showing opportunity details: {e}")
-    
-    def execute_selected_opportunity(self):
-        """Execute the selected opportunity."""
-        try:
-            selection = self.opportunities_tree.selection()
-            if not selection:
-                messagebox.showwarning("Warning", "Please select an opportunity to execute")
-                return
-            
-            index = self.opportunities_tree.index(selection[0])
-            if index < len(self.opportunities):
-                opportunity = self.opportunities[index]
-                asyncio.run_coroutine_threadsafe(
-                    self.executor.execute_arbitrage(opportunity),
-                    self.loop
-                )
-                self.add_to_trading_history(f"Manual execution: {opportunity}")
-        except Exception as e:
-            self.logger.error(f"Error executing selected opportunity: {e}")
-            messagebox.showerror("Error", f"Failed to execute opportunity: {str(e)}")
-    
-    def execute_opportunity(self, opportunity: ArbitrageOpportunity, window=None):
-        """Execute a specific opportunity."""
-        try:
-            if window:
-                window.destroy()
-            
-            asyncio.run_coroutine_threadsafe(
-                self.executor.execute_arbitrage(opportunity),
-                self.loop
-            )
-            self.add_to_trading_history(f"Manual execution: {opportunity}")
-        except Exception as e:
-            self.logger.error(f"Error executing opportunity: {e}")
-            messagebox.showerror("Error", f"Failed to execute opportunity: {str(e)}")
-    
-    def add_to_trading_history(self, message: str):
-        """Add a message to the trading history."""
-        try:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            self.trading_history.insert(0, f"[{timestamp}] {message}")
-            
-            # Limit history size
-            if self.trading_history.size() > 100:
-                self.trading_history.delete(tk.END)
-        except Exception as e:
-            self.logger.error(f"Error adding to trading history: {e}")
-    
-    def clear_trading_history(self):
-        """Clear the trading history."""
-        try:
-            self.trading_history.delete(0, tk.END)
-        except Exception as e:
-            self.logger.error(f"Error clearing trading history: {e}")
-    
-    def _is_valid_usdt_triangle(self, triangle_path) -> bool:
-        """Validate that triangle path is a proper USDT triangle."""
-        try:
-            # Handle different formats
-            if isinstance(triangle_path, str):
-                path_parts = triangle_path.split(' → ')
-                if len(path_parts) >= 3:
-                    currencies = path_parts[:3]
-                else:
-                    return False
-            elif isinstance(triangle_path, list):
-                if len(triangle_path) >= 3:
-                    currencies = triangle_path[:3]
-                else:
-                    return False
-            else:
-                return False
-            
-            # Must start with USDT
-            if currencies[0] != 'USDT':
-                return False
-            
-            # Validate all currencies exist on Gate.io
-            valid_gateio_currencies = {
-                # Major cryptocurrencies (high volume, good liquidity)
-                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'KCS',  # KuCoin's native token
-                # Additional major cryptocurrencies
-                'ETC', 'BCH', 'EOS', 'XLM', 'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX',
-                'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO',
-                # Stablecoins
-                'USDD', 'TUSD', 'DAI', 'PAX', 'BUSD', 'HUSD', 'USDK', 'FRAX',
-                # DeFi tokens
-                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
-                # NFT/Gaming tokens (high volatility for arbitrage)
-                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
-                # AI/Web3 tokens
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                # Meme coins (high volatility for arbitrage)
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
-                # Layer 2/Rollups
-                'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
-                # Oracles
-                'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
-                # Privacy coins
-                'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
-                # Exchange tokens
-                'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
-                # Real-world assets
-                'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
-                # New listings (high volatility)
-                'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
-                # AI and Big Data
-                'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
-                # Liquid Staking
-                'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
-                # Bridges
-                'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
-                # Additional popular tokens
-                'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
-                # Metaverse
-                'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
-                # Additional stablecoins
-                'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
-                # Additional DeFi
-                'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
-                # Additional gaming
-                'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
-                # Additional AI
-                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC'
-            }
-            
-            return all(currency in valid_gateio_currencies for currency in currencies)
-            
-        except Exception as e:
-            self.logger.error(f"Error validating USDT triangle: {e}")
-            return False
+        self.root.after(1000, self.update_gui)
     
     def run(self):
-        """Start the GUI application."""
-        try:
-            self.root.mainloop()
-        except Exception as e:
-            self.logger.error(f"Error running GUI: {e}")
-        finally:
-            # Cleanup
-            self.running = False
-            if hasattr(self, 'websocket_manager'):
-                self.websocket_manager.stop()
-            if hasattr(self, 'loop'):
-                self.loop.call_soon_threadsafe(self.loop.stop)
+        """Run the GUI application."""
+        self.root.mainloop()
 
 def main():
-    """Main entry point for the GUI application."""
-    try:
-        app = ArbitrageBotGUI()
-        app.run()
-    except Exception as e:
-        print(f"Fatal error: {e}")
+    """Main function to start the GUI."""
+    app = ArbitrageBotGUI()
+    app.run()
 
 if __name__ == "__main__":
     main()

@@ -55,7 +55,7 @@ class TradeExecutor:
         trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
         self.logger.info(f"TradeExecutor initialized: {trading_mode}")
         self.logger.info(f"Auto-trading: {'ENABLED' if self.auto_trading else 'DISABLED'}")
-        self.logger.info(f"🔴 LIVE TRADING: All trades will be executed with REAL money on your exchange account!")
+        self.logger.info(f"🔴 LIVE TRADING: All trades will be executed with REAL money (≥0.4% profit threshold)!")
         self.logger.info(f"✅ READY: Real-money trading enabled with enforced profit/amount limits.")
     
     def set_websocket_manager(self, websocket_manager):
@@ -361,7 +361,7 @@ class TradeExecutor:
     def _get_exchange_minimum_order(self, exchange_id: str) -> float:
         """Get minimum order value for specific exchange"""
         if exchange_id == 'kucoin':
-            return 1.0  # KuCoin minimum $1 USD
+            return 0.5  # KuCoin minimum $0.5 USD (reduced for better execution)
         elif exchange_id == 'gate':
             return 3.0  # Gate.io minimum $3 USD
         elif exchange_id == 'binance':
@@ -388,22 +388,22 @@ class TradeExecutor:
                 if side.lower() == 'buy':
                     # For BUY: quantity should be USDT amount to spend
                     order_value = quantity
-                    if order_value < 1.0:  # KuCoin minimum $1 USD
-                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $1.00 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $1.00'}
+                    if order_value < 0.5:  # KuCoin minimum $0.5 USD (reduced)
+                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $0.50 required")
+                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $0.50'}
                 else:
                     # For SELL: quantity is base currency amount
                     order_value = quantity * current_price if current_price > 0 else quantity
-                    if order_value < 1.0:
-                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $1.00 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $1.00'}
+                    if order_value < 0.5:
+                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $0.50 required")
+                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $0.50'}
                     
                     # Additional safety check for very small quantities
                     if quantity < 0.0001:  # Minimum quantity threshold for KuCoin
                         self.logger.error(f"❌ KuCoin minimum quantity: {quantity:.8f} too small")
                         return {'success': False, 'error': f'Quantity too small: {quantity:.8f}'}
                 
-                self.logger.info(f"✅ KuCoin order validation: ${order_value:.2f} ≥ $1.00")
+                self.logger.info(f"✅ KuCoin order validation: ${order_value:.2f} ≥ $0.50")
             elif exchange.exchange_id == 'gate':
                 # Get current price for validation
                 ticker = await exchange.get_ticker(symbol)
@@ -538,13 +538,13 @@ class TradeExecutor:
         
         # Enforce maximum trade amount (reduced to $20)
         if opportunity.initial_amount > 20:
-            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $20 limit, adjusting...")
+            self.logger.warning(f"KUCOIN: Trade amount ${opportunity.initial_amount:.2f} exceeds $20 limit, adjusting...")
             opportunity.initial_amount = 20
         
         # Ensure minimum trade amount for Gate.io
-        if opportunity.initial_amount < 5:
-            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} below $5 minimum, adjusting...")
-            opportunity.initial_amount = 5
+        if opportunity.initial_amount < 1:  # KuCoin minimum is $1
+            self.logger.warning(f"KUCOIN: Trade amount ${opportunity.initial_amount:.2f} below $1 minimum, adjusting...")
+            opportunity.initial_amount = 1
             
         start_time = datetime.now()
         trade_start_ms = time.time() * 1000

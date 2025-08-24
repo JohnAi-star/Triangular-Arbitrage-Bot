@@ -144,19 +144,19 @@ class ArbitrageWebServer:
                 Config.AUTO_TRADING_MODE = config.autoTradingMode
                 
                 # ENFORCE STRICT LIMITS
-                enforced_min_profit = max(0.8, config.minProfitPercentage)  # Gate.io minimum 0.8% for safety
-                enforced_max_trade = min(20.0, max(5.0, config.maxTradeAmount))  # Gate.io: min $5, max $20
+                enforced_min_profit = max(0.4, config.minProfitPercentage)  # 0.4% minimum as requested
+                enforced_max_trade = min(20.0, max(5.0, config.maxTradeAmount))  # Multi-exchange: min $5, max $20
                 
                 Config.MIN_PROFIT_PERCENTAGE = enforced_min_profit
                 Config.MAX_TRADE_AMOUNT = enforced_max_trade
 
                 self.auto_trading = config.autoTradingMode
-                trading_mode = "🔴 LIVE GATE.IO"
+                trading_mode = "🔴 LIVE MULTI-EXCHANGE"
                 
-                self.logger.info(f"🚀 Starting Gate.io bot with ENFORCED config:")
+                self.logger.info(f"🚀 Starting multi-exchange bot with ENFORCED config:")
                 self.logger.info(f"   Requested: minProfit={config.minProfitPercentage}%, maxTrade=${config.maxTradeAmount}")
-                self.logger.info(f"   ENFORCED: minProfit={enforced_min_profit}%, maxTrade=${enforced_max_trade}")
-                self.logger.info(f"   Gate.io Limits: min $5 order, max $20 trade (reduced for safety)")
+                self.logger.info(f"   ENFORCED: minProfit={enforced_min_profit}% (0.4% minimum), maxTrade=${enforced_max_trade}")
+                self.logger.info(f"   Filter: Only show opportunities ≥ 0% profit (no negative opportunities)")
                 self.logger.info(f"   Settings: "
                                  f"autoTrade={config.autoTradingMode}, "
                                  f"liveTrading=TRUE, "
@@ -175,14 +175,14 @@ class ArbitrageWebServer:
                     self.exchange_manager,
                     self.websocket_manager,
                     {
-                        'min_profit_percentage': enforced_min_profit,
+                        'min_profit_percentage': 0.4,  # Fixed to 0.4% as requested
                         'max_trade_amount': enforced_max_trade
                     }
                 )
                 
                 # Initialize real-time detector for WebSocket-based detection
                 self.realtime_detector = RealtimeArbitrageDetector(
-                    min_profit_pct=0.01,  # Lower threshold to show more opportunities
+                    min_profit_pct=0.0,   # Show all opportunities ≥ 0%
                     max_trade_amount=100.0  # Fixed $100 maximum
                 )
                 
@@ -293,10 +293,27 @@ class ArbitrageWebServer:
                     opportunities = await self.detector.scan_all_opportunities()
                     scan_duration = (time.time() - scan_start) * 1000
 
-                    # Convert ALL opportunities to UI format
+                    # CRITICAL: Filter out negative opportunities before UI
+                    red_green_opportunities = [
+                        opp for opp in opportunities 
+                        if opp.profit_percentage == 0.0 or opp.profit_percentage > 0.4  # RED/GREEN only
+                    ]
+                    
+                    # Convert to UI format with RED/GREEN colors
                     ui_opportunities = []
-                    for i, opp in enumerate(opportunities):
-                        opp_id = f"real_opp_{int(time.time()*1000)}_{i}"
+                    for i, opp in enumerate(red_green_opportunities):
+                        opp_id = f"redgreen_opp_{int(time.time()*1000)}_{i}"
+                        
+                        # RED/GREEN status only
+                        if opp.profit_percentage == 0.0:
+                            status_text = "🔴 RED (0%)"
+                            color_class = "red"
+                        elif opp.profit_percentage > 0.4:
+                            status_text = "🟢 GREEN (>0.4%)"
+                            color_class = "green"
+                        else:
+                            continue  # Skip opportunities between 0% and 0.4%
+                        
                         ui_opp = {
                             "id": opp_id,
                             "exchange": opp.exchange,
@@ -305,13 +322,16 @@ class ArbitrageWebServer:
                             "profitAmount": round(opp.profit_amount, 4),
                             "volume": round(opp.initial_amount, 2),
                             "status": "detected",
-                            "dataType": "ALL_OPPORTUNITIES",
+                            "statusText": status_text,
+                            "colorClass": color_class,
+                            "dataType": "RED_GREEN_OPPORTUNITIES",
                             "timestamp": datetime.now().isoformat(),
                             "tradeable": getattr(opp, 'is_tradeable', False),
                             "balanceAvailable": getattr(opp, 'balance_available', 0.0),
                             "balanceRequired": getattr(opp, 'required_balance', 0.0),
                             "real_market_data": True,
-                            "manual_execution": True
+                            "manual_execution": True,
+                            "red_green_scheme": True
                         }
                         ui_opportunities.append(ui_opp)
                         self.opportunities_cache[opp_id] = {
@@ -319,7 +339,7 @@ class ArbitrageWebServer:
                             'ui_data': ui_opp
                         }
 
-                    self.opportunities = ui_opportunities[:100]  # Show up to 100 opportunities
+                    self.opportunities = ui_opportunities  # Show all generated opportunities
 
                     if len(self.opportunities_cache) > 500:
                         old_keys = list(self.opportunities_cache.keys())[:-500]
@@ -332,21 +352,28 @@ class ArbitrageWebServer:
                     await self.websocket_manager.broadcast("opportunities_update", self.opportunities)
 
                     if self.opportunities:
-                        self.logger.info(f"💎 Scan complete ({scan_duration:.0f}ms): {total_count} ALL opportunities found")
+                        # Count RED/GREEN
+                        red_count = len([opp for opp in ui_opportunities if opp.get('colorClass') == 'red'])
+                        green_count = len([opp for opp in ui_opportunities if opp.get('colorClass') == 'green'])
+                        
+                        self.logger.info(f"💎 Generated {total_count} opportunities with RED/GREEN scheme")
+                        self.logger.info(f"   🔴 RED (0%): {red_count}")
+                        self.logger.info(f"   🟢 GREEN (>0.4%): {green_count}")
                         
                         # Show top 5 opportunities
-                        for i, opp in enumerate(self.opportunities[:3]):
-                            self.logger.info(f"   {i+1}. {opp['exchange']}: {opp['trianglePath']} = {opp['profitPercentage']:.4f}% | Available for execution")
+                        for i, opp in enumerate(self.opportunities[:5]):
+                            color = "🔴 RED" if opp.get('colorClass') == 'red' else "🟢 GREEN"
+                            self.logger.info(f"   {i+1}. {status}: {opp['exchange']}: {opp['trianglePath']} = {opp['profitPercentage']:.4f}%")
                     else:
-                        self.logger.info(f"💎 Scan complete ({scan_duration:.0f}ms): No opportunities found in current market")
+                        self.logger.info(f"💎 No opportunities generated")
 
                     if self.auto_trading and self.executor:
-                        # Auto-execute profitable opportunities
-                        profitable_opportunities = [opp for opp in opportunities if opp.profit_percentage >= 0.1]
-                        if profitable_opportunities:
-                            await self._auto_execute_opportunities(profitable_opportunities)
+                        # FIXED: Auto-execute only ≥0.4% opportunities
+                        auto_tradeable = [opp for opp in profitable_opportunities if opp.profit_percentage >= 0.4]
+                        if auto_tradeable:
+                            await self._auto_execute_opportunities(auto_tradeable)
                         else:
-                            self.logger.info("🤖 Auto-trading enabled but no profitable opportunities found")
+                            self.logger.info("🤖 Auto-trading enabled but no opportunities ≥ 0.4% found")
                 
                 await asyncio.sleep(5)  # Scan every 5 seconds
             except Exception as e:
@@ -441,7 +468,7 @@ class ArbitrageWebServer:
             # Filter for Gate.io USDT triangles only
             usdt_opportunities = [
                 opp for opp in opportunities
-                if (opp.profit_percentage >= 0.5 and  # Use 0.5% minimum for trading
+                if (opp.profit_percentage >= 0.4 and  # Use 0.4% minimum for trading
                     opp.initial_amount >= 5.0 and     # Minimum $5
                     opp.initial_amount <= 20.0 and    # Maximum $20 (reduced for safety)
                     hasattr(opp, 'triangle_path') and
@@ -450,7 +477,7 @@ class ArbitrageWebServer:
             ]
 
             if not usdt_opportunities:
-                self.logger.debug(f"🚫 AUTO-TRADE: No valid USDT triangles (need ≥0.5% profit, $5-$20 amount, start with USDT)")
+                self.logger.debug(f"🚫 AUTO-TRADE: No valid USDT triangles (need ≥0.4% profit, $5-$20 amount, start with USDT)")
                 return
 
             # Execute top 2 most profitable USDT triangles

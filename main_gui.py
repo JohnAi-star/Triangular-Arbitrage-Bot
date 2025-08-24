@@ -54,8 +54,8 @@ def check_configuration():
     fake_opportunity = getattr(Config, 'FORCE_FAKE_OPPORTUNITY', False)
 
     print(f"🔍 Configuration Check:")
-    print(f"   API Key: {'✅ SET' if binance_creds.get('api_key') else '❌ MISSING'}")
-    print(f"   API Secret: {'✅ SET' if binance_creds.get('api_secret') else '❌ MISSING'}")
+    print(f"   Key: {'✅ SET' if binance_creds.get('api_key') else '❌ MISSING'}")
+    print(f"   Secret: {'✅ SET' if binance_creds.get('api_secret') else '❌ MISSING'}")
     print(f"   Credentials Enabled: {'✅ YES' if has_binance_creds else '❌ NO'}")
     print(f"   Min Profit Threshold: {min_profit}%")
     print(f"   Force Fake Opportunity: {'✅ ENABLED' if fake_opportunity else '❌ DISABLED'}")
@@ -86,7 +86,7 @@ def main():
     - 🔴 REAL MONEY TRADING ONLY - NO SIMULATION
     - USDT-based triangular arbitrage only
     - Comprehensive logging and statistics
-    - All trades visible in Spot Orders
+    - All trades visible in Binance Spot Orders
     
     Starting GUI...
     """)
@@ -105,11 +105,11 @@ def main():
         
         print("✅ GUI initialized with WebSocket manager")
         print("✅ Real-time opportunity updates enabled")
-        print("🔴 LIVE TRADING MODE: Real money trades will be executed")
-        print("💰 Your Balance available for trading")
-        print("✅ READY: Real-money trading enabled with enforced profit/amount limits.")
-        print("🎯 AUTO-TRADING: Will execute USDT triangles ≥0.5% profit automatically")
-        print("🔧 TRADE LIMITS: $20-$50 per trade")
+        print("🔴 LIVE TRADING MODE: 300-500 opportunities with RED/GREEN colors")
+        print("🎯 COLORS: 🔴 Red (0% profit) | 🟢 Green (>0.4% profit)")
+        print("🔧 FIXED: Min Profit 0.4% | Max Trade $20")
+        print("📊 COUNT: Will generate 300-500 opportunities per scan")
+        print("💎 SCHEME: Only RED and GREEN colors (no yellow/orange)")
         
         app.run()
         return 0

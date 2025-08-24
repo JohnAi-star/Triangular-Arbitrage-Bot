@@ -60,15 +60,52 @@ class UnifiedExchange(BaseExchange):
             # Handle Gate.io special case
             if self.exchange_id == 'gate':
                 exchange_class = getattr(ccxt, 'gateio')
+            elif self.exchange_id == 'okx':
+                exchange_class = getattr(ccxt, 'okx')
+            elif self.exchange_id == 'bitfinex':
+                exchange_class = getattr(ccxt, 'bitfinex')
             else:
                 exchange_class = getattr(ccxt, self.exchange_id)
                 
             exchange_config = {
                 'enableRateLimit': True,
                 'options': {'defaultType': 'spot'},
-                'timeout': 10000,
-                'rateLimit': 1200
+                'timeout': self.config.get('timeout', 10000),
+                'rateLimit': self.config.get('rate_limit', 1200)
             }
+            
+            # Add MEXC-specific configuration to fix timestamp issues
+            if self.exchange_id == 'mexc':
+                exchange_config.update({
+                    'options': {
+                        'defaultType': 'spot',
+                        'adjustForTimeDifference': True,  # Auto-adjust for time differences
+                        'recvWindow': 60000  # Large receive window for timestamp tolerance
+                    },
+                    'timeout': 30000,  # Increased timeout for MEXC
+                    'rateLimit': 1000
+                })
+                self.logger.info("🔧 Applied MEXC-specific timestamp configuration")
+            
+            # Add OKX-specific configuration
+            elif self.exchange_id == 'okx':
+                exchange_config.update({
+                    'options': {
+                        'defaultType': 'spot',
+                        'adjustForTimeDifference': True
+                    }
+                })
+                self.logger.info("🔧 Applied OKX-specific configuration")
+            
+            # Add Bitfinex-specific configuration
+            elif self.exchange_id == 'bitfinex':
+                exchange_config.update({
+                    'options': {
+                        'defaultType': 'exchange',  # Bitfinex uses 'exchange' for spot trading
+                        'adjustForTimeDifference': True
+                    }
+                })
+                self.logger.info("🔧 Applied Bitfinex-specific configuration")
 
             # Check for API credentials
             api_key = self.config.get('api_key', '').strip()
@@ -91,6 +128,11 @@ class UnifiedExchange(BaseExchange):
             if self.config.get('passphrase'):
                 exchange_config['password'] = self.config.get('passphrase')
                 self.logger.info(f"Added passphrase for {self.exchange_id}")
+            
+            # Add passphrase for OKX (uses 'passphrase' field)
+            if self.exchange_id == 'okx' and self.config.get('passphrase'):
+                exchange_config['passphrase'] = self.config.get('passphrase')
+                self.logger.info(f"Added passphrase for OKX")
 
             self.exchange = exchange_class(exchange_config)
             await self.exchange.load_markets()

@@ -16,11 +16,22 @@ class Config:
         if exchange_id == 'gate':
             api_key = os.getenv('GATE_API_KEY', '') or os.getenv('GATE_API_KEY', '')
             api_secret = os.getenv('GATE_API_SECRET', '') or os.getenv('GATE_API_SECRET', '')
+        # Handle OKX special case
+        elif exchange_id == 'okx':
+            api_key = os.getenv('OKX_API_KEY', '')
+            api_secret = os.getenv('OKX_API_SECRET', '')
         else:
             api_key = os.getenv(f'{exchange_id.upper()}_API_KEY', '')
             api_secret = os.getenv(f'{exchange_id.upper()}_API_SECRET', '')
         
-        passphrase = os.getenv(f'{exchange_id.upper()}_PASSPHRASE', '')  # For KuCoin
+        # Handle passphrase for exchanges that need it
+        if exchange_id == 'okx':
+            passphrase = os.getenv('OKX_PASSPHRASE', '')
+        elif exchange_id == 'kucoin':
+            passphrase = os.getenv('KUCOIN_PASSPHRASE', '')
+        else:
+            passphrase = os.getenv(f'{exchange_id.upper()}_PASSPHRASE', '')
+            
         sandbox = os.getenv(f'{exchange_id.upper()}_SANDBOX', 'false').lower() == 'true'
 
         EXCHANGE_CREDENTIALS[exchange_id] = {
@@ -28,23 +39,29 @@ class Config:
             'api_secret': api_secret,
             'passphrase': passphrase,
             'sandbox': sandbox,
-            'enabled': bool(api_key and api_secret)
+            'enabled': bool(api_key and api_secret),
+            'timeout': SUPPORTED_EXCHANGES.get(exchange_id, {}).get('timeout', 10000),
+            'rate_limit': SUPPORTED_EXCHANGES.get(exchange_id, {}).get('rate_limit', 1200),
+            'recvWindow': SUPPORTED_EXCHANGES.get(exchange_id, {}).get('recvWindow'),
+            'adjustForTimeDifference': SUPPORTED_EXCHANGES.get(exchange_id, {}).get('adjustForTimeDifference', False)
         }
 
     # Core Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = 0.001   # 0.001% minimum profit threshold for finding opportunities (ultra-low to find more)
-    MIN_PROFIT_THRESHOLD: float = 0.5      # 0.5% threshold for execution (SINGLE SOURCE OF TRUTH)
+    MIN_PROFIT_THRESHOLD: float = 0.4      # 0.4% threshold for auto-trading (fixed)
     MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (enforced limit)
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
     # Triangle generation limits
     REQUIRE_USDT_ANCHOR: bool = True
-    MAX_TRIANGLES: int = int(os.getenv('MAX_TRIANGLES', '300'))  # Reduced for better performance
+    MAX_TRIANGLES: int = int(os.getenv('MAX_TRIANGLES', '500'))  # Increased for more opportunities
     MIN_VOLUME_USDT: float = float(os.getenv('MIN_VOLUME_USDT', '0'))  # optional filter if volumes available
 
     # Fee & Trading Mode
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
     PRIORITIZE_ZERO_FEE: bool = os.getenv('PRIORITIZE_ZERO_FEE', 'true').lower() == 'true'
-    SHOW_ALL_OPPORTUNITIES: bool = True  # Show all USDT-based opportunities
+    SHOW_ALL_OPPORTUNITIES: bool = True  # Show 300-500 opportunities
+    DISPLAY_THRESHOLD: float = 0.0  # RED/GREEN scheme: 0% and >0.4% only
+    RED_GREEN_SCHEME: bool = True   # Enable red/green color scheme
+    TARGET_OPPORTUNITY_COUNT: int = 400  # Target 400 opportunities (300-500 range)
 
     # Runtime Feature Flags (defaulted to avoid crash)
     AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
@@ -55,8 +72,8 @@ class Config:
     BACKTESTING_MODE: bool = os.getenv('BACKTESTING_MODE', 'false').lower() == 'false'
     
     # Scanning Configuration - Show ALL opportunities
-    SCAN_ALL_OPPORTUNITIES: bool = True   # Scan all market opportunities
-    IGNORE_BALANCE_CHECK: bool = True     # Don't check balance when scanning
+    SCAN_PROFITABLE_ONLY: bool = False   # Show 0% opportunities too
+    FILTER_NEGATIVE_OPPORTUNITIES: bool = True  # Filter out negative opportunities (keep only 0% and positive)
     MANUAL_EXECUTION_MODE: bool = True    # Allow manual execution of any opportunity
 
     # Slippage and Order Risk
@@ -84,8 +101,9 @@ class Config:
             print("   Configure API credentials in .env for full functionality.")
             return True
 
-        if cls.MIN_PROFIT_PERCENTAGE <= 0:
-            print("❌ ERROR: MIN_PROFIT_PERCENTAGE must be greater than 0")
+        # FIX: Use MIN_PROFIT_THRESHOLD instead of removed MIN_PROFIT_PERCENTAGE
+        if cls.MIN_PROFIT_THRESHOLD <= 0:
+            print("❌ ERROR: MIN_PROFIT_THRESHOLD must be greater than 0")
             return False
 
         if cls.MAX_TRADE_AMOUNT <= 0:
@@ -93,7 +111,7 @@ class Config:
             return False
 
         # Log the actual thresholds being used
-        print(f"✅ Profit threshold: {cls.MIN_PROFIT_PERCENTAGE}%")
+        print(f"✅ Profit threshold: {cls.MIN_PROFIT_THRESHOLD}%")
         print(f"✅ Max trade amount: ${cls.MAX_TRADE_AMOUNT}")
 
         return True
@@ -107,7 +125,7 @@ class Config:
     def to_dict(cls) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
-            'min_profit_percentage': cls.MIN_PROFIT_PERCENTAGE,
+            'min_profit_threshold': cls.MIN_PROFIT_THRESHOLD,  # Changed from min_profit_percentage
             'max_trade_amount': cls.MAX_TRADE_AMOUNT,
             'use_fee_tokens': cls.USE_FEE_TOKENS,
             'prioritize_zero_fee': cls.PRIORITIZE_ZERO_FEE,
@@ -124,3 +142,4 @@ class Config:
                 if cred['enabled']
             ]
         }
+    

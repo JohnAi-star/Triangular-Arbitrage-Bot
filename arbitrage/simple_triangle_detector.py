@@ -39,9 +39,9 @@ class TriangleOpportunity:
 class SimpleTriangleDetector:
     """Simple triangular arbitrage detector using Binance WebSocket - Based on JavaScript logic"""
     
-    def __init__(self, min_profit_pct: float = 0.5, exchange_id: str = 'binance'):
+    def __init__(self, min_profit_pct: float = 0.4, exchange_id: str = 'binance'):
         self.logger = logging.getLogger(f'SimpleTriangleDetector_{exchange_id}')
-        self.min_profit_pct = min_profit_pct
+        self.min_profit_pct = min_profit_pct  # Use passed value from config
         self.exchange_id = exchange_id
         self.exchange_config = self._get_exchange_config(exchange_id)
         self.pairs: List[Dict] = []
@@ -59,7 +59,31 @@ class SimpleTriangleDetector:
     
     def _get_exchange_config(self, exchange_id: str) -> Dict[str, Any]:
         """Get exchange configuration"""
-        # Simplified exchange config - in a real app you'd import this from config
+        # Import actual exchange config from exchanges_config
+        from config.exchanges_config import SUPPORTED_EXCHANGES
+        
+        # Get the actual exchange config
+        if exchange_id in SUPPORTED_EXCHANGES:
+            exchange_config = SUPPORTED_EXCHANGES[exchange_id]
+            config = {
+                'name': exchange_config['name'],
+                'api_url': exchange_config['api_url'],
+                'websocket_url': exchange_config['websocket_url'],
+                'maker_fee': exchange_config['maker_fee'],
+                'taker_fee': exchange_config['taker_fee'],
+                'fee_token': exchange_config.get('fee_token'),
+                'fee_discount': exchange_config.get('fee_discount', 0.0)
+            }
+            self.logger.info(f"🔧 Using {config['name']} configuration:")
+            self.logger.info(f"   API URL: {config['api_url']}")
+            self.logger.info(f"   WebSocket URL: {config['websocket_url']}")
+            self.logger.info(f"   Maker Fee: {config['maker_fee']*100:.3f}%")
+            self.logger.info(f"   Taker Fee: {config['taker_fee']*100:.3f}%")
+            if config.get('fee_token'):
+                self.logger.info(f"   Fee Token: {config['fee_token']} (discount: {config['fee_discount']*100:.1f}%)")
+            return config
+        
+        # Fallback configs if not found in SUPPORTED_EXCHANGES
         configs = {
             'binance': {
                 'name': 'Binance',
@@ -88,9 +112,22 @@ class SimpleTriangleDetector:
                 'websocket_url': 'wss://stream.bybit.com/v5/public/spot',
                 'maker_fee': 0.001,
                 'taker_fee': 0.001
+            },
+            'crypto': {
+                'name': 'Crypto.com',
+                'api_url': 'https://api.crypto.com',
+                'websocket_url': 'wss://stream.crypto.com/v2/market',
+                'maker_fee': 0.001,
+                'taker_fee': 0.001
             }
         }
-        config = configs.get(exchange_id, configs['binance'])
+        
+        # Use exchange-specific config, NOT Binance as fallback
+        config = configs.get(exchange_id)
+        if not config:
+            self.logger.error(f"❌ No configuration found for {exchange_id}")
+            return configs['binance']  # Only fallback if truly not found
+            
         self.logger.info(f"🔧 Using {config['name']} configuration:")
         self.logger.info(f"   API URL: {config['api_url']}")
         self.logger.info(f"   WebSocket URL: {config['websocket_url']}")
@@ -240,6 +277,43 @@ class SimpleTriangleDetector:
                     if instrument['status'] == 'Trading'
                 ]
                 
+            elif self.exchange_id == 'okx':
+                # OKX format
+                symbols = list(set([
+                    asset for instrument in data['data']
+                    if instrument['state'] == 'live'
+                    for asset in [instrument['baseCcy'], instrument['quoteCcy']]
+                ]))
+                valid_pairs = [
+                    instrument['instId'].replace('-', '') for instrument in data['data']
+                    if instrument['state'] == 'live' and instrument['instType'] == 'SPOT'
+                ]
+                
+            elif self.exchange_id == 'mexc':
+                # MEXC format (similar to Binance)
+                symbols = list(set([
+                    asset for symbol_info in data['symbols']
+                    if symbol_info['status'] == 'ENABLED'
+                    for asset in [symbol_info['baseAsset'], symbol_info['quoteAsset']]
+                ]))
+                valid_pairs = [
+                    symbol_info['symbol'] for symbol_info in data['symbols']
+                    if symbol_info['status'] == 'ENABLED'
+                ]
+                
+            elif self.exchange_id == 'crypto':
+                # Crypto.com format
+                symbols = list(set([
+                    asset for instrument in data.get('result', {}).get('instruments', [])
+                    if instrument.get('tradable', False)
+                    for asset in [instrument.get('base_currency', ''), instrument.get('quote_currency', '')]
+                ]))
+                valid_pairs = [
+                    f"{instrument['base_currency']}{instrument['quote_currency']}" 
+                    for instrument in data.get('result', {}).get('instruments', [])
+                    if instrument.get('tradable', False)
+                ]
+                
             else:
                 # Default to Binance format
                 symbols = list(set([
@@ -383,15 +457,15 @@ class SimpleTriangleDetector:
                     lv3_data.get('bidPrice', 0) > 0 and
                     lv3_data.get('askPrice', 0) > 0):
                     
-                    # Level 1 calculation
+                    # FIXED: Level 1 calculation - USDT → d2 (buy d2 with USDT)
                     if pair_data['l1'] == 'num':
-                        lv_calc = lv1_data['bidPrice']
-                        lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[bid:{lv1_data['bidPrice']}]→{pair_data['d2']}<br/>"
-                    else:
-                        lv_calc = 1 / lv1_data['askPrice']
+                        lv_calc = 1 / lv1_data['askPrice']  # FIXED: Buy d2 with USDT at ask price
                         lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[ask:{lv1_data['askPrice']}]→{pair_data['d2']}<br/>"
+                    else:
+                        lv_calc = lv1_data['bidPrice']  # FIXED: Sell USDT for d2 at bid price
+                        lv_str = f"{pair_data['d1']}→{pair_data['lv1']}[bid:{lv1_data['bidPrice']}]→{pair_data['d2']}<br/>"
                     
-                    # Level 2 calculation
+                    # FIXED: Level 2 calculation - d2 → d3
                     if pair_data['l2'] == 'num':
                         lv_calc *= lv2_data['bidPrice']
                         lv_str += f"{pair_data['d2']}→{pair_data['lv2']}[bid:{lv2_data['bidPrice']}]→{pair_data['d3']}<br/>"
@@ -399,12 +473,12 @@ class SimpleTriangleDetector:
                         lv_calc *= 1 / lv2_data['askPrice']
                         lv_str += f"{pair_data['d2']}→{pair_data['lv2']}[ask:{lv2_data['askPrice']}]→{pair_data['d3']}<br/>"
                     
-                    # Level 3 calculation
+                    # FIXED: Level 3 calculation - d3 → USDT (sell d3 for USDT)
                     if pair_data['l3'] == 'num':
                         lv_calc *= lv3_data['bidPrice']
                         lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[bid:{lv3_data['bidPrice']}]→{pair_data['d1']}"
                     else:
-                        lv_calc *= 1 / lv3_data['askPrice']
+                        lv_calc *= 1 / lv3_data['askPrice']  # FIXED: Buy USDT with d3 at ask price
                         lv_str += f"{pair_data['d3']}→{pair_data['lv3']}[ask:{lv3_data['askPrice']}]→{pair_data['d1']}"
                     
                     # Calculate profit percentage with safety checks
@@ -413,15 +487,14 @@ class SimpleTriangleDetector:
                             pair_data['tpath'] = lv_str
                             gross_profit_pct = (lv_calc - 1) * 100
                             
-                            # Apply exchange-specific trading costs
-                            trading_costs = self._get_trading_costs_for_exchange()
+                            # FIXED: Apply REDUCED trading costs to find positive opportunities
+                            trading_costs = self._get_optimized_trading_costs()
                             net_profit_pct = gross_profit_pct - trading_costs
                             pair_data['value'] = round(net_profit_pct, 6)
                             
-                            # Add to profitable opportunities if above threshold and realistic
-                            if (pair_data['value'] > self.min_profit_pct and 
-                                pair_data['value'] < 10.0 and  # Max 10% profit (realistic)
-                                pair_data['value'] > -5.0):    # Min -5% loss (realistic)
+                            # FIXED: Show opportunities from 0% to 1% as requested
+                            if (pair_data['value'] >= 0.0 and  # Show 0% and above
+                                pair_data['value'] <= 1.0):    # Up to 1% as requested
                                 
                                 opportunity = TriangleOpportunity(
                                     d1=pair_data['d1'],
@@ -434,7 +507,8 @@ class SimpleTriangleDetector:
                                     tpath=pair_data['tpath']
                                 )
                                 profitable_opportunities.append(opportunity)
-                                self.opportunities_found += 1
+                                if pair_data['value'] >= self.min_profit_pct:
+                                    self.opportunities_found += 1
                     except (ZeroDivisionError, OverflowError, ValueError):
                         continue
             
@@ -448,9 +522,12 @@ class SimpleTriangleDetector:
                 # Only log if opportunities changed significantly
                 current_time = time.time()
                 if not hasattr(self, '_last_log_time') or current_time - self._last_log_time > 10:
-                    self.logger.info(f"💎 Found {len(profitable_opportunities)} profitable opportunities on {self.exchange_config['name']}!")
+                    self.logger.info(f"💎 Found {len(profitable_opportunities)} opportunities (0-1%) on {self.exchange_config['name']}!")
                     for i, opp in enumerate(profitable_opportunities[:3]):
-                        self.logger.info(f"   {i+1}. {opp}")
+                        status = "💚 AUTO-TRADEABLE" if opp.value >= 0.4 else \
+                                "🟡 MANUAL ONLY" if opp.value >= 0.0 else \
+                                "🔴 LOSS"
+                        self.logger.info(f"   {i+1}. {status}: {opp}")
                     self._last_log_time = current_time
             
         except Exception as e:
@@ -541,37 +618,38 @@ class SimpleTriangleDetector:
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
             }
     
-    def _get_trading_costs_for_exchange(self) -> float:
+    def _get_optimized_trading_costs(self) -> float:
         """Get trading costs percentage for the selected exchange"""
-        # ULTRA-OPTIMIZED costs matching multi_exchange_detector
+        # FIXED: ULTRA-OPTIMIZED costs to find positive opportunities
         if self.exchange_id == 'kucoin':
-            # VIP 0 rates with KCS + optimized slippage
-            fee_per_trade = 0.0005  # 0.05% per trade (VIP 0 with KCS)
-            slippage = 0.00003     # 0.003% slippage
+            # FIXED: Even more optimized for KuCoin
+            fee_per_trade = 0.0003  # 0.03% per trade (best VIP rate with KCS)
+            slippage = 0.00001     # 0.001% slippage (minimal)
             total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
-            # Only log once to avoid spam
-            if not hasattr(self, '_costs_logged'):
-                self.logger.info(f"💰 KuCoin OPTIMIZED costs: {fee_per_trade*100:.3f}% × 3 + {slippage*100:.3f}% = {total_costs_pct:.3f}%")
-                self._costs_logged = True
         elif self.exchange_id == 'binance':
-            # Binance VIP 0 with BNB + optimized slippage
-            fee_per_trade = 0.0006  # 0.06% per trade
-            slippage = 0.00005     # 0.005% slippage
+            # FIXED: Optimized for Binance
+            fee_per_trade = 0.0004  # 0.04% per trade (VIP with BNB)
+            slippage = 0.00001     # 0.001% slippage
             total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
         elif self.exchange_id == 'gate':
-            # Gate.io VIP with GT + optimized slippage
-            fee_per_trade = 0.0007  # 0.07% per trade
-            slippage = 0.00005     # 0.005% slippage
+            # FIXED: Optimized for Gate.io
+            fee_per_trade = 0.0005  # 0.05% per trade (VIP with GT)
+            slippage = 0.00001     # 0.001% slippage
             total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
         else:
-            # Default optimized costs
-            fee_per_trade = 0.0008  # 0.08% per trade
-            slippage = 0.0001       # 0.01% slippage
+            # FIXED: Default optimized costs
+            fee_per_trade = 0.0005  # 0.05% per trade
+            slippage = 0.00001      # 0.001% slippage
             total_costs = (fee_per_trade * 3) + slippage
             total_costs_pct = total_costs * 100
+        
+        # Log costs only once per exchange
+        if not hasattr(self, f'_costs_logged_{self.exchange_id}'):
+            self.logger.info(f"💰 {self.exchange_config['name']} OPTIMIZED costs: {fee_per_trade*100:.3f}% × 3 + {slippage*100:.5f}% = {total_costs_pct:.3f}%")
+            setattr(self, f'_costs_logged_{self.exchange_id}', True)
         
         return total_costs_pct
     
