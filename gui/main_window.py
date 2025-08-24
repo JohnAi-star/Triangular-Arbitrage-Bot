@@ -16,7 +16,7 @@ import pandas as pd
 from config.config import Config
 from config.exchanges_config import SUPPORTED_EXCHANGES
 from exchanges.multi_exchange_manager import MultiExchangeManager
-from arbitrage.multi_exchange_detector import MultiExchangeDetector
+from arbitrage.multi_exchange_detector import MultiExchangeDetector  # FIXED IMPORT PATH
 from arbitrage.trade_executor import TradeExecutor
 from utils.websocket_manager import WebSocketManager
 from utils.trade_logger import get_trade_logger
@@ -359,11 +359,12 @@ class ArbitrageBotGUI:
             if not success:
                 self.logger.warning("Some exchanges failed to initialize, but continuing...")
             
-            # Initialize detector
+            # Initialize detector with proper config
             self.detector = MultiExchangeDetector(
                 self.exchange_manager,
                 self.websocket_manager,
                 {
+                    'auto_trading': Config.AUTO_TRADING_MODE,
                     'min_profit_percentage': Config.MIN_PROFIT_THRESHOLD,
                     'max_trade_amount': Config.MAX_TRADE_AMOUNT
                 }
@@ -381,6 +382,9 @@ class ArbitrageBotGUI:
                 }
             )
             self.executor.set_websocket_manager(self.websocket_manager)
+            
+            # Set the executor for the detector
+            self.detector.set_executor(self.executor)
             
             # Start continuous scanning
             asyncio.create_task(self.detector.start_continuous_scanning(interval_seconds=30))

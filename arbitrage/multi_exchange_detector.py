@@ -47,6 +47,10 @@ class MultiExchangeDetector:
         self.config = config
         self.logger = setup_logger('MultiExchangeDetector')
         
+        # Store auto_trading and executor from config
+        self.auto_trading = config.get('auto_trading', False)
+        self.executor = None  # Will be set later
+        
         # Generate 300-500 opportunities with red/green color scheme
         self.min_profit_pct = 0.0  # Show from 0%
         self.max_profit_pct = 2.0  # Up to 2% for realism
@@ -61,6 +65,11 @@ class MultiExchangeDetector:
         self.logger.info(f"   Target Count: {self.target_opportunity_count} opportunities")
         self.logger.info(f"   Colors: Red (0%) | Green (>0.4%)")
         self.logger.info(f"   Min Profit: 0.4% | Max Trade: $20")
+    
+    def set_executor(self, executor):
+        """Set the trade executor for auto-trading."""
+        self.executor = executor
+        self.logger.info(f"✅ Trade executor set for auto-trading: {executor is not None}")
     
     async def initialize(self):
         """Initialize detector with all connected exchanges"""
@@ -115,6 +124,15 @@ class MultiExchangeDetector:
                     self.logger.info(f"📊 Scan completed: {len(opportunities)} opportunities found")
                     self.logger.info(f"   💚 AUTO-TRADEABLE (≥0.4%): {profitable_count}")
                     self.logger.info(f"   🟡 POSITIVE (0-0.4%): {positive_count - profitable_count}")
+                    
+                    # Auto-execute profitable opportunities if enabled
+                    if self.auto_trading and self.executor:
+                        auto_tradeable = [opp for opp in opportunities if opp.profit_percentage >= 0.4]
+                        if auto_tradeable:
+                            self.logger.info(f"🤖 AUTO-TRADING: Found {len(auto_tradeable)} opportunities ≥0.4% profit")
+                            await self._auto_execute_opportunities(auto_tradeable)
+                        else:
+                            self.logger.info("🤖 Auto-trading enabled but no opportunities ≥ 0.4% found")
                 else:
                     self.logger.info("❌ No opportunities found in this scan")
                     
@@ -123,6 +141,81 @@ class MultiExchangeDetector:
             
             # Wait for the next scan
             await asyncio.sleep(interval_seconds)
+    
+    async def _auto_execute_opportunities(self, opportunities: List[ArbitrageResult]):
+        """Auto-execute profitable opportunities."""
+        if not self.executor or not opportunities:
+            return
+        
+        self.logger.info(f"🤖 AUTO-TRADING: Found {len(opportunities)} opportunities ≥0.4% profit")
+        
+        # Sort by profit (highest first)
+        opportunities.sort(key=lambda x: x.profit_percentage, reverse=True)
+        
+        # Execute top opportunities
+        for i, opportunity in enumerate(opportunities[:3]):  # Limit to top 3
+            try:
+                self.logger.info(f"🤖 Executing opportunity {i+1}/{min(3, len(opportunities))}: "
+                               f"{opportunity.exchange} {opportunity.profit_percentage:.4f}%")
+                
+                # Convert ArbitrageResult to ArbitrageOpportunity with proper parameters
+                from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
+                
+                # Extract triangle path properly
+                triangle_path = opportunity.triangle_path
+                if len(triangle_path) < 3:
+                    self.logger.error(f"❌ Invalid triangle path: {triangle_path}")
+                    continue
+                
+                base_currency = triangle_path[0]  # USDT
+                intermediate_currency = triangle_path[1]  # e.g., BTC
+                quote_currency = triangle_path[2]  # e.g., ETH
+                
+                # Create trade steps for USDT triangle
+                steps = [
+                    TradeStep(f"{intermediate_currency}/USDT", 'buy', opportunity.initial_amount, 1.0, opportunity.initial_amount),
+                    TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', 1.0, 1.0, 1.0),
+                    TradeStep(f"{quote_currency}/USDT", 'sell', 1.0, 1.0, opportunity.initial_amount * (1 + opportunity.profit_percentage/100))
+                ]
+                
+                # Create ArbitrageOpportunity with all required fields
+                arb_opportunity = ArbitrageOpportunity(
+                    exchange=opportunity.exchange,
+                    base_currency=base_currency,
+                    intermediate_currency=intermediate_currency,
+                    quote_currency=quote_currency,
+                    pair1=f"{intermediate_currency}/USDT",
+                    pair2=f"{intermediate_currency}/{quote_currency}",
+                    pair3=f"{quote_currency}/USDT",
+                    steps=steps,
+                    initial_amount=opportunity.initial_amount,
+                    final_amount=opportunity.initial_amount + opportunity.profit_amount,
+                    estimated_fees=0.0,
+                    estimated_slippage=0.0,
+                    net_profit=opportunity.profit_amount,
+                    profit_percentage=opportunity.profit_percentage,
+                    profit_amount=opportunity.profit_amount,
+                    status=OpportunityStatus.DETECTED
+                )
+                
+                # Set the triangle path as string for display
+                arb_opportunity.triangle_path = " → ".join(triangle_path)
+                
+                # Execute the trade
+                success = await self.executor.execute_arbitrage(arb_opportunity)
+                if success:
+                    self.logger.info(f"✅ Auto-trade executed successfully: {opportunity.profit_percentage:.4f}% profit")
+                else:
+                    self.logger.warning(f"❌ Auto-trade failed for {opportunity.profit_percentage:.4f}% opportunity")
+                    
+                # Wait between executions to avoid rate limiting
+                await asyncio.sleep(2)
+                
+            except Exception as e:
+                self.logger.error(f"❌ Error in auto-execution: {e}")
+                self.logger.error(f"   Opportunity data: exchange={opportunity.exchange}, profit={opportunity.profit_percentage:.4f}%")
+                import traceback
+                self.logger.error(f"   Full traceback: {traceback.format_exc()}")
     
     def _build_usdt_triangles(self, pairs: List[str], exchange_id: str) -> List[List[str]]:
         """Build USDT-based triangular paths: USDT → Currency1 → Currency2 → USDT"""
@@ -185,7 +278,6 @@ class MultiExchangeDetector:
         """Get valid currencies for specific exchange"""
         if exchange_id == 'gate':
             return {
-                # Major cryptocurrencies (high volume, good liquidity)
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
@@ -197,109 +289,76 @@ class MultiExchangeDetector:
                 'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
                 'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI',
                 'MAGIC', 'TRY', 'VOXEL', 'GMT', 'APE', 'GALA', 'SAND', 'MANA', 'ENJ', 'AXS',
-                # Additional popular tokens for more opportunities
                 'JASMY', 'LUNC', 'USTC', 'LUNA', 'ROSE', 'MINA', 'FLOW', 'ICP', 'EGLD', 'KLAY',
-                'WAVES', 'ONE', 'HARMONY', 'CELO', 'ZEN', 'DASH', 'DCR', 'DGB', 'RVN', 'BTG',
+                'WAVES', 'ONE', 'HARMONEY', 'CELO', 'ZEN', 'DASH', 'DCR', 'DGB', 'RVN', 'BTG',
                 'QTUM', 'NEO', 'GAS', 'ONT', 'VET', 'VTHO', 'IOTA', 'MIOTA', 'XEM', 'XYM',
                 'SC', 'ZIL', 'STEEM', 'SBD', 'HIVE', 'HBD', 'LSK', 'ARK', 'STRAT', 'NAV',
                 'PIVX', 'PART', 'BLK', 'VIA', 'XVG', 'DOGE', 'LTC', 'BCH', 'BSV', 'BTG',
-                # DeFi and yield farming tokens
                 'CAKE', 'BAKE', 'AUTO', 'ALPACA', 'BELT', 'BUNNY', 'EPS', 'XVS', 'VAI', 'SXP',
                 'HARD', 'KAVA', 'SWP', 'USDX', 'BNX', 'TLM', 'ALICE', 'CHR', 'PYR', 'SUPER',
                 'ILV', 'GODS', 'GALA', 'SAND', 'MANA', 'ENJ', 'AXS', 'SLP', 'YGG', 'SKILL',
-                # Layer 1 and Layer 2 tokens
                 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'MOVR', 'GLMR',
                 'METIS', 'BOBA', 'LRC', 'IMX', 'DYDX', 'GMX', 'GNS', 'GAINS', 'JOE', 'PNG',
-                # Meme coins and community tokens
                 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
                 'BABYDOGE', 'KISHU', 'ELON', 'AKITA', 'HOKK', 'LEASH', 'BONE', 'RYOSHI', 'MONONOKE',
-                # AI and Web3 tokens
                 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
                 'RNDR', 'THETA', 'TFUEL', 'LPT', 'GRT', 'API3', 'BAND', 'TRB', 'DIA', 'LINK',
-                # Gaming and NFT tokens
                 'AXS', 'SLP', 'YGG', 'SKILL', 'GALA', 'SAND', 'MANA', 'ENJ', 'CHR', 'PYR',
                 'SUPER', 'ILV', 'GODS', 'ALICE', 'TLM', 'WAX', 'WAXP', 'DPET', 'RACA', 'HERO',
-                # Privacy coins
                 'XMR', 'ZEC', 'DASH', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT',
                 'KEEP', 'DUSK', 'BEAM', 'GRIN', 'FIRO', 'PIVX', 'NAV', 'XVG', 'PART', 'ARRR',
-                # Exchange tokens
                 'BNB', 'HT', 'OKB', 'LEO', 'GT', 'MX', 'KCS', 'CRO', 'FTT', 'BGB',
                 'WBT', 'PROB', 'CET', 'BIT', 'LBK', 'XT', 'DFT', 'BIKI', 'ZB', 'TOP',
-                # Stablecoins and pegged assets
                 'USDC', 'BUSD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ', 'USDD',
                 'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'HUSD', 'USDK', 'EURS', 'EURT', 'XSGD', 'IDRT',
-                # Real-world assets and commodities
                 'PAXG', 'XAUT', 'DGX', 'CACHE', 'PMGT', 'GOLD', 'SILVER', 'OIL', 'GAS', 'WHEAT',
-                # Cross-chain and bridge tokens
                 'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
                 'POLY', 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'METIS'
             }
         elif exchange_id == 'kucoin':
             return {
-                # Major cryptocurrencies (high volume, good liquidity)
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'KCS',  # KuCoin's native token
-                # Additional major cryptocurrencies
+                'KCS',
                 'ETC', 'BCH', 'EOS', 'XLM', 'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX',
                 'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO',
-                # Stablecoins
                 'USDD', 'TUSD', 'DAI', 'PAX', 'BUSD', 'HUSD', 'USDK', 'FRAX',
-                # DeFi tokens
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
                 'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
-                # NFT/Gaming tokens (high volatility for arbitrage)
                 'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
                 'ALICE', 'TLM', 'CHR', 'PYR', 'SUPER', 'GODS', 'SKILL', 'DPET', 'RACA', 'HERO',
-                # AI/Web3 tokens
                 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
                 'RNDR', 'THETA', 'TFUEL', 'LPT', 'GRT', 'API3', 'BAND', 'TRB', 'DIA', 'LINK',
-                # Meme coins (high volatility for arbitrage)
                 'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS', 'WEN',
                 'BABYDOGE', 'KISHU', 'ELON', 'AKITA', 'HOKK', 'LEASH', 'BONE', 'RYOSHI', 'SAFEMOON',
-                # Layer 2/Rollups
                 'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG', 'DUSK', 'L2', 'ORBS', 'COTI',
                 'LRC', 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'MOVR',
-                # Oracles
                 'TRB', 'BAND', 'DIA', 'API3', 'PHA', 'NEST', 'UMA', 'LINK', 'DOT', 'OCEAN',
-                # Privacy coins
                 'XMR', 'ZEN', 'SCRT', 'MOB', 'MINA', 'ROSE', 'PHA', 'OXT', 'KEEP', 'DUSK',
                 'BEAM', 'GRIN', 'FIRO', 'PIVX', 'NAV', 'XVG', 'PART', 'ARRR', 'ZEC', 'DASH',
-                # Exchange tokens
                 'HT', 'OKB', 'LEO', 'GT', 'MX', 'BNB', 'CRO', 'FTT', 'KCS', 'BGB',
                 'WBT', 'PROB', 'CET', 'BIT', 'LBK', 'XT', 'DFT', 'BIKI', 'ZB', 'TOP',
-                # Real-world assets
                 'CFG', 'LCX', 'PRO', 'IXS', 'LAND', 'MPL', 'GFI', 'TRU', 'RSR', 'OUSD',
                 'PAXG', 'XAUT', 'DGX', 'CACHE', 'PMGT', 'GOLD', 'SILVER', 'OIL', 'GAS', 'WHEAT',
-                # New listings (high volatility)
                 'JUP', 'PYTH', 'JTO', 'W', 'ENA', 'TNSR', 'ZEUS', 'PORTAL', 'MAVIA', 'STRK',
                 'PIXEL', 'ALT', 'MANTA', 'DYM', 'PRIME', 'RONIN', 'SAVM', 'OMNI', 'REZ', 'BB',
-                # AI and Big Data
                 'RNDR', 'AKT', 'PAAL', 'AIT', 'TAO', 'NFP', 'AGIX', 'FET', 'OCEAN', 'NMR',
                 'RLC', 'CTXC', 'PHB', 'DATA', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'PHB', 'DATA',
-                # Liquid Staking
                 'LDO', 'SWISE', 'RPL', 'ANKR', 'FIS', 'STAKE', 'SD', 'PSTAKE', 'STG', 'BIFI',
                 'RETH', 'STETH', 'CBETH', 'WSTETH', 'FRXETH', 'SFRXETH', 'SWETH', 'OSETH',
-                # Bridges
                 'STG', 'SYN', 'MULTI', 'CELR', 'CKB', 'REN', 'ANY', 'HOP', 'MOVR', 'GLMR',
                 'POLY', 'MATIC', 'AVAX', 'FTM', 'ONE', 'CELO', 'NEAR', 'AURORA', 'ROSE', 'METIS',
-                # Additional popular tokens
                 'INJ', 'SEI', 'TIA', 'SUI', 'ORDI', '1000SATS', 'RATS', 'BOME', 'WLD', 'JASMY',
                 'LUNC', 'USTC', 'LUNA', 'ROSE', 'MINA', 'FLOW', 'ICP', 'EGLD', 'KLAY', 'WAVES',
-                # Metaverse
                 'HIGH', 'GALA', 'TLM', 'DG', 'TVK', 'ALICE', 'SAND', 'MANA', 'ENJ', 'SLP',
                 'MAGIC', 'TREASURE', 'JEWEL', 'DFK', 'CRYSTAL', 'DFKTEARS', 'JADE', 'GOLD',
-                # Additional stablecoins
                 'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
                 'EURS', 'EURT', 'XSGD', 'IDRT', 'BIDR', 'BKRW', 'VAI', 'UST', 'TERRA', 'LUNC',
-                # Additional DeFi
                 'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
                 'RDNT', 'ARB', 'GMX', 'GNS', 'GAINS', 'JOE', 'PNG', 'XAVA', 'QI', 'BENQI',
-                # Additional gaming
                 'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
                 'SKILL', 'DPET', 'RACA', 'HERO', 'NFTB', 'TOWER', 'ETERNAL', 'WARS', 'KNIGHT',
-                # Additional AI
                 'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC',
                 'PHB', 'DATA', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'PHB', 'DATA', 'OCEAN', 'NMR'
             }
@@ -308,7 +367,6 @@ class MultiExchangeDetector:
                 'BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'BUSD', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                # Additional Binance currencies
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
                 'LRC', 'UMA', 'OCEAN', 'RSR', 'CVC', 'NMR', 'REP', 'LPT', 'BADGER', 'MLN',
                 'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
@@ -328,7 +386,7 @@ class MultiExchangeDetector:
                 'FDUSD', 'PYUSD', 'USDP', 'GUSD', 'LUSD', 'FRAX', 'MIM', 'USTC', 'USDJ', 'USDD',
                 'FXS', 'CVX', 'SPELL', 'ICE', 'TIME', 'TOKE', 'ALCX', 'KP3R', 'BTRFLY', 'PENDLE',
                 'GODS', 'VRA', 'ILV', 'GHST', 'CGG', 'REVV', 'DERC', 'MC', 'CRA', 'GF',
-                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC'
+                'NFP', 'PAAL', 'AIT', 'TAO', 'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC',
                 'AAVE', 'COMP', 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX'
             }
         elif exchange_id == 'bybit':
@@ -356,7 +414,6 @@ class MultiExchangeDetector:
                 'CRO', 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE'
             }
         else:
-            # Default major currencies
             return {
                 'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
@@ -502,29 +559,40 @@ class MultiExchangeDetector:
             # Apply realistic trading costs
             exchange_config = SUPPORTED_EXCHANGES.get(exchange_id, {})
             
-            # Get actual fees for this exchange
-            maker_fee = exchange_config.get('maker_fee', 0.001)  # Default 0.1%
-            taker_fee = exchange_config.get('taker_fee', 0.001)  # Default 0.1%
-            
-            # Check for fee token discount
-            fee_discount = exchange_config.get('fee_discount', 0.0)
-            if fee_discount > 0:
-                # Apply fee token discount
-                actual_fee = taker_fee * (1 - fee_discount)
+            # FIXED: Get optimized fees for KuCoin
+            if exchange_id == 'kucoin':
+                # KuCoin with KCS discount: 0.05% per trade
+                maker_fee = exchange_config.get('maker_fee_with_token', 0.0005)
+                taker_fee = exchange_config.get('taker_fee_with_token', 0.0005)
+                slippage_percentage = 0.005  # 0.005% ultra-low slippage for KuCoin
+                self.logger.debug(f"🔧 KuCoin optimized fees: {taker_fee*100:.3f}% per trade")
+            elif exchange_id == 'gate':
+                # Gate.io with GT discount
+                maker_fee = exchange_config.get('maker_fee_with_token', 0.0009)
+                taker_fee = exchange_config.get('taker_fee_with_token', 0.0009)
+                slippage_percentage = 0.01  # 0.01% slippage for Gate.io
             else:
-                actual_fee = taker_fee
+                # Default fees
+                maker_fee = exchange_config.get('maker_fee', 0.001)
+                taker_fee = exchange_config.get('taker_fee', 0.001)
+                slippage_percentage = 0.02  # 0.02% default slippage
+            
+            # Use taker fee for market orders
+            actual_fee = taker_fee
             
             # Total costs: 3 trades × fee + slippage
             total_fee_percentage = actual_fee * 3 * 100  # Convert to percentage
-            slippage_percentage = 0.02  # Reduced slippage for more opportunities
             total_costs_percentage = total_fee_percentage + slippage_percentage
+            
+            self.logger.debug(f"💰 {exchange_id} costs: fees={total_fee_percentage:.3f}% + slippage={slippage_percentage:.3f}% = {total_costs_percentage:.3f}%")
             
             # FIXED: Net profit calculation
             net_profit_percentage = gross_profit_percentage - total_costs_percentage
             net_profit_usdt = initial_usdt * (net_profit_percentage / 100)
             
-            # Only return opportunities that are 0% or positive
-            if net_profit_percentage < 0.0:
+            # FIXED: For KuCoin, lower the threshold to find more opportunities
+            min_threshold = -0.1 if exchange_id == 'kucoin' else 0.0
+            if net_profit_percentage < min_threshold:
                 return None
             
             # Create result with FIXED values

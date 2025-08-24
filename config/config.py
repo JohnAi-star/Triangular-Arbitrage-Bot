@@ -47,7 +47,7 @@ class Config:
         }
 
     # Core Trading Parameters
-    MIN_PROFIT_THRESHOLD: float = 0.4      # 0.4% threshold for auto-trading (fixed)
+    MIN_PROFIT_THRESHOLD: float = 0.4      # 0.4% threshold for auto-trading
     MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (enforced limit)
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
     # Triangle generation limits
@@ -64,7 +64,7 @@ class Config:
     TARGET_OPPORTUNITY_COUNT: int = 400  # Target 400 opportunities (300-500 range)
 
     # Runtime Feature Flags (defaulted to avoid crash)
-    AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'false').lower() == 'true'
+    AUTO_TRADING_MODE: bool = os.getenv('AUTO_TRADING_MODE', 'true').lower() == 'true'  # Enable auto-trading by default
     ENABLE_MANUAL_CONFIRMATION: bool = os.getenv('ENABLE_MANUAL_CONFIRMATION', 'false').lower() == 'true'
     PAPER_TRADING: bool = False  # 🔴 ALWAYS REAL TRADING - NO PAPER TRADING
     LIVE_TRADING: bool = True    # 🔴 ENFORCE LIVE TRADING WITH REAL MONEY
@@ -75,6 +75,10 @@ class Config:
     SCAN_PROFITABLE_ONLY: bool = False   # Show 0% opportunities too
     FILTER_NEGATIVE_OPPORTUNITIES: bool = True  # Filter out negative opportunities (keep only 0% and positive)
     MANUAL_EXECUTION_MODE: bool = True    # Allow manual execution of any opportunity
+    
+    # Auto-trading execution settings
+    AUTO_EXECUTE_ABOVE_THRESHOLD: bool = True  # Auto-execute opportunities above threshold
+    AUTO_EXECUTE_DELAY_SECONDS: int = 2        # Delay between auto-executions
 
     # Slippage and Order Risk
     MAX_SLIPPAGE_PERCENTAGE: float = 0.05
