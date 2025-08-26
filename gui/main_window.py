@@ -12,6 +12,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pandas as pd
+from models import arbitrage_opportunity
 from utils.websocket_manager import WebSocketManager
 from utils.trade_logger import get_trade_logger
 
@@ -190,7 +191,7 @@ class ArbitrageBotGUI:
         
         # Min profit setting
         ctk.CTkLabel(settings_frame, text="Min Profit %:").pack()
-        self.min_profit_var = tk.DoubleVar(value=0.5)
+        self.min_profit_var = tk.DoubleVar(value=0.4)  # Optimized to 0.4%
         self.min_profit_entry = ctk.CTkEntry(settings_frame, textvariable=self.min_profit_var, width=80)
         self.min_profit_entry.configure(state="normal")  # Allow changes
         self.min_profit_entry.pack(pady=2)
@@ -437,7 +438,7 @@ class ArbitrageBotGUI:
                             opp.triangle_path[0] == 'USDT')  # Only USDT triangles
                     ]
                     
-                    if profitable_opportunities:
+                    for i, opportunity in enumerate(profitable_opportunities[:1]):  # Execute top 1 at a time
                         self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable USDT opportunities (≥0.5%)")
                         
                         for i, opportunity in enumerate(profitable_opportunities[:2]):  # Execute top 2
