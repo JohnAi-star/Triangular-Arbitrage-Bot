@@ -445,27 +445,28 @@ class ArbitrageBotGUI:
                     if profitable_opportunities:
                         self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable USDT opportunities (≥0.4%)")
                         
-                        for i, opportunity in enumerate(profitable_opportunities[:2]):  # Execute top 2
+                        for i, opportunity in enumerate(profitable_opportunities[:1]):  # Execute top 1 for speed
                             try:
-                                self.logger.info(f"🚀 AUTO-EXECUTING USDT Trade #{i+1}: {opportunity}")
+                                self.logger.info(f"⚡ FAST AUTO-EXECUTING USDT Trade #{i+1}: {opportunity}")
                                 
                                 # Convert ArbitrageResult to proper format for execution
                                 try:
                                     executable_opportunity = self._convert_result_to_opportunity(opportunity)
+                                    # ⚡ SPEED OPTIMIZATION: Execute immediately without delay
                                     success = await self.executor.execute_arbitrage(executable_opportunity)
                                 except Exception as convert_error:
                                     self.logger.error(f"❌ Failed to convert opportunity: {convert_error}")
                                     continue
                                 
                                 if success:
-                                    self.add_to_trading_history(f"✅ AUTO-TRADE SUCCESS: {opportunity}")
-                                    self.logger.info(f"✅ Auto-trade #{i+1} completed successfully!")
+                                    self.add_to_trading_history(f"⚡ FAST AUTO-TRADE SUCCESS: {opportunity}")
+                                    self.logger.info(f"⚡ Fast auto-trade #{i+1} completed successfully!")
                                 else:
                                     self.add_to_trading_history(f"❌ AUTO-TRADE FAILED: {opportunity}")
                                     self.logger.error(f"❌ Auto-trade #{i+1} failed")
                                     
-                                # Wait between trades
-                                await asyncio.sleep(2)
+                                # ⚡ REDUCED wait time for faster execution
+                                await asyncio.sleep(0.5)
                                 
                             except Exception as e:
                                 self.logger.error(f"❌ Error in auto-execution #{i+1}: {e}")
@@ -473,7 +474,7 @@ class ArbitrageBotGUI:
                     else:
                         self.logger.debug(f"🤖 AUTO-TRADING: No profitable opportunities found (need ≥0.4% profit)")
                 
-                await asyncio.sleep(1)  # Scan every second
+                await asyncio.sleep(0.5)  # ⚡ FASTER scanning - every 0.5 seconds
                 
             except Exception as e:
                 self.logger.error(f"Error in bot main loop: {e}")

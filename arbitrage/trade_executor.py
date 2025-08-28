@@ -47,9 +47,9 @@ class TradeExecutor:
         
         # Add min_profit_threshold from config
         from config.config import Config
-        self.min_profit_threshold = Config.MIN_PROFIT_THRESHOLD
+        self.min_profit_threshold = 0.3  # ⚡ LOWERED threshold for faster execution
         
-        self.logger.info(f"✅ TradeExecutor initialized with profit threshold: {self.min_profit_threshold}%")
+        self.logger.info(f"⚡ TradeExecutor initialized with FAST profit threshold: {self.min_profit_threshold}%")
         
         # Log trading mode clearly
         trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
@@ -140,7 +140,7 @@ class TradeExecutor:
     async def _validate_triangle_before_execution(self, opportunity, exchange, exchange_id: str) -> bool:
         """Validate the entire triangle before starting execution to prevent losses."""
         try:
-            self.logger.info("🔍 PRE-EXECUTION VALIDATION: Checking USDT triangle feasibility...")
+            self.logger.info("⚡ FAST VALIDATION: Checking USDT triangle with FRESH prices...")
             
             # Extract triangle path properly
             triangle_path = getattr(opportunity, 'triangle_path', None)
@@ -235,7 +235,7 @@ class TradeExecutor:
                 use_direct_pair2 = False
             
             # Validate all tickers have proper data
-            self.logger.info(f"🔍 Market data validation:")
+            self.logger.info(f"⚡ FRESH market data validation:")
             self.logger.info(f"   {pair1}: {bool(ticker1 and ticker1.get('bid') and ticker1.get('ask'))}")
             self.logger.info(f"   {pair2 if use_direct_pair2 else alt_pair2}: {bool(ticker2 and ticker2.get('bid') and ticker2.get('ask'))}")
             self.logger.info(f"   {pair3}: {bool(ticker3 and ticker3.get('bid') and ticker3.get('ask'))}")
@@ -244,21 +244,25 @@ class TradeExecutor:
                 self.logger.error("❌ Missing market data - aborting execution to prevent loss")
                 return False
             
-            # Simulate the entire triangle with current prices
+            # ⚡ CRITICAL: Use FRESH prices for validation (not stale opportunity prices)
             start_usdt = opportunity.initial_amount
             
-            # Step 1: USDT → intermediate (buy intermediate with USDT)
+            # Step 1: USDT → intermediate (buy intermediate with USDT) - FRESH PRICE
             price1 = ticker1.get('ask', 0)  # Buy at ask
             amount_intermediate = start_usdt / price1
             
-            # Step 2: intermediate → quote (sell intermediate for quote)
-            price2 = ticker2.get('bid', 0)  # Sell at bid
-            amount_quote = amount_intermediate * price2
+            # Step 2: intermediate → quote - FRESH PRICE
+            if use_direct_pair2:
+                price2 = ticker2.get('bid', 0)  # Sell at bid
+                amount_quote = amount_intermediate * price2
+            else:
+                price2 = ticker2.get('ask', 0)  # Buy at ask
+                amount_quote = amount_intermediate / price2
             
             # Calculate USD value of step 2
             step2_usd_value = amount_quote * ticker3.get('last', ticker3.get('bid', 0))
             
-            self.logger.info(f"🔍 Triangle validation:")
+            self.logger.info(f"⚡ FRESH triangle validation:")
             self.logger.info(f"   Step 1: ${start_usdt:.2f} USDT → {amount_intermediate:.6f} {intermediate_currency}")
             self.logger.info(f"   Step 2: {amount_intermediate:.6f} {intermediate_currency} → {amount_quote:.6f} {quote_currency}")
             self.logger.info(f"   Step 2 USD value: ${step2_usd_value:.2f}")
@@ -270,23 +274,26 @@ class TradeExecutor:
                 self.logger.error(f"❌ This triangle would fail at step 2 - preventing execution to avoid loss")
                 return False
             
-            # Step 3: quote → USDT (sell quote for USDT)
+            # Step 3: quote → USDT (sell quote for USDT) - FRESH PRICE
             price3 = ticker3.get('bid', 0)  # Sell at bid
             final_usdt = amount_quote * price3
             
-            # Calculate actual profit with current prices
+            # ⚡ Calculate FRESH profit with CURRENT prices
             actual_profit = final_usdt - start_usdt
             actual_profit_pct = (actual_profit / start_usdt) * 100
             
             self.logger.info(f"   Step 3: {amount_quote:.6f} {quote_currency} → ${final_usdt:.2f} USDT")
-            self.logger.info(f"   Actual profit with current prices: {actual_profit_pct:.4f}%")
+            self.logger.info(f"   ⚡ FRESH profit with CURRENT prices: {actual_profit_pct:.4f}%")
             
-            # Validate actual profit is still above threshold
-            if actual_profit_pct < 0.5:
-                self.logger.error(f"❌ TRIANGLE REJECTED: Actual profit {actual_profit_pct:.4f}% < 0.5% threshold")
+            # ⚡ LOWERED threshold for fresh price validation (allow small price movements)
+            fresh_price_threshold = 0.1  # Only 0.1% minimum for fresh prices
+            if actual_profit_pct < fresh_price_threshold:
+                self.logger.error(f"❌ TRIANGLE REJECTED: Fresh profit {actual_profit_pct:.4f}% < {fresh_price_threshold}% threshold")
+                self.logger.error(f"   Original opportunity: {opportunity.profit_percentage:.4f}% → Fresh: {actual_profit_pct:.4f}%")
+                self.logger.error(f"   Price movement made opportunity unprofitable")
                 return False
             
-            self.logger.info(f"✅ TRIANGLE VALIDATION PASSED: All steps meet requirements")
+            self.logger.info(f"✅ FRESH VALIDATION PASSED: {actual_profit_pct:.4f}% profit confirmed with current prices")
             return True
             
         except Exception as e:
