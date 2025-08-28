@@ -137,20 +137,31 @@ class TradeExecutor:
             self.logger.error(f"Error getting market price for {symbol}: {e}")
             return 0.0
     
-    async def _validate_triangle_before_execution(self, opportunity, exchange) -> bool:
+    async def _validate_triangle_before_execution(self, opportunity, exchange, exchange_id: str) -> bool:
         """Validate the entire triangle before starting execution to prevent losses."""
         try:
             self.logger.info("🔍 PRE-EXECUTION VALIDATION: Checking USDT triangle feasibility...")
             
             # Extract triangle path properly
-            triangle_path = getattr(opportunity, 'triangle_path', [])
+            triangle_path = getattr(opportunity, 'triangle_path', None)
             
             # Handle different triangle_path formats
             if isinstance(triangle_path, str):
-                # Handle string format like "USDT → FDUSD → SCR → USDT"
-                path_parts = triangle_path.split(' → ')
+                # Handle string format like "USDT → BTC → RLC → USDT" or "USDT -> BTC -> RLC -> USDT"
+                if ' → ' in triangle_path:
+                    path_parts = triangle_path.split(' → ')
+                elif ' -> ' in triangle_path:
+                    path_parts = triangle_path.split(' -> ')
+                else:
+                    # Try splitting by spaces and filter out arrows
+                    path_parts = [part.strip() for part in triangle_path.split() if part.strip() not in ['→', '->']]
+                
                 if len(path_parts) >= 3:
-                    triangle_path = path_parts[:3]  # Take first 3: [USDT, CYBER, TRY]
+                    # For 4-part path like "USDT → BTC → RLC → USDT", take first 3 currencies
+                    if len(path_parts) == 4 and path_parts[0] == path_parts[3]:
+                        triangle_path = path_parts[:3]  # [USDT, BTC, RLC]
+                    else:
+                        triangle_path = path_parts[:3]  # Take first 3
                     self.logger.info(f"✅ Parsed string path: {' → '.join(triangle_path)}")
                 else:
                     self.logger.error(f"❌ Invalid string triangle format: {triangle_path}")
@@ -178,14 +189,18 @@ class TradeExecutor:
                 self.logger.error("   Only USDT → Currency1 → Currency2 → USDT triangles are allowed")
                 return False
             # Get valid currencies for the specific exchange
-            exchange_id = getattr(opportunity, 'exchange', 'unknown')
+            # Use the passed exchange_id parameter instead of trying to get it from opportunity
             valid_currencies = self._get_valid_currencies_for_exchange(exchange_id)
+            
+            self.logger.info(f"🔍 Validating currencies for {exchange_id}: {triangle_path}")
             
             for currency in triangle_path:
                 if currency not in valid_currencies:
                     self.logger.error(f"❌ INVALID CURRENCY: {currency} not available on {exchange_id}")
                     self.logger.error(f"   Valid currencies: {sorted(list(valid_currencies))[:20]}...")
                     return False
+            
+            self.logger.info(f"✅ All currencies valid for {exchange_id}: {' → '.join(triangle_path)}")
             
             # Ensure we have exactly 3 currencies
             base_currency = triangle_path[0]  # USDT
@@ -282,14 +297,50 @@ class TradeExecutor:
         """Get valid currencies for specific exchange"""
         if exchange_id == 'kucoin':
             return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'KCS', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                # Major cryptocurrencies (high volume, good liquidity)
+                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
                 'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
-                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
-                'PENDLE', 'RNDR', 'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD'
+                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS', 'XTZ', 'DASH',
+                'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA',
+                'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB', 'PENDLE', 'RNDR',
+                'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD', 'KCS', 'ONE', 'CYBER',
+                
+                # Stablecoins and USD pairs
+                'USDD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ', 'FDUSD',
+                
+                # DeFi tokens (often have good arbitrage opportunities)
+                'CAKE', 'ALPHA', 'AUTO', 'BAKE', 'BELT', 'BUNNY', 'CHESS', 'CTK', 'DEGO',
+                'EPS', 'FOR', 'HARD', 'HELMET', 'LINA', 'LIT', 'MASK', 'MIR', 'NULS',
+                'OG', 'PHA', 'POLS', 'PUNDIX', 'RAMP', 'REEF', 'SFP', 'SPARTA', 'SXP',
+                'TKO', 'TWT', 'UNFI', 'VAI', 'VIDT', 'WRX', 'XVS', 'DYDX', 'GALA',
+                
+                # New and trending tokens (higher volatility = more arbitrage)
+                'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'ORDI', 'SATS', '1000SATS', 'RATS',
+                'MEME', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI', 'SCR', 'EIGEN', 'HMSTR',
+                'CATI', 'NEIRO', 'CYBER', 'BLUR', 'SUI', 'APT', 'MOVE', 'USUAL', 'PENGU',
+                
+                # Gaming and metaverse tokens
+                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
+                'ALICE', 'TLM', 'CHR', 'PYR', 'SKILL', 'TOWER', 'UFO', 'NFTB', 'REVV',
+                
+                # AI and tech tokens
+                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
+                'RNDR', 'LPT', 'LIVEPEER', 'THETA', 'TFUEL', 'VRA', 'ANKR', 'STORJ',
+                
+                # Layer 2 and scaling solutions
+                'MATIC', 'ARB', 'OP', 'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG',
+                'LRC', 'ZKS', 'DUSK', 'L2', 'ORBS', 'COTI', 'CTSI', 'CARTESI',
+                
+                # Meme coins (high volatility)
+                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS',
+                'WEN', 'MYRO', 'POPCAT', 'MEW', 'MOTHER', 'DADDY', 'SIGMA', 'RETARDIO',
+                
+                # Additional high-volume tokens
+                'NEAR', 'ROSE', 'ONE', 'HARMONY', 'CELO', 'KLAY', 'FLOW', 'EGLD', 'ELROND',
+                'AVAX', 'LUNA', 'LUNC', 'USTC', 'ATOM', 'OSMO', 'JUNO', 'SCRT', 'REGEN',
+                'STARS', 'HUAHUA', 'CMDX', 'CRE', 'XPRT', 'NGM', 'IOV', 'BOOT', 'CHEQ'
             }
         elif exchange_id == 'gate':
             return {
@@ -302,19 +353,22 @@ class TradeExecutor:
                 'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
                 'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
                 'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
-                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI'
+                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI',
+                'ONE', 'AR'  # Add the missing currencies that were causing failures
             }
         elif exchange_id == 'binance':
             return {
                 'BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'BUSD', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP'
+                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
+                'INJ', 'ONE', 'AR'  # Add missing currencies
             }
         else:
             # Default major currencies
             return {
                 'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
+                'INJ', 'ONE', 'AR'  # Add missing currencies for all exchanges
             }
     
     def _get_exchange_minimum_order(self, exchange_id: str) -> float:
@@ -538,7 +592,7 @@ class TradeExecutor:
                 return False
         
         # CRITICAL: Validate entire triangle before execution
-        if not await self._validate_triangle_before_execution(opportunity, exchange):
+        if not await self._validate_triangle_before_execution(opportunity, exchange, exchange_id):
             self.logger.error("❌ TRIANGLE VALIDATION FAILED - Aborting to prevent loss")
             return False
         

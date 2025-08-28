@@ -441,7 +441,6 @@ class EnhancedTriangleDetector:
                                 trade_amount=trade_amount,
                                 execution_steps=[
                                     {'action': f"Buy {pair} on {best_buy['exchange']}", 'price': buy_price},
-                                    {'action': f"Transfer to {best_sell['exchange']}", 'cost': '0.1%'},
                                     {'action': f"Sell {pair} on {best_sell['exchange']}", 'price': sell_price}
                                 ],
                                 net_profit_after_fees=profit_amount,

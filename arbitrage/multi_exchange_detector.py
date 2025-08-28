@@ -52,12 +52,20 @@ class MultiExchangeDetector:
         self.config = config
         
         # Trading Limits
-        self.min_profit_pct = 0.5  # Fixed 0.5% threshold for Gate.io profitability
+        self.min_profit_pct = 0.4  # Fixed 0.5% threshold for Gate.io profitability
         self.max_trade_amount = min(20.0, float(config.get('max_trade_amount', 20.0)))  # $20 maximum for safety
         self.triangle_paths: Dict[str, List[List[str]]] = {}
         
         # Initialize real-time detector
         self.realtime_detector = RealtimeArbitrageDetector(
+            min_profit_pct=self.min_profit_pct,
+            max_trade_amount=self.max_trade_amount
+        )
+        
+        # Initialize enhanced detector
+        from arbitrage.enhanced_triangle_detector import EnhancedTriangleDetector
+        self.enhanced_detector = EnhancedTriangleDetector(
+            exchange_manager, 
             min_profit_pct=self.min_profit_pct,
             max_trade_amount=self.max_trade_amount
         )
@@ -70,7 +78,7 @@ class MultiExchangeDetector:
         self._last_ticker_time: Dict[str, float] = {}
         self._logged_messages = set()
         
-        self.logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: 0.5%, Max Trade: ${self.max_trade_amount}")
+        self.logger.info(f"💰 USDT TRIANGULAR ARBITRAGE Detector initialized - Min Profit: 0.4%, Max Trade: ${self.max_trade_amount}")
         self.logger.info(f"🎯 Target: USDT → Currency1 → Currency2 → USDT cycles only")
 
     async def initialize(self):
@@ -84,7 +92,7 @@ class MultiExchangeDetector:
             self.logger.info(f"🎯 Initializing simple detector for {primary_exchange}")
             
             self.simple_detector = SimpleTriangleDetector(
-                min_profit_pct=0.5,  # Fixed 0.5% for profitability
+                min_profit_pct=0.4,  # Fixed 0.4% for profitability
                 exchange_id=primary_exchange
             )
             
@@ -405,13 +413,13 @@ class MultiExchangeDetector:
                 for opp in enhanced_opportunities:
                     result = ArbitrageResult(
                         exchange=opp.exchange,
-                        triangle_path=opp.path,
+                        triangle_path=opp.path if isinstance(opp.path, list) else [opp.path],
                         profit_percentage=opp.profit_percentage,
                         profit_amount=opp.profit_amount,
                         initial_amount=opp.trade_amount,
                         net_profit_percent=opp.profit_percentage,
                         min_profit_threshold=self.min_profit_pct,
-                        is_tradeable=opp.is_executable,
+                        is_tradeable=(opp.profit_percentage >= 0.4),  # Auto-tradeable if ≥0.4%
                         balance_available=100.0,  # Assume sufficient balance
                         required_balance=opp.trade_amount
                     )
@@ -489,12 +497,17 @@ class MultiExchangeDetector:
         self.logger.info(f"📊 SCAN RESULTS (Duration: {scan_duration:.0f}ms):")
         self.logger.info(f"   Total opportunities found: {len(filtered_results)}")
         self.logger.info(f"   Exchange(s): {', '.join(connected_exchanges)}")
-        self.logger.info(f"   Ready for AUTO-TRADING execution")
+        
+        # Count profitable opportunities
+        profitable_count = len([r for r in filtered_results if r.profit_percentage >= 0.4])
+        self.logger.info(f"   Profitable opportunities (≥0.4%): {profitable_count}")
+        self.logger.info(f"   Ready for AUTO-TRADING execution: {profitable_count} opportunities")
         
         if len(filtered_results) > 0:
             self.logger.info(f"💎 Top opportunities:")
             for i, opp in enumerate(filtered_results[:5]):
-                self.logger.info(f"   {i+1}. {opp.exchange.upper()}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | Ready for AUTO-TRADE")
+                auto_status = "AUTO-TRADEABLE" if opp.profit_percentage >= 0.4 else "DISPLAY ONLY"
+                self.logger.info(f"   {i+1}. {opp.exchange.upper()}: {' → '.join(opp.triangle_path[:3])} = {opp.profit_percentage:.4f}% | {auto_status}")
         else:
             self.logger.info(f"   No opportunities found in current market conditions")
         
@@ -589,7 +602,7 @@ class MultiExchangeDetector:
                         initial_amount=max(5.0, min(20.0, trade_amount)),  # Gate.io: min $5, max $20
                         net_profit_percent=profit,
                         min_profit_threshold=self.min_profit_pct,
-                        is_tradeable=(profit >= 0.5),  # Only profitable ones are tradeable
+                        is_tradeable=(profit >= 0.4),  # Auto-tradeable if ≥0.4%
                         balance_available=0.0,  # Don't check balance
                         required_balance=max(5.0, min(20.0, trade_amount))  # Gate.io limits
                     )
@@ -598,10 +611,12 @@ class MultiExchangeDetector:
                     results.append(result)
                     
                     # Log opportunities with clear profit status
-                    if profit >= 0.5:
-                        self.logger.info(f"💚 PROFITABLE: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (TRADEABLE)")
+                    if profit >= 0.4:
+                        self.logger.info(f"💚 PROFITABLE: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (AUTO-TRADEABLE)")
+                    elif profit >= 0.2:
+                        self.logger.info(f"🟢 GOOD: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (close to profitable)")
                     elif profit >= 0:
-                        self.logger.info(f"🟡 LOW PROFIT: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (below 0.5%)")
+                        self.logger.info(f"🟡 LOW PROFIT: {base_currency}→{intermediate_currency}→{quote_currency} = +{profit:.4f}% (below 0.4%)")
                     else:
                         self.logger.info(f"🔴 LOSS: {base_currency}→{intermediate_currency}→{quote_currency} = {profit:.4f}% (not profitable)")
                 else:
@@ -611,13 +626,15 @@ class MultiExchangeDetector:
                 self.logger.debug(f"Error calculating triangle {base_currency}-{intermediate_currency}-{quote_currency}: {str(e)}")
         
         # Count profitable vs unprofitable
-        profitable_count = len([r for r in results if r.profit_percentage >= 0.5])
-        low_profit_count = len([r for r in results if 0 <= r.profit_percentage < 0.5])
+        profitable_count = len([r for r in results if r.profit_percentage >= 0.4])
+        good_count = len([r for r in results if 0.2 <= r.profit_percentage < 0.4])
+        low_profit_count = len([r for r in results if 0 <= r.profit_percentage < 0.2])
         loss_count = len([r for r in results if r.profit_percentage < 0])
         
         self.logger.info(f"✅ Found {len(results)} total opportunities on {ex.name}:")
-        self.logger.info(f"   💚 Profitable (≥0.5%): {profitable_count}")
-        self.logger.info(f"   🟡 Low profit (0-0.5%): {low_profit_count}")
+        self.logger.info(f"   💚 AUTO-TRADEABLE (≥0.4%): {profitable_count}")
+        self.logger.info(f"   🟢 Good (0.2-0.4%): {good_count}")
+        self.logger.info(f"   🟡 Low profit (0-0.2%): {low_profit_count}")
         self.logger.info(f"   🔴 Losses (<0%): {loss_count}")
         
         return results
