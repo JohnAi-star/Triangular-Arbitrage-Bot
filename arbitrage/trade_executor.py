@@ -140,43 +140,38 @@ class TradeExecutor:
     async def _validate_triangle_before_execution(self, opportunity, exchange, exchange_id: str) -> bool:
         """Validate the entire triangle before starting execution to prevent losses."""
         try:
-            self.logger.info("⚡ FAST VALIDATION: Checking USDT triangle with FRESH prices...")
+            self.logger.info("⚡ LIGHTNING VALIDATION: Checking USDT triangle with FRESH prices...")
             
             # Extract triangle path properly
             triangle_path = getattr(opportunity, 'triangle_path', None)
             
             # Handle different triangle_path formats
             if isinstance(triangle_path, str):
-                # Handle string format like "USDT → BTC → RLC → USDT" or "USDT -> BTC -> RLC -> USDT"
-                if ' → ' in triangle_path:
-                    path_parts = triangle_path.split(' → ')
-                elif ' -> ' in triangle_path:
-                    path_parts = triangle_path.split(' -> ')
-                else:
-                    # Try splitting by spaces and filter out arrows
-                    path_parts = [part.strip() for part in triangle_path.split() if part.strip() not in ['→', '->']]
+                # IMPROVED: Handle all possible string formats
+                import re
+                # Extract currencies using regex to handle any arrow format
+                currency_pattern = r'[A-Z0-9]+'
+                currencies = re.findall(currency_pattern, triangle_path)
                 
-                if len(path_parts) >= 3:
-                    # For 4-part path like "USDT → BTC → RLC → USDT", take first 3 currencies
-                    if len(path_parts) == 4 and path_parts[0] == path_parts[3]:
-                        triangle_path = path_parts[:3]  # [USDT, BTC, RLC]
-                    else:
-                        triangle_path = path_parts[:3]  # Take first 3
-                    self.logger.info(f"✅ Parsed string path: {' → '.join(triangle_path)}")
+                if len(currencies) >= 3:
+                    # Take first 3 unique currencies
+                    unique_currencies = []
+                    for curr in currencies:
+                        if curr not in unique_currencies:
+                            unique_currencies.append(curr)
+                    path_parts = unique_currencies[:3]
+                    self.logger.info(f"✅ Regex extracted currencies: {' → '.join(path_parts)}")
                 else:
-                    self.logger.error(f"❌ Invalid string triangle format: {triangle_path}")
+                    self.logger.error(f"❌ Could not extract currencies from: {triangle_path}")
                     return False
             elif isinstance(triangle_path, list):
-                # Handle list format
-                if len(triangle_path) >= 3:
-                    triangle_path = triangle_path[:3]  # Take first 3 currencies
-                    self.logger.info(f"✅ Using list path: {' → '.join(triangle_path)}")
-                else:
-                    self.logger.error(f"❌ Triangle path too short: {triangle_path}")
-                    return False
+                path_parts = triangle_path[:3]
+                self.logger.info(f"✅ Using list path: {' → '.join(path_parts)}")
             else:
                 self.logger.error(f"❌ Invalid triangle_path type: {type(triangle_path)}")
                 return False
+            
+            triangle_path = path_parts
             
             # CRITICAL: Validate we have exactly 3 currencies
             if not triangle_path or len(triangle_path) != 3:
@@ -188,8 +183,8 @@ class TradeExecutor:
                 self.logger.error(f"❌ SAFETY FILTER: Non-USDT triangle rejected: {' → '.join(triangle_path)}")
                 self.logger.error("   Only USDT → Currency1 → Currency2 → USDT triangles are allowed")
                 return False
+            
             # Get valid currencies for the specific exchange
-            # Use the passed exchange_id parameter instead of trying to get it from opportunity
             valid_currencies = self._get_valid_currencies_for_exchange(exchange_id)
             
             self.logger.info(f"🔍 Validating currencies for {exchange_id}: {triangle_path}")
@@ -197,25 +192,24 @@ class TradeExecutor:
             for currency in triangle_path:
                 if currency not in valid_currencies:
                     self.logger.error(f"❌ INVALID CURRENCY: {currency} not available on {exchange_id}")
-                    self.logger.error(f"   Valid currencies: {sorted(list(valid_currencies))[:20]}...")
                     return False
             
             self.logger.info(f"✅ All currencies valid for {exchange_id}: {' → '.join(triangle_path)}")
             
             # Ensure we have exactly 3 currencies
             base_currency = triangle_path[0]  # USDT
-            intermediate_currency = triangle_path[1]  # e.g., CYBER
-            quote_currency = triangle_path[2]  # e.g., TRY
+            intermediate_currency = triangle_path[1]  # e.g., LRC
+            quote_currency = triangle_path[2]  # e.g., BTC
             
             self.logger.info(f"🔍 Validating USDT triangle: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
             
             # Define the three pairs
-            pair1 = f"{intermediate_currency}/USDT"  # CYBER/USDT
-            pair2 = f"{intermediate_currency}/{quote_currency}"  # CYBER/TRY
-            pair3 = f"{quote_currency}/USDT"  # TRY/USDT
+            pair1 = f"{intermediate_currency}/USDT"  # LRC/USDT
+            pair2 = f"{intermediate_currency}/{quote_currency}"  # LRC/BTC
+            pair3 = f"{quote_currency}/USDT"  # BTC/USDT
             
             # Try alternative pair2 if direct doesn't exist
-            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # TRY/CYBER
+            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # BTC/LRC
             
             # Check which pairs exist and get market data
             self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
@@ -244,25 +238,36 @@ class TradeExecutor:
                 self.logger.error("❌ Missing market data - aborting execution to prevent loss")
                 return False
             
-            # ⚡ CRITICAL: Use FRESH prices for validation (not stale opportunity prices)
+            # ⚡ CRITICAL: Use FRESH prices for validation with REALISTIC execution
             start_usdt = opportunity.initial_amount
             
-            # Step 1: USDT → intermediate (buy intermediate with USDT) - FRESH PRICE
-            price1 = ticker1.get('ask', 0)  # Buy at ask
+            # Use realistic execution prices (mid-price + small execution cost)
+            def get_execution_price(ticker, side):
+                bid = float(ticker['bid'])
+                ask = float(ticker['ask'])
+                mid = (bid + ask) / 2
+                
+                if side == 'buy':
+                    return mid * 1.0005  # 0.05% above mid for buying
+                else:
+                    return mid * 0.9995  # 0.05% below mid for selling
+            
+            # Step 1: USDT → intermediate (buy intermediate with USDT)
+            price1 = get_execution_price(ticker1, 'buy')
             amount_intermediate = start_usdt / price1
             
-            # Step 2: intermediate → quote - FRESH PRICE
+            # Step 2: intermediate → quote
             if use_direct_pair2:
-                price2 = ticker2.get('bid', 0)  # Sell at bid
+                price2 = get_execution_price(ticker2, 'sell')
                 amount_quote = amount_intermediate * price2
             else:
-                price2 = ticker2.get('ask', 0)  # Buy at ask
+                price2 = get_execution_price(ticker2, 'buy')
                 amount_quote = amount_intermediate / price2
             
             # Calculate USD value of step 2
-            step2_usd_value = amount_quote * ticker3.get('last', ticker3.get('bid', 0))
+            step2_usd_value = amount_quote * float(ticker3.get('last', ticker3.get('bid', 0)))
             
-            self.logger.info(f"⚡ FRESH triangle validation:")
+            self.logger.info(f"⚡ REALISTIC triangle validation:")
             self.logger.info(f"   Step 1: ${start_usdt:.2f} USDT → {amount_intermediate:.6f} {intermediate_currency}")
             self.logger.info(f"   Step 2: {amount_intermediate:.6f} {intermediate_currency} → {amount_quote:.6f} {quote_currency}")
             self.logger.info(f"   Step 2 USD value: ${step2_usd_value:.2f}")
@@ -271,29 +276,27 @@ class TradeExecutor:
             min_order_value = self._get_exchange_minimum_order(exchange_id)
             if step2_usd_value < min_order_value:
                 self.logger.error(f"❌ TRIANGLE REJECTED: Step 2 value ${step2_usd_value:.2f} < ${min_order_value:.2f} {exchange_id} minimum")
-                self.logger.error(f"❌ This triangle would fail at step 2 - preventing execution to avoid loss")
                 return False
             
-            # Step 3: quote → USDT (sell quote for USDT) - FRESH PRICE
-            price3 = ticker3.get('bid', 0)  # Sell at bid
+            # Step 3: quote → USDT (sell quote for USDT)
+            price3 = get_execution_price(ticker3, 'sell')
             final_usdt = amount_quote * price3
             
-            # ⚡ Calculate FRESH profit with CURRENT prices
+            # ⚡ Calculate REALISTIC profit with CURRENT prices
             actual_profit = final_usdt - start_usdt
             actual_profit_pct = (actual_profit / start_usdt) * 100
             
             self.logger.info(f"   Step 3: {amount_quote:.6f} {quote_currency} → ${final_usdt:.2f} USDT")
-            self.logger.info(f"   ⚡ FRESH profit with CURRENT prices: {actual_profit_pct:.4f}%")
+            self.logger.info(f"   ⚡ REALISTIC profit with CURRENT prices: {actual_profit_pct:.4f}%")
             
-            # ⚡ LOWERED threshold for fresh price validation (allow small price movements)
-            fresh_price_threshold = 0.1  # Only 0.1% minimum for fresh prices
-            if actual_profit_pct < fresh_price_threshold:
-                self.logger.error(f"❌ TRIANGLE REJECTED: Fresh profit {actual_profit_pct:.4f}% < {fresh_price_threshold}% threshold")
-                self.logger.error(f"   Original opportunity: {opportunity.profit_percentage:.4f}% → Fresh: {actual_profit_pct:.4f}%")
-                self.logger.error(f"   Price movement made opportunity unprofitable")
+            # ⚡ LOWERED threshold for realistic price validation (allow small price movements)
+            realistic_price_threshold = 0.2  # Only 0.2% minimum for realistic prices
+            if actual_profit_pct < realistic_price_threshold:
+                self.logger.error(f"❌ TRIANGLE REJECTED: Realistic profit {actual_profit_pct:.4f}% < {realistic_price_threshold}% threshold")
+                self.logger.error(f"   Original opportunity: {opportunity.profit_percentage:.4f}% → Realistic: {actual_profit_pct:.4f}%")
                 return False
             
-            self.logger.info(f"✅ FRESH VALIDATION PASSED: {actual_profit_pct:.4f}% profit confirmed with current prices")
+            self.logger.info(f"✅ REALISTIC VALIDATION PASSED: {actual_profit_pct:.4f}% profit confirmed with current prices")
             return True
             
         except Exception as e:

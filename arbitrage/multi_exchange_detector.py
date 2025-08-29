@@ -405,30 +405,33 @@ class MultiExchangeDetector:
         
         # STEP 0: Use enhanced detector for better results
         try:
-            enhanced_opportunities = await self.enhanced_detector.find_profitable_opportunities()
-            if enhanced_opportunities:
-                self.logger.info(f"💎 Enhanced detector found {len(enhanced_opportunities)} opportunities!")
-                
-                # Convert to ArbitrageResult format
-                for opp in enhanced_opportunities:
-                    result = ArbitrageResult(
-                        exchange=opp.exchange,
-                        triangle_path=opp.path if isinstance(opp.path, list) else [opp.path],
-                        profit_percentage=opp.profit_percentage,
-                        profit_amount=opp.profit_amount,
-                        initial_amount=opp.trade_amount,
-                        net_profit_percent=opp.profit_percentage,
-                        min_profit_threshold=self.min_profit_pct,
-                        is_tradeable=(opp.profit_percentage >= 0.4),  # Auto-tradeable if ≥0.4%
-                        balance_available=100.0,  # Assume sufficient balance
-                        required_balance=opp.trade_amount
-                    )
-                    all_results.append(result)
+            if self.enhanced_detector:
+                enhanced_opportunities = await self.enhanced_detector.find_profitable_opportunities()
+                if enhanced_opportunities:
+                    self.logger.info(f"💎 Enhanced detector found {len(enhanced_opportunities)} opportunities!")
                     
-                    if opp.profit_percentage >= self.min_profit_pct:
-                        self.logger.info(f"💚 ENHANCED PROFITABLE: {opp}")
+                    # Convert to ArbitrageResult format
+                    for opp in enhanced_opportunities:
+                        result = ArbitrageResult(
+                            exchange=opp.exchange,
+                            triangle_path=opp.path if isinstance(opp.path, list) else [opp.path],
+                            profit_percentage=opp.profit_percentage,
+                            profit_amount=opp.profit_amount,
+                            initial_amount=opp.trade_amount,
+                            net_profit_percent=opp.profit_percentage,
+                            min_profit_threshold=self.min_profit_pct,
+                            is_tradeable=(opp.profit_percentage >= 0.4),  # Auto-tradeable if ≥0.4%
+                            balance_available=100.0,  # Assume sufficient balance
+                            required_balance=opp.trade_amount
+                        )
+                        all_results.append(result)
+                        
+                        if opp.profit_percentage >= self.min_profit_pct:
+                            self.logger.info(f"💚 ENHANCED PROFITABLE: {opp}")
+            else:
+                self.logger.info("ℹ️ Enhanced detector not available, using standard detection")
         except Exception as e:
-            self.logger.error(f"Enhanced detector error: {e}")
+            self.logger.warning(f"Enhanced detector error: {e}")
         
         # STEP 1: Get opportunities from simple detector for the SELECTED exchange
         if self.simple_detector and self.simple_detector.exchange_id in self.exchange_manager.exchanges:

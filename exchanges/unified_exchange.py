@@ -348,9 +348,9 @@ class UnifiedExchange(BaseExchange):
             # Extract order details
             order_id = order.get('id', 'Unknown')
             status = order.get('status', 'Unknown')
-            filled_qty = float(order.get('filled', 0))
-            avg_price = float(order.get('average', 0))
-            total_cost = float(order.get('cost', 0))
+            filled_qty = float(order.get('filled', 0) or 0)
+            avg_price = float(order.get('average', 0) or order.get('price', 0) or 0)
+            total_cost = float(order.get('cost', 0) or 0)
             
             # Extract fee information
             fee_info = order.get('fee', {})
@@ -358,7 +358,7 @@ class UnifiedExchange(BaseExchange):
             fee_currency = 'Unknown'
             
             if fee_info and isinstance(fee_info, dict):
-                fee_cost = float(fee_info.get('cost', 0))
+                fee_cost = float(fee_info.get('cost', 0) or 0)
                 fee_currency = fee_info.get('currency', 'Unknown')
             
             # Log comprehensive order details
