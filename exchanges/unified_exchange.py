@@ -158,7 +158,7 @@ class UnifiedExchange(BaseExchange):
             
             # Get server time from KuCoin using correct method
             try:
-                server_time_response = await self.exchange.public_get_timestamp()
+                server_time_response = await self.exchange.fetch_time()
                 server_time = int(server_time_response['data'])
             except AttributeError:
                 # Fallback method for KuCoin
@@ -346,6 +346,11 @@ class UnifiedExchange(BaseExchange):
             # Ensure time synchronization for KuCoin
             await self._ensure_time_sync()
             
+            # CRITICAL FIX: Round quantity to proper decimal precision for KuCoin
+            if self.exchange_id == 'kucoin':
+                qty = await self._round_to_kucoin_precision(symbol, qty)
+                self.logger.info(f"🔧 KuCoin precision fix: Rounded quantity to {qty:.8f}")
+            
             self.logger.info(f"🔴 EXECUTING REAL {self.exchange_id.upper()} ORDER:")
             self.logger.info(f"   Symbol: {symbol}")
             self.logger.info(f"   Side: {side.upper()}")
@@ -406,10 +411,10 @@ class UnifiedExchange(BaseExchange):
                         symbol=symbol,
                         type='market',
                         side='buy',
-                        amount=qty,  # USDT amount to spend
+                        amount=None,  # Don't specify amount for market buy
                         price=None,
                         params={
-                            'funds': str(qty),  # Use 'funds' parameter for market buy
+                            'funds': f"{qty:.2f}",  # CRITICAL FIX: Use 'funds' for USDT amount to spend
                             'timestamp': current_timestamp
                         }
                     )
@@ -423,7 +428,7 @@ class UnifiedExchange(BaseExchange):
                         amount=qty,
                         price=None,
                         params={
-                            'size': str(qty),  # Use 'size' parameter for market sell
+                            'size': f"{qty:.8f}",  # CRITICAL FIX: Proper formatting for sell quantity
                             'timestamp': current_timestamp
                         }
                     )
@@ -607,6 +612,47 @@ class UnifiedExchange(BaseExchange):
                 'amount': qty,
                 'exception_type': type(e).__name__
             }
+    
+    async def _round_to_kucoin_precision(self, symbol: str, quantity: float) -> float:
+        """Round quantity to KuCoin's required decimal precision"""
+        try:
+            # KuCoin precision rules for common pairs
+            precision_rules = {
+                # Major pairs - 8 decimal places
+                'BTC/USDT': 8, 'ETH/USDT': 8, 'BNB/USDT': 8,
+                'DOT/USDT': 4, 'ADA/USDT': 4, 'SOL/USDT': 4,
+                'KCS/USDT': 4, 'MATIC/USDT': 4, 'AVAX/USDT': 4,
+                
+                # Cross pairs - 6 decimal places
+                'DOT/KCS': 6, 'ETH/BTC': 6, 'BNB/BTC': 6,
+                'ADA/BTC': 6, 'SOL/BTC': 6, 'DOT/BTC': 6,
+                'KCS/BTC': 6, 'AR/BTC': 6, 'INJ/BTC': 6,
+                
+                # Small value pairs - 2-4 decimal places
+                'AR/USDT': 4, 'INJ/USDT': 4, 'TFUEL/USDT': 4,
+                'TRX/USDT': 4, 'DOGE/USDT': 4, 'XRP/USDT': 4,
+                
+                # Default precision
+                'default': 6
+            }
+            
+            # Get precision for this symbol
+            precision = precision_rules.get(symbol, precision_rules['default'])
+            
+            # Round to the required precision
+            rounded_qty = round(quantity, precision)
+            
+            # Ensure minimum quantity (KuCoin minimum is usually 0.0001)
+            if rounded_qty < 0.0001:
+                rounded_qty = 0.0001
+            
+            self.logger.info(f"🔧 KuCoin precision: {symbol} {quantity:.8f} → {rounded_qty:.8f} ({precision} decimals)")
+            return rounded_qty
+            
+        except Exception as e:
+            self.logger.error(f"Error rounding quantity for {symbol}: {e}")
+            # Fallback: round to 6 decimal places
+            return round(quantity, 6)
 
     async def _wait_for_order_completion(self, order_id: str, symbol: str, timeout_seconds: int = 30) -> Optional[Dict[str, Any]]:
         """ULTRA-FAST order completion with 50ms checking"""

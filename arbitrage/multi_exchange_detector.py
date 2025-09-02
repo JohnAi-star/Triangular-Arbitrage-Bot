@@ -1001,3 +1001,61 @@ class MultiExchangeDetector:
         # Log top opportunities for user
         for opp in payload[:5]:
             self.logger.info(f"💎 {opp['exchange']} {opp['trianglePath']} = {opp['profitPercentage']}% (Available for execution)")
+
+    async def _create_executable_opportunity_async(self, opportunity, trade_amount):
+        """Create executable opportunity with async precision handling"""
+        try:
+            from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
+            
+            # Extract triangle path
+            triangle_path = opportunity.triangle_path
+            if len(triangle_path) < 3:
+                raise ValueError("Invalid triangle path")
+            
+            base_currency = triangle_path[0]  # USDT
+            intermediate_currency = triangle_path[1]  # e.g., DOT
+            quote_currency = triangle_path[2]  # e.g., KCS
+            
+            # Get exchange for precision rounding
+            exchange = self.exchange_manager.get_exchange(opportunity.exchange)
+            
+            # Create trade steps with proper precision
+            step1_qty = trade_amount  # USDT amount
+            
+            # Calculate intermediate amount (will be rounded in execution)
+            step2_qty = 1.0  # Placeholder - will be calculated from actual step 1 result
+            step3_qty = 1.0  # Placeholder - will be calculated from actual step 2 result
+            
+            steps = [
+                TradeStep(f"{intermediate_currency}/USDT", 'buy', step1_qty, 1.0, step2_qty),
+                TradeStep(f"{intermediate_currency}/{quote_currency}", 'sell', step2_qty, 1.0, step3_qty),
+                TradeStep(f"{quote_currency}/USDT", 'sell', step3_qty, 1.0, trade_amount * (1 + opportunity.profit_percentage/100))
+            ]
+            
+            executable_opportunity = ArbitrageOpportunity(
+                base_currency=base_currency,
+                intermediate_currency=intermediate_currency,
+                quote_currency=quote_currency,
+                pair1=f"{intermediate_currency}/USDT",
+                pair2=f"{intermediate_currency}/{quote_currency}",
+                pair3=f"{quote_currency}/USDT",
+                steps=steps,
+                initial_amount=trade_amount,
+                final_amount=trade_amount * (1 + opportunity.profit_percentage/100),
+                estimated_fees=trade_amount * 0.006,
+                estimated_slippage=trade_amount * 0.001,
+                exchange=opportunity.exchange,
+                profit_percentage=opportunity.profit_percentage,
+                profit_amount=opportunity.profit_amount
+            )
+            
+            executable_opportunity.status = OpportunityStatus.DETECTED
+            
+            return executable_opportunity
+            
+        except Exception as e:
+            self.logger.error(f"Error creating async executable opportunity: {e}")
+            return None
+    
+    def run(self, host: str = "0.0.0.0", port: int = 8000):
+        pass

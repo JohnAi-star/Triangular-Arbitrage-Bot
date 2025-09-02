@@ -346,7 +346,9 @@ class TradeExecutor:
         try:
             self.logger.info(f"⚡ ULTRA-FAST USDT TRIANGLE ({'AUTO' if self.auto_trading else 'MANUAL'}): {opportunity.triangle_path}")
             self.logger.info(f"🎯 Target: 3 trades in under 30 seconds on {exchange.exchange_id}")
-            self.logger.info(f"💰 Plan: {opportunity.initial_amount:.2f} USDT → profit")
+            # CRITICAL FIX: Use configured trade amount, not opportunity amount
+            configured_trade_amount = min(20.0, opportunity.initial_amount)  # ENFORCE $20 maximum
+            self.logger.info(f"💰 Plan: {configured_trade_amount:.2f} USDT → profit (ENFORCED: max $20)")
             
             # ULTRA-FAST: Pre-sync time once
             if exchange.exchange_id == 'kucoin':
@@ -367,7 +369,7 @@ class TradeExecutor:
             
             # Track actual amounts through the triangle
             current_balance = {
-                'USDT': opportunity.initial_amount,  # Start with planned USDT amount
+                'USDT': configured_trade_amount,  # CRITICAL FIX: Use configured amount
                 'step_start_time': time.time()
             }
             
@@ -386,7 +388,7 @@ class TradeExecutor:
                     
                     # CRITICAL FIX: Calculate CORRECT quantities for each step
                     real_quantity, real_price = self._calculate_correct_step_amounts(
-                        step, ticker_data, current_balance, step_num
+                        step, ticker_data, current_balance, step_num, configured_trade_amount
                     )
                     
                     if real_quantity <= 0:
@@ -405,6 +407,7 @@ class TradeExecutor:
                     # CRITICAL FIX: Update balance with ACTUAL filled amounts
                     filled_quantity = float(order_result.get('filled', 0))
                     cost = float(order_result.get('cost', 0))
+                    average_price = float(order_result.get('average', 0))
                     
                     step_time = (time.time() - step_start) * 1000
                     self.logger.info(f"⚡ Step {step_num} completed in {step_time:.0f}ms")
@@ -417,7 +420,8 @@ class TradeExecutor:
                         # Update balances correctly
                         current_balance[quote_currency] = current_balance.get(quote_currency, 0) - cost
                         current_balance[base_currency] = filled_quantity  # We now have this much AR
-                        
+                        spent_usdt = cost if cost > 0 else configured_trade_amount
+                        current_balance[quote_currency] = current_balance.get(quote_currency, 0) - spent_usdt
                         self.logger.info(f"✅ BUY: Spent {cost:.2f} {quote_currency} → Got {filled_quantity:.8f} {base_currency}")
                         
                     else:
@@ -427,9 +431,18 @@ class TradeExecutor:
                         
                         # Update balances correctly
                         current_balance[base_currency] = 0  # Sold all of this currency
-                        current_balance[quote_currency] = current_balance.get(quote_currency, 0) + cost
                         
-                        self.logger.info(f"✅ SELL: Sold {filled_quantity:.8f} {base_currency} → Got {cost:.8f} {quote_currency}")
+                        # CRITICAL FIX: For KuCoin, use the actual received amount
+                        if quote_currency == 'USDT':
+                            # Final step: selling for USDT
+                            received_usdt = cost  # This is the USDT we received
+                            current_balance[quote_currency] = received_usdt
+                            self.logger.info(f"✅ BUY: Spent {spent_usdt:.2f} {quote_currency} → Got {filled_quantity:.8f} {base_currency}")
+                        else:
+                            # Intermediate step: selling for another crypto
+                            received_amount = filled_quantity * average_price if average_price > 0 else cost
+                            current_balance[quote_currency] = received_amount
+                            self.logger.info(f"✅ SELL: Sold {filled_quantity:.8f} {base_currency} → Got {received_amount:.8f} {quote_currency}")
                     
                     self.logger.info(f"⚡ Order {order_result.get('id')} completed in {step_time:.0f}ms")
                 
@@ -440,13 +453,13 @@ class TradeExecutor:
             
             # ULTRA-FAST: All steps completed - calculate final result
             final_balance = current_balance.get('USDT', 0)
-            actual_profit = final_balance - opportunity.initial_amount
-            actual_profit_pct = (actual_profit / opportunity.initial_amount) * 100
+            actual_profit = final_balance - configured_trade_amount  # CRITICAL FIX: Use configured amount
+            actual_profit_pct = (actual_profit / configured_trade_amount) * 100
             
             execution_time = (time.time() - start_time) * 1000
             
             self.logger.info(f"🎉 ULTRA-FAST TRIANGLE COMPLETED!")
-            self.logger.info(f"   Initial: {opportunity.initial_amount:.6f} USDT")
+            self.logger.info(f"   Initial: {configured_trade_amount:.6f} USDT")
             self.logger.info(f"   Final: {final_balance:.6f} USDT")
             self.logger.info(f"   Actual Profit: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%)")
             self.logger.info(f"   ULTRA-FAST Duration: {execution_time:.0f}ms (Target: <30s)")
@@ -462,7 +475,8 @@ class TradeExecutor:
             return False
     
     def _calculate_correct_step_amounts(self, step: TradeStep, ticker: Dict[str, Any], 
-                                      current_balance: Dict[str, float], step_num: int) -> tuple:
+                                      current_balance: Dict[str, float], step_num: int, 
+                                      configured_trade_amount: float) -> tuple:
         """Calculate CORRECT amounts for each step of the triangle."""
         try:
             bid_price = float(ticker['bid'])
@@ -470,11 +484,11 @@ class TradeExecutor:
             
             if step_num == 1:
                 # Step 1: USDT → Intermediate (e.g., USDT → AR)
-                # Use FIXED trade amount in USDT
+                # CRITICAL FIX: Use configured trade amount, not step quantity
                 price = ask_price  # Buy at ask price
-                quantity = step.quantity  # This should be the USDT amount (e.g., $20)
+                quantity = configured_trade_amount  # ENFORCED: Use $20 trade amount
                 
-                self.logger.info(f"⚡ Step 1: Spend {quantity:.2f} USDT to buy {step.symbol.split('/')[0]}")
+                self.logger.info(f"⚡ Step 1: Spend {quantity:.2f} USDT to buy {step.symbol.split('/')[0]} (ENFORCED)")
                 return quantity, price
                 
             elif step_num == 2:
@@ -484,13 +498,20 @@ class TradeExecutor:
                 available_intermediate = current_balance.get(intermediate_currency, 0)
                 
                 if available_intermediate <= 0:
-                    self.logger.error(f"❌ No {intermediate_currency} available for step 2")
+                    self.logger.error(f"❌ No {intermediate_currency} available for step 2 (balance: {current_balance})")
                     return 0, 0
                 
-                price = bid_price  # Sell at bid price
+                # CRITICAL FIX: Check if this is a direct or inverse pair
+                if step.symbol.startswith(intermediate_currency):
+                    # Direct pair: ETH/IOST - sell ETH for IOST
+                    price = bid_price  # Sell at bid price
+                else:
+                    # Inverse pair: IOST/ETH - buy IOST with ETH
+                    price = ask_price  # Buy at ask price
+                
                 quantity = available_intermediate  # Sell ALL AR we have
                 
-                self.logger.info(f"⚡ Step 2: Sell ALL {quantity:.8f} {intermediate_currency}")
+                self.logger.info(f"⚡ Step 2: Trade ALL {quantity:.8f} {intermediate_currency} via {step.symbol}")
                 return quantity, price
                 
             elif step_num == 3:
@@ -500,7 +521,7 @@ class TradeExecutor:
                 available_quote = current_balance.get(quote_currency, 0)
                 
                 if available_quote <= 0:
-                    self.logger.error(f"❌ No {quote_currency} available for step 3")
+                    self.logger.error(f"❌ No {quote_currency} available for step 3 (balance: {current_balance})")
                     return 0, 0
                 
                 price = bid_price  # Sell at bid price
@@ -521,6 +542,12 @@ class TradeExecutor:
                                      quantity: float, price: float, step_num: int) -> Dict[str, Any]:
         """Execute single step with ULTRA-FAST timing."""
         try:
+            # CRITICAL FIX: Apply KuCoin precision rounding before execution
+            if exchange.exchange_id == 'kucoin' and hasattr(exchange, '_round_to_kucoin_precision'):
+                original_qty = quantity
+                quantity = await exchange._round_to_kucoin_precision(symbol, quantity)
+                self.logger.info(f"🔧 KuCoin precision: {original_qty:.8f} → {quantity:.8f}")
+            
             self.logger.info(f"⚡ ULTRA-FAST STEP {step_num}: {side.upper()} {quantity:.8f} {symbol}")
             
             # ULTRA-FAST: Execute order immediately
