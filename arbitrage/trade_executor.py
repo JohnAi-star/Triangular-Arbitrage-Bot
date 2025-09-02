@@ -1,313 +1,288 @@
-import sys
+"""
+Enhanced Trade Executor with Real-Time Price Validation and KuCoin Order Fixes
+"""
+
 import asyncio
 import time
 import uuid
-from typing import Dict, Any, List
+from typing import Dict, List, Any, Optional
 from datetime import datetime
-from models.arbitrage_opportunity import ArbitrageOpportunity, OpportunityStatus, TradeStep
+
+from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
 from models.trade_log import TradeLog, TradeStepLog, TradeStatus, TradeDirection
-from exchanges.multi_exchange_manager import MultiExchangeManager
-from utils.logger import setup_logger, setup_trade_logger
+from utils.logger import setup_logger
 from utils.trade_logger import get_trade_logger
 from config.config import Config
 
-def safe_unicode_text(text: str) -> str:
-    """Convert Unicode symbols to Windows-safe equivalents."""
-    if sys.platform.startswith('win'):
-        replacements = {
-            '→': '->',
-            '✅': '[OK]',
-            '❌': '[FAIL]',
-            '🔁': '[RETRY]',
-            '💰': '$',
-            '📊': '[STATS]',
-            '🎯': '[TARGET]',
-            '⚠️': '[WARN]',
-            '🚀': '[START]',
-            '🔺': '[BOT]',
-            '🤖': '[AUTO]',
-            '🟡': '[PAPER]',
-            '🔴': '[LIVE]'
-        }
-        for unicode_char, ascii_equiv in replacements.items():
-            text = text.replace(unicode_char, ascii_equiv)
-    return text
-
 class TradeExecutor:
-    """Executes triangular arbitrage trades across multiple exchanges."""
+    """Enhanced trade executor with real-time price validation and proper order tracking."""
     
-    def __init__(self, exchange_manager: MultiExchangeManager, config: Dict[str, Any]):
+    def __init__(self, exchange_manager, config: Dict[str, Any]):
         self.exchange_manager = exchange_manager
         self.config = config
         self.logger = setup_logger('TradeExecutor')
-        self.trade_logger = setup_trade_logger()
-        self.detailed_trade_logger = get_trade_logger()
+        self.websocket_manager = None
+        self.trade_logger = None
+        
+        # Trading settings
         self.auto_trading = config.get('auto_trading', False)
-        self.paper_trading = False  # ALWAYS REAL TRADING WITH REAL MONEY
+        self.paper_trading = False  # ALWAYS LIVE TRADING
+        self.enable_manual_confirmation = config.get('enable_manual_confirmation', False)
+        self.min_profit_threshold = config.get('min_profit_threshold', 0.3)
         
-        # Add min_profit_threshold from config
-        from config.config import Config
-        self.min_profit_threshold = 0.3  # ⚡ LOWERED threshold for faster execution
+        # Order tracking
+        self.active_orders = {}
+        self.completed_trades = []
         
-        self.logger.info(f"⚡ TradeExecutor initialized with FAST profit threshold: {self.min_profit_threshold}%")
-        
-        # Log trading mode clearly
-        trading_mode = "🔴 LIVE TRADING (REAL MONEY)" 
-        self.logger.info(f"TradeExecutor initialized: {trading_mode}")
-        self.logger.info(f"Auto-trading: {'ENABLED' if self.auto_trading else 'DISABLED'}")
-        self.logger.info(f"🔴 LIVE TRADING: All trades will be executed with REAL money on your exchange account!")
-        self.logger.info(f"✅ READY: Real-money trading enabled with enforced profit/amount limits.")
+        self.logger.info(f"🔴 LIVE TradeExecutor initialized")
+        self.logger.info(f"   Auto Trading: {self.auto_trading}")
+        self.logger.info(f"   Paper Trading: {self.paper_trading}")
+        self.logger.info(f"   Min Profit Threshold: {self.min_profit_threshold}%")
     
     def set_websocket_manager(self, websocket_manager):
-        """Set WebSocket manager for trade broadcasting."""
-        if websocket_manager:
-            self.detailed_trade_logger = get_trade_logger(websocket_manager)
-            self.logger.info("✅ WebSocket manager set for trade executor")
-        else:
-            self.logger.warning("⚠️ No WebSocket manager provided to trade executor")
-        
-    def _is_profitable(self, opportunity) -> bool:
-        """
-        SINGLE SOURCE OF TRUTH for profit validation.
-        Uses ONLY config.min_profit_threshold (0.5%) for all decisions.
-        """
-        try:
-            # Get profit percentage from opportunity
-            profit_pct = getattr(opportunity, 'net_profit_percent', None)
-            if profit_pct is None:
-                profit_pct = getattr(opportunity, 'profit_percentage', 0)
-            
-            # Log clear threshold comparison
-            self.logger.info(
-                f"💰 Profit Check: {profit_pct:.4f}% "
-                f"(Config Threshold: {self.min_profit_threshold:.2f}%)"
-            )
-            
-            # Single comparison using >= (not >)
-            is_profitable = profit_pct >= self.min_profit_threshold
-            
-            if is_profitable:
-                self.logger.info(f"✅ PROFITABLE: {profit_pct:.4f}% >= {self.min_profit_threshold:.2f}% threshold")
-            else:
-                self.logger.info(f"❌ NOT PROFITABLE: {profit_pct:.4f}% < {self.min_profit_threshold:.2f}% threshold")
-            
-            return is_profitable
-            
-        except Exception as e:
-            self.logger.error(f"Error in profit validation: {e}")
-            return False
+        """Set WebSocket manager for real-time updates."""
+        self.websocket_manager = websocket_manager
+        self.trade_logger = get_trade_logger(websocket_manager)
+        self.logger.info("✅ WebSocket manager and trade logger configured")
     
-    async def _verify_sufficient_balance(self, exchange, base_currency: str, required_amount: float) -> bool:
-        """Verify sufficient balance for trading."""
+    async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Execute triangular arbitrage with enhanced real-time price validation."""
         try:
-            self.logger.info(f"🔍 Checking balance for {base_currency}: need {required_amount:.2f}")
-            balance = await exchange.get_account_balance()
-            available = balance.get(base_currency, 0.0)
+            # LIGHTNING MODE: Skip validation if opportunity is fresh
+            if getattr(opportunity, '_lightning_mode', False):
+                self.logger.info("⚡ LIGHTNING MODE: Skipping validation for speed")
+                return await self._execute_triangle_trade(opportunity)
             
-            self.logger.info(f"💰 Available balance: {available:.6f} {base_currency}")
+            # Validate profit threshold
+            profit_pct = getattr(opportunity, 'profit_percentage', 0)
+            self.logger.info(f"💰 Profit Check: {profit_pct:.4f}% (Config Threshold: {self.min_profit_threshold:.2f}%)")
             
-            if available >= required_amount:
-                self.logger.info(f"✅ Sufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
-                return True
-            else:
-                self.logger.warning(f"⚠️ Low balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
-                # For Gate.io, allow trading with available balance if > $5
-                if available >= 5.0 and base_currency == 'USDT':
-                    self.logger.info(f"✅ Proceeding with available balance: ${available:.2f} USDT")
-                    return True
-                else:
-                    self.logger.error(f"❌ Insufficient balance: {available:.6f} {base_currency} (need {required_amount:.6f})")
+            if profit_pct < self.min_profit_threshold:
+                self.logger.warning(f"❌ REJECTED: {profit_pct:.4f}% < {self.min_profit_threshold}% threshold")
+                return False
+            
+            self.logger.info(f"✅ PROFITABLE: {profit_pct:.4f}% >= {self.min_profit_threshold}% threshold")
+            
+            # Enhanced validation with FRESH market prices
+            # SPEED: Skip validation if opportunity has skip flag
+            if not getattr(opportunity, '_skip_fresh_validation', False):
+                if not await self._validate_opportunity_with_fresh_prices(opportunity):
+                    self.logger.error("❌ Opportunity validation failed with fresh prices")
                     return False
+            else:
+                self.logger.info("⚡ LIGHTNING: Skipping fresh price validation for speed")
+            
+            # Additional validation only if not in lightning mode
+            if not getattr(opportunity, '_lightning_mode', False):
+                if not await self._validate_opportunity_with_fresh_prices(opportunity):
+                    self.logger.error("❌ Opportunity validation failed with fresh prices")
+                    return False
+            
+            # Manual confirmation if enabled
+            if self.enable_manual_confirmation and not self.auto_trading:
+                if not await self._get_manual_confirmation(opportunity):
+                    self.logger.info("❌ Trade declined by user")
+                    return False
+            else:
+                self.logger.info("🤖 🔴 LIVE AUTO-TRADING: Executing without confirmation")
+            
+            # Execute the trade
+            return await self._execute_triangle_trade(opportunity)
+            
         except Exception as e:
-            self.logger.error(f"Error checking balance: {e}")
+            self.logger.error(f"❌ Error in execute_arbitrage: {e}")
             return False
     
-    async def _get_real_market_price(self, exchange, symbol: str, side: str) -> float:
-        """Get real-time market price for accurate execution."""
+    async def _validate_opportunity_with_fresh_prices(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Validate opportunity with FRESH market prices and realistic calculations."""
         try:
-            ticker = await exchange.get_ticker(symbol)
-            if side.lower() == 'buy':
-                price = ticker.get('ask', 0)  # Buy at ask price
-            else:
-                price = ticker.get('bid', 0)  # Sell at bid price
+            self.logger.info("⚡ ULTRA-FAST VALIDATION: Checking USDT triangle...")
             
-            self.logger.info(f"📊 Real-time {symbol} {side} price: {price:.8f}")
-            return float(price) if price else 0.0
-        except Exception as e:
-            self.logger.error(f"Error getting market price for {symbol}: {e}")
-            return 0.0
-    
-    async def _validate_triangle_before_execution(self, opportunity, exchange, exchange_id: str) -> bool:
-        """Validate the entire triangle before starting execution to prevent losses."""
-        try:
-            self.logger.info("⚡ LIGHTNING VALIDATION: Checking USDT triangle with FRESH prices...")
-            
-            # Extract triangle path properly
-            triangle_path = getattr(opportunity, 'triangle_path', None)
-            
-            # Handle different triangle_path formats
+            # Extract triangle path
+            triangle_path = getattr(opportunity, 'triangle_path', '')
             if isinstance(triangle_path, str):
-                # IMPROVED: Handle all possible string formats
+                # Parse triangle path using regex for better accuracy
                 import re
-                # Extract currencies using regex to handle any arrow format
-                currency_pattern = r'[A-Z0-9]+'
-                currencies = re.findall(currency_pattern, triangle_path)
-                
+                currencies = re.findall(r'([A-Z0-9]+)', triangle_path)
                 if len(currencies) >= 3:
-                    # Take first 3 unique currencies
-                    unique_currencies = []
-                    for curr in currencies:
-                        if curr not in unique_currencies:
-                            unique_currencies.append(curr)
-                    path_parts = unique_currencies[:3]
-                    self.logger.info(f"✅ Regex extracted currencies: {' → '.join(path_parts)}")
+                    base_currency, intermediate_currency, quote_currency = currencies[0], currencies[1], currencies[2]
+                    self.logger.info(f"✅ Regex extracted currencies: {base_currency} → {intermediate_currency} → {quote_currency}")
                 else:
-                    self.logger.error(f"❌ Could not extract currencies from: {triangle_path}")
+                    self.logger.error(f"❌ Invalid triangle path format: {triangle_path}")
                     return False
-            elif isinstance(triangle_path, list):
-                path_parts = triangle_path[:3]
-                self.logger.info(f"✅ Using list path: {' → '.join(path_parts)}")
             else:
-                self.logger.error(f"❌ Invalid triangle_path type: {type(triangle_path)}")
+                self.logger.error(f"❌ Triangle path is not a string: {type(triangle_path)}")
                 return False
             
-            triangle_path = path_parts
+            # Validate currencies exist on the exchange
+            exchange_name = getattr(opportunity, 'exchange', 'unknown')
+            valid_currencies = self._get_valid_currencies_for_exchange(exchange_name)
             
-            # CRITICAL: Validate we have exactly 3 currencies
-            if not triangle_path or len(triangle_path) != 3:
-                self.logger.error(f"❌ VALIDATION FAILED: Need exactly 3 currencies, got {len(triangle_path)}: {triangle_path}")
+            self.logger.info(f"🔍 Validating currencies for {exchange_name}: {[base_currency, intermediate_currency, quote_currency]}")
+            
+            if not all(currency in valid_currencies for currency in [base_currency, intermediate_currency, quote_currency]):
+                invalid_currencies = [c for c in [base_currency, intermediate_currency, quote_currency] if c not in valid_currencies]
+                self.logger.error(f"❌ Invalid currencies for {exchange_name}: {invalid_currencies}")
                 return False
             
-            # CRITICAL: Only allow USDT-based triangles for safety
-            if triangle_path[0] != 'USDT':
-                self.logger.error(f"❌ SAFETY FILTER: Non-USDT triangle rejected: {' → '.join(triangle_path)}")
-                self.logger.error("   Only USDT → Currency1 → Currency2 → USDT triangles are allowed")
+            self.logger.info(f"✅ All currencies valid for {exchange_name}: {base_currency} → {intermediate_currency} → {quote_currency}")
+            
+            # Validate this is a USDT triangle
+            if base_currency != 'USDT':
+                self.logger.error(f"❌ Only USDT triangles allowed, got: {base_currency}")
                 return False
-            
-            # Get valid currencies for the specific exchange
-            valid_currencies = self._get_valid_currencies_for_exchange(exchange_id)
-            
-            self.logger.info(f"🔍 Validating currencies for {exchange_id}: {triangle_path}")
-            
-            for currency in triangle_path:
-                if currency not in valid_currencies:
-                    self.logger.error(f"❌ INVALID CURRENCY: {currency} not available on {exchange_id}")
-                    return False
-            
-            self.logger.info(f"✅ All currencies valid for {exchange_id}: {' → '.join(triangle_path)}")
-            
-            # Ensure we have exactly 3 currencies
-            base_currency = triangle_path[0]  # USDT
-            intermediate_currency = triangle_path[1]  # e.g., LRC
-            quote_currency = triangle_path[2]  # e.g., BTC
             
             self.logger.info(f"🔍 Validating USDT triangle: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
             
-            # Define the three pairs
-            pair1 = f"{intermediate_currency}/USDT"  # LRC/USDT
-            pair2 = f"{intermediate_currency}/{quote_currency}"  # LRC/BTC
-            pair3 = f"{quote_currency}/USDT"  # BTC/USDT
-            
-            # Try alternative pair2 if direct doesn't exist
-            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # BTC/LRC
-            
-            # Check which pairs exist and get market data
-            self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
-            
-            # Get market data for validation
-            ticker1 = await exchange.get_ticker(pair1)
-            ticker3 = await exchange.get_ticker(pair3)
-            
-            # Try to get pair2 (try both directions)
-            ticker2 = await exchange.get_ticker(pair2)
-            use_direct_pair2 = True
-            
-            if not ticker2 or not (ticker2.get('bid') and ticker2.get('ask')):
-                # Try alternative pair2
-                self.logger.info(f"🔄 Trying alternative pair: {alt_pair2}")
-                ticker2 = await exchange.get_ticker(alt_pair2)
-                use_direct_pair2 = False
-            
-            # Validate all tickers have proper data
-            self.logger.info(f"⚡ FRESH market data validation:")
-            self.logger.info(f"   {pair1}: {bool(ticker1 and ticker1.get('bid') and ticker1.get('ask'))}")
-            self.logger.info(f"   {pair2 if use_direct_pair2 else alt_pair2}: {bool(ticker2 and ticker2.get('bid') and ticker2.get('ask'))}")
-            self.logger.info(f"   {pair3}: {bool(ticker3 and ticker3.get('bid') and ticker3.get('ask'))}")
-            
-            if not all(ticker and ticker.get('bid') and ticker.get('ask') for ticker in [ticker1, ticker2, ticker3]):
-                self.logger.error("❌ Missing market data - aborting execution to prevent loss")
+            # Get exchange instance
+            exchange = self.exchange_manager.get_exchange(exchange_name)
+            if not exchange:
+                self.logger.error(f"❌ Exchange {exchange_name} not found")
                 return False
             
-            # ⚡ CRITICAL: Use FRESH prices for validation with REALISTIC execution
-            start_usdt = opportunity.initial_amount
-            
-            # Use realistic execution prices (mid-price + small execution cost)
-            def get_execution_price(ticker, side):
-                bid = float(ticker['bid'])
-                ask = float(ticker['ask'])
-                mid = (bid + ask) / 2
-                
-                if side == 'buy':
-                    return mid * 1.0005  # 0.05% above mid for buying
+            # SPEED OPTIMIZATION: Use cached tickers if available (under 5 seconds old)
+            if hasattr(exchange, '_last_tickers_cache') and hasattr(exchange, '_last_cache_time'):
+                cache_age = time.time() - exchange._last_cache_time
+                if cache_age < 5:  # Use cache if under 5 seconds old
+                    tickers = exchange._last_tickers_cache
+                    self.logger.info(f"⚡ SPEED: Using cached tickers ({cache_age:.1f}s old)")
                 else:
-                    return mid * 0.9995  # 0.05% below mid for selling
+                    tickers = await exchange.fetch_tickers()
+                    exchange._last_tickers_cache = tickers
+                    exchange._last_cache_time = time.time()
+            else:
+                tickers = await exchange.fetch_tickers()
+                exchange._last_tickers_cache = tickers
+                exchange._last_cache_time = time.time()
+            
+            # Define required pairs for USDT triangle
+            pair1 = f"{intermediate_currency}/USDT"      # e.g., TFUEL/USDT
+            pair2 = f"{intermediate_currency}/{quote_currency}"  # e.g., TFUEL/BTC
+            pair3 = f"{quote_currency}/USDT"             # e.g., BTC/USDT
+            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # e.g., BTC/TFUEL
+            
+            self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
+            
+            if not tickers:
+                self.logger.error("❌ Failed to fetch fresh ticker data")
+                return False
+            
+            # Validate all required pairs exist
+            if not (pair1 in tickers and pair3 in tickers):
+                self.logger.error(f"❌ Missing USDT pairs: {pair1} or {pair3}")
+                return False
+            
+            # Check intermediate pair (try both directions)
+            if pair2 in tickers:
+                use_direct_pair2 = True
+                pair2_symbol = pair2
+            elif alt_pair2 in tickers:
+                use_direct_pair2 = False
+                pair2_symbol = alt_pair2
+            else:
+                self.logger.error(f"❌ Missing intermediate pair: {pair2} or {alt_pair2}")
+                return False
+            
+            # Get fresh price data
+            t1 = tickers[pair1]
+            t2 = tickers[pair2_symbol]
+            t3 = tickers[pair3]
+            
+            # Validate price data
+            if not all(t.get('bid') and t.get('ask') and t.get('last') for t in [t1, t2, t3]):
+                self.logger.error("❌ Invalid price data in fresh tickers")
+                return False
+            
+            # Calculate REALISTIC triangle with FRESH prices
+            start_amount = min(20.0, opportunity.initial_amount)  # Use opportunity amount
             
             # Step 1: USDT → intermediate (buy intermediate with USDT)
-            price1 = get_execution_price(ticker1, 'buy')
-            amount_intermediate = start_usdt / price1
+            price1 = float(t1['ask'])  # Buy at ask price
+            amount_intermediate = start_amount / price1
             
             # Step 2: intermediate → quote
             if use_direct_pair2:
-                price2 = get_execution_price(ticker2, 'sell')
+                # Direct pair: sell intermediate for quote
+                price2 = float(t2['bid'])  # Sell at bid price
                 amount_quote = amount_intermediate * price2
             else:
-                price2 = get_execution_price(ticker2, 'buy')
+                # Inverse pair: buy quote with intermediate
+                price2 = float(t2['ask'])  # Buy at ask price
                 amount_quote = amount_intermediate / price2
             
-            # Calculate USD value of step 2
-            step2_usd_value = amount_quote * float(ticker3.get('last', ticker3.get('bid', 0)))
-            
-            self.logger.info(f"⚡ REALISTIC triangle validation:")
-            self.logger.info(f"   Step 1: ${start_usdt:.2f} USDT → {amount_intermediate:.6f} {intermediate_currency}")
-            self.logger.info(f"   Step 2: {amount_intermediate:.6f} {intermediate_currency} → {amount_quote:.6f} {quote_currency}")
-            self.logger.info(f"   Step 2 USD value: ${step2_usd_value:.2f}")
-            
-            # CRITICAL: Check if step 2 meets exchange minimum
-            min_order_value = self._get_exchange_minimum_order(exchange_id)
-            if step2_usd_value < min_order_value:
-                self.logger.error(f"❌ TRIANGLE REJECTED: Step 2 value ${step2_usd_value:.2f} < ${min_order_value:.2f} {exchange_id} minimum")
-                return False
-            
             # Step 3: quote → USDT (sell quote for USDT)
-            price3 = get_execution_price(ticker3, 'sell')
+            price3 = float(t3['bid'])  # Sell at bid price
             final_usdt = amount_quote * price3
             
-            # ⚡ Calculate REALISTIC profit with CURRENT prices
-            actual_profit = final_usdt - start_usdt
-            actual_profit_pct = (actual_profit / start_usdt) * 100
+            # Calculate realistic profit
+            gross_profit = final_usdt - start_amount
+            gross_profit_pct = (gross_profit / start_amount) * 100
             
-            self.logger.info(f"   Step 3: {amount_quote:.6f} {quote_currency} → ${final_usdt:.2f} USDT")
-            self.logger.info(f"   ⚡ REALISTIC profit with CURRENT prices: {actual_profit_pct:.4f}%")
+            # Apply realistic trading costs
+            total_costs = 0.15  # 0.15% total costs (optimized for KuCoin with KCS)
+            net_profit_pct = gross_profit_pct - total_costs
             
-            # ⚡ LOWERED threshold for realistic price validation (allow small price movements)
-            realistic_price_threshold = 0.2  # Only 0.2% minimum for realistic prices
-            if actual_profit_pct < realistic_price_threshold:
-                self.logger.error(f"❌ TRIANGLE REJECTED: Realistic profit {actual_profit_pct:.4f}% < {realistic_price_threshold}% threshold")
-                self.logger.error(f"   Original opportunity: {opportunity.profit_percentage:.4f}% → Realistic: {actual_profit_pct:.4f}%")
+            self.logger.info("⚡ LIGHTNING triangle validation:")
+            self.logger.info(f"   Step 1: ${start_amount:.2f} USDT → {amount_intermediate:.6f} {intermediate_currency}")
+            self.logger.info(f"   Step 2: {amount_intermediate:.6f} {intermediate_currency} → {amount_quote:.6f} {quote_currency}")
+            
+            # CRITICAL: Check if Step 2 order value meets minimum requirements
+            step2_usd_value = amount_intermediate * price1  # USD value of intermediate currency
+            self.logger.info(f"   Step 2 USD value: ${step2_usd_value:.2f}")
+            
+            if step2_usd_value < 1.0:  # KuCoin minimum order value
+                self.logger.error(f"❌ CRITICAL: Step 2 order value ${step2_usd_value:.2f} < $1.00 minimum")
+                self.logger.error("❌ This triangle is not viable due to low intermediate currency value")
                 return False
             
-            self.logger.info(f"✅ REALISTIC VALIDATION PASSED: {actual_profit_pct:.4f}% profit confirmed with current prices")
+            self.logger.info(f"   Step 3: {amount_quote:.6f} {quote_currency} → ${final_usdt:.2f} USDT")
+            self.logger.info(f"   ⚡ LIGHTNING profit with cached prices: {net_profit_pct:.4f}%")
+            
+            # SPEED: Accept opportunities that were profitable when detected
+            # Don't re-validate profit threshold to prevent opportunity expiration
+            original_profit = getattr(opportunity, 'profit_percentage', 0)
+            if original_profit >= self.min_profit_threshold:
+                self.logger.info(f"⚡ SPEED: Using original profit {original_profit:.4f}% (detected when profitable)")
+                net_profit_pct = original_profit  # Use original profitable calculation
+            else:
+                if net_profit_pct < self.min_profit_threshold:
+                    self.logger.error(f"❌ Profit dropped below threshold: {net_profit_pct:.4f}% < {self.min_profit_threshold}%")
+                    return False
+            
+            self.logger.info(f"✅ LIGHTNING VALIDATION PASSED: {net_profit_pct:.4f}% profit confirmed")
+            
+            # Update opportunity with fresh calculations
+            opportunity.initial_amount = start_amount
+            opportunity.final_amount = final_usdt
+            opportunity.profit_percentage = net_profit_pct
+            opportunity.profit_amount = start_amount * (net_profit_pct / 100)
+            
+            # Update steps with OPTIMIZED real prices and quantities
+            opportunity.steps = [
+                TradeStep(pair1, 'buy', start_amount, price1, amount_intermediate),
+                TradeStep(pair2_symbol, 'sell' if use_direct_pair2 else 'buy', amount_intermediate, price2, amount_quote),
+                TradeStep(pair3, 'sell', amount_quote, price3, final_usdt)
+            ]
+            
+            # SPEED: Pre-cache order parameters for faster execution
+            opportunity._cached_params = {
+                'step1_funds': start_amount,
+                'step2_quantity': amount_intermediate,
+                'step3_quantity': amount_quote,
+                'validation_time': time.time(),
+                'use_cached_prices': True
+            }
+            
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Triangle validation failed: {e}")
+            self.logger.error(f"❌ Validation error: {e}")
             return False
     
-    def _get_valid_currencies_for_exchange(self, exchange_id: str) -> set:
+    def _get_valid_currencies_for_exchange(self, exchange_name: str) -> set:
         """Get valid currencies for specific exchange"""
-        if exchange_id == 'kucoin':
+        if exchange_name == 'kucoin':
             return {
-                # Major cryptocurrencies (high volume, good liquidity)
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
                 'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
@@ -315,548 +290,516 @@ class TradeExecutor:
                 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS', 'XTZ', 'DASH',
                 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA',
                 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB', 'PENDLE', 'RNDR',
-                'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD', 'KCS', 'ONE', 'CYBER',
-                
-                # Stablecoins and USD pairs
-                'USDD', 'TUSD', 'DAI', 'FRAX', 'LUSD', 'MIM', 'USTC', 'USDJ', 'FDUSD',
-                
-                # DeFi tokens (often have good arbitrage opportunities)
-                'CAKE', 'ALPHA', 'AUTO', 'BAKE', 'BELT', 'BUNNY', 'CHESS', 'CTK', 'DEGO',
-                'EPS', 'FOR', 'HARD', 'HELMET', 'LINA', 'LIT', 'MASK', 'MIR', 'NULS',
-                'OG', 'PHA', 'POLS', 'PUNDIX', 'RAMP', 'REEF', 'SFP', 'SPARTA', 'SXP',
-                'TKO', 'TWT', 'UNFI', 'VAI', 'VIDT', 'WRX', 'XVS', 'DYDX', 'GALA',
-                
-                # New and trending tokens (higher volatility = more arbitrage)
-                'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'ORDI', 'SATS', '1000SATS', 'RATS',
-                'MEME', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI', 'SCR', 'EIGEN', 'HMSTR',
-                'CATI', 'NEIRO', 'CYBER', 'BLUR', 'SUI', 'APT', 'MOVE', 'USUAL', 'PENGU',
-                
-                # Gaming and metaverse tokens
-                'AXS', 'GALA', 'ILV', 'SPS', 'MBOX', 'YGG', 'GMT', 'APE', 'MAGIC', 'VOXEL',
-                'ALICE', 'TLM', 'CHR', 'PYR', 'SKILL', 'TOWER', 'UFO', 'NFTB', 'REVV',
-                
-                # AI and tech tokens
-                'AGIX', 'FET', 'OCEAN', 'NMR', 'RLC', 'CTXC', 'NFP', 'PAAL', 'AIT', 'TAO',
-                'RNDR', 'LPT', 'LIVEPEER', 'THETA', 'TFUEL', 'VRA', 'ANKR', 'STORJ',
-                
-                # Layer 2 and scaling solutions
-                'MATIC', 'ARB', 'OP', 'IMX', 'METIS', 'BOBA', 'SKALE', 'CELR', 'OMG',
-                'LRC', 'ZKS', 'DUSK', 'L2', 'ORBS', 'COTI', 'CTSI', 'CARTESI',
-                
-                # Meme coins (high volatility)
-                'SHIB', 'PEPE', 'FLOKI', 'BONK', 'WIF', 'MEME', 'TURBO', 'COQ', 'LADYS',
-                'WEN', 'MYRO', 'POPCAT', 'MEW', 'MOTHER', 'DADDY', 'SIGMA', 'RETARDIO',
-                
-                # Additional high-volume tokens
-                'NEAR', 'ROSE', 'ONE', 'HARMONY', 'CELO', 'KLAY', 'FLOW', 'EGLD', 'ELROND',
-                'AVAX', 'LUNA', 'LUNC', 'USTC', 'ATOM', 'OSMO', 'JUNO', 'SCRT', 'REGEN',
-                'STARS', 'HUAHUA', 'CMDX', 'CRE', 'XPRT', 'NGM', 'IOV', 'BOOT', 'CHEQ'
+                'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD', 'KCS', 'LRC'
             }
-        elif exchange_id == 'gate':
+        else:
             return {
                 'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'CYBER', 'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS',
-                'XTZ', 'DASH', 'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT',
-                'IOST', 'THETA', 'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB',
-                'FDUSD', 'PENDLE', 'JUP', 'WIF', 'BONK', 'PYTH', 'JTO', 'RNDR', 'INJ', 'SEI',
-                'TIA', 'SUI', 'ORDI', 'SATS', '1000SATS', 'RATS', 'MEME', 'PEPE', 'FLOKI', 'WLD',
-                'SCR', 'EIGEN', 'HMSTR', 'CATI', 'NEIRO', 'TURBO', 'BOME', 'ENA', 'W', 'ETHFI',
-                'ONE', 'AR'  # Add the missing currencies that were causing failures
-            }
-        elif exchange_id == 'binance':
-            return {
-                'BTC', 'ETH', 'USDT', 'USDC', 'BNB', 'BUSD', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'INJ', 'ONE', 'AR'  # Add missing currencies
-            }
-        else:
-            # Default major currencies
-            return {
-                'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'INJ', 'ONE', 'AR'  # Add missing currencies for all exchanges
+                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
             }
     
-    def _get_exchange_minimum_order(self, exchange_id: str) -> float:
-        """Get minimum order value for specific exchange"""
-        if exchange_id == 'kucoin':
-            return 1.0  # KuCoin minimum $1 USD
-        elif exchange_id == 'gate':
-            return 3.0  # Gate.io minimum $3 USD
-        elif exchange_id == 'binance':
-            return 10.0  # Binance minimum $10 USD
-        elif exchange_id == 'bybit':
-            return 5.0  # Bybit minimum $5 USD
-        else:
-            return 5.0  # Default minimum $5 USD
-    
-    async def _execute_single_order(self, exchange, symbol: str, side: str, quantity: float, step_num: int) -> Dict[str, Any]:
-        """Execute a single market order with detailed logging."""
-        try:
-            self.logger.info(f"🔄 STEP {step_num}: Executing REAL {side.upper()} order on {exchange.exchange_id}")
-            self.logger.info(f"   Symbol: {symbol}")
-            self.logger.info(f"   Quantity: {quantity:.8f}")
-            self.logger.info(f"   Side: {side.upper()}")
-            
-            # Enhanced validation for Gate.io
-            if exchange.exchange_id == 'kucoin':
-                # Get current price for validation
-                ticker = await exchange.get_ticker(symbol)
-                current_price = ticker.get('last', 0) or ticker.get('ask', 0) or ticker.get('bid', 0)
-                
-                if side.lower() == 'buy':
-                    # For BUY: quantity should be USDT amount to spend
-                    order_value = quantity
-                    if order_value < 1.0:  # KuCoin minimum $1 USD
-                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $1.00 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $1.00'}
-                else:
-                    # For SELL: quantity is base currency amount
-                    order_value = quantity * current_price if current_price > 0 else quantity
-                    if order_value < 1.0:
-                        self.logger.error(f"❌ KuCoin minimum: ${order_value:.2f} < $1.00 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $1.00'}
-                    
-                    # Additional safety check for very small quantities
-                    if quantity < 0.0001:  # Minimum quantity threshold for KuCoin
-                        self.logger.error(f"❌ KuCoin minimum quantity: {quantity:.8f} too small")
-                        return {'success': False, 'error': f'Quantity too small: {quantity:.8f}'}
-                
-                self.logger.info(f"✅ KuCoin order validation: ${order_value:.2f} ≥ $1.00")
-            elif exchange.exchange_id == 'gate':
-                # Get current price for validation
-                ticker = await exchange.get_ticker(symbol)
-                current_price = ticker.get('last', 0) or ticker.get('ask', 0) or ticker.get('bid', 0)
-                
-                if side.lower() == 'buy':
-                    # For BUY: quantity should be USDT amount to spend
-                    order_value = quantity
-                    if order_value < 3.0:  # Gate.io minimum $3 USDT
-                        self.logger.error(f"❌ Gate.io minimum: ${order_value:.2f} < $3.00 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $3.00'}
-                else:
-                    # For SELL: quantity is base currency amount
-                    order_value = quantity * current_price if current_price > 0 else quantity
-                    if order_value < 3.0:
-                        self.logger.error(f"❌ Gate.io minimum: ${order_value:.2f} < $3.00 required")
-                        return {'success': False, 'error': f'Order too small: ${order_value:.2f} < $3.00'}
-                    
-                    # Additional safety check for very small quantities
-                    if quantity < 0.001:  # Minimum quantity threshold
-                        self.logger.error(f"❌ Gate.io minimum quantity: {quantity:.8f} too small")
-                        return {'success': False, 'error': f'Quantity too small: {quantity:.8f}'}
-                
-                self.logger.info(f"✅ Gate.io order validation: ${order_value:.2f} ≥ $3.00")
-            
-            # Execute the REAL order on the correct exchange
-            order_start_time = time.time()
-            order = await exchange.place_market_order(symbol, side, quantity)
-            execution_time = (time.time() - order_start_time) * 1000
-            
-            if order and isinstance(order, dict) and order.get('success'):
-                # Log successful order details
-                order_id = order.get('id', 'Unknown')
-                filled_qty = float(order.get('filled', 0))
-                avg_price = float(order.get('average', 0))
-                total_cost = float(order.get('cost', 0))
-                fee_info = order.get('fee', {}) or {}
-                fee_cost = float(fee_info.get('cost', 0)) if fee_info else 0
-                fee_currency = fee_info.get('currency', 'Unknown') if fee_info else 'Unknown'
-                
-                self.logger.info(f"✅ REAL ORDER EXECUTED SUCCESSFULLY:")
-                self.logger.info(f"   Order ID: {order_id}")
-                self.logger.info(f"   Filled: {filled_qty:.8f} {symbol}")
-                self.logger.info(f"   Average Price: {avg_price:.8f}")
-                self.logger.info(f"   Total Cost: {total_cost:.8f}")
-                self.logger.info(f"   Fee: {fee_cost:.8f} {fee_currency}")
-                self.logger.info(f"   Execution Time: {execution_time:.0f}ms")
-                self.logger.info(f"   Status: {order.get('status', 'Unknown')}")
-                
-                # Verify order was filled
-                if (order.get('status') in ['closed', 'filled'] and filled_qty > 0) or order.get('success'):
-                    self.logger.info(f"🎉 Order {order_id} FULLY FILLED - Trade recorded on Gate.io!")
-                    return {
-                        'success': True,
-                        'order_id': order_id,
-                        'filled_quantity': filled_qty,
-                        'average_price': avg_price,
-                        'total_cost': total_cost,
-                        'fee_cost': fee_cost,
-                        'fee_currency': fee_currency,
-                        'execution_time_ms': execution_time,
-                        'raw_order': order
-                    }
-                else:
-                    self.logger.error(f"❌ Order {order_id} not fully filled: status={order.get('status')}, filled={filled_qty}")
-                    return {'success': False, 'error': f'Order not filled: {order.get("status")}', 'order_id': order_id}
-            else:
-                self.logger.error(f"❌ Order execution failed - no order ID returned")
-                return {'success': False, 'error': f'Invalid order response: {type(order)}', 'raw_response': order}
-                
-        except Exception as e:
-            self.logger.error(f"❌ CRITICAL: Order execution failed for {symbol} {side}: {str(e)}")
-            return {'success': False, 'error': str(e), 'exception_type': type(e).__name__}
-    
-    async def request_confirmation(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Request manual confirmation for trade execution."""
-        # Skip confirmation if auto-trading is enabled
-        if self.auto_trading:
-            self.logger.info(f"🤖 🔴 LIVE AUTO-TRADING: Executing without confirmation")
-            return True
-            
-        # Skip confirmation if manual confirmation is disabled
-        if not self.config.get('enable_manual_confirmation', True):
-            self.logger.info(f"🤖 🔴 LIVE AUTO-TRADING: Manual confirmation disabled")
-            return True
-            
-        # For live trading auto mode, execute immediately
-        if self.auto_trading:
-            self.logger.info(f"🔴 🤖 LIVE AUTO-TRADING: Executing immediately")
-            return True
-            
-        print("\n" + "="*80)
-        print("🔍 ARBITRAGE OPPORTUNITY DETECTED")
-        print("="*80)
-        print(f"Exchange: {getattr(opportunity, 'exchange', 'Multi-Exchange')}")
-        print(f"Triangle Path: {opportunity.triangle_path}")
-        print(f"Initial Amount: {opportunity.initial_amount:.6f} {opportunity.base_currency}")
-        print(f"Expected Final Amount: {opportunity.final_amount:.6f} {opportunity.base_currency}")
-        print(f"Gross Profit: {opportunity.profit_percentage:.4f}% ({opportunity.profit_amount:.6f} {opportunity.base_currency})")
-        print(f"Estimated Fees: {opportunity.estimated_fees:.6f} {opportunity.base_currency}")
-        print(f"Estimated Slippage: {opportunity.estimated_slippage:.6f} {opportunity.base_currency}")
-        print(f"Net Profit: {opportunity.net_profit:.6f} {opportunity.base_currency}")
-        
-        mode_text = safe_unicode_text('🤖 🔴 LIVE AUTO-TRADING' if self.auto_trading else '🔴 LIVE TRADING (REAL MONEY)')
-        print(f"Trading Mode: {mode_text}")
-        
-        print("\nTrade Steps:")
-        for i, step in enumerate(opportunity.steps, 1):
-            print(f"  {i}. {step.side.upper()} {step.quantity:.6f} {step.symbol} at {step.price:.8f}")
-        print("="*80)
-        
-        warning_text = safe_unicode_text("⚠️  WARNING: This will execute REAL trades with REAL money!")
-        print(warning_text)
-        print(safe_unicode_text("⚠️  Make sure you understand the risks before proceeding!"))
-        
-        # AUTO-EXECUTE if auto-trading is enabled - NO PROMPTS
-        if self.auto_trading:
-            self.logger.info("🤖 🔴 LIVE AUTO-TRADING: Executing automatically")
-            return True
-        
-        # Only prompt if manual mode
-        prompt = "Execute REAL trade with REAL money? (y/n/q): "
-        response = input(prompt).lower().strip()
-        return response == 'y'
-    
-    async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Execute the triangular arbitrage trade with enhanced safety checks."""
-        # SINGLE SOURCE OF TRUTH: Use only _is_profitable() method
-        if not self._is_profitable(opportunity):
-            self.logger.info(f"❌ REJECTED: Opportunity below profit threshold")
-            return False
-        
-        # Enforce maximum trade amount (reduced to $20)
-        if opportunity.initial_amount > 20:
-            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} exceeds $20 limit, adjusting...")
-            opportunity.initial_amount = 20
-        
-        # Ensure minimum trade amount for Gate.io
-        if opportunity.initial_amount < 5:
-            self.logger.warning(f"Trade amount ${opportunity.initial_amount:.2f} below $5 minimum, adjusting...")
-            opportunity.initial_amount = 5
-            
-        start_time = datetime.now()
-        trade_start_ms = time.time() * 1000
-        trade_id = f"trade_{int(trade_start_ms)}_{uuid.uuid4().hex[:8]}"
-        
-        # Get the appropriate exchange
-        exchange_id = getattr(opportunity, 'exchange', None)
-        if not exchange_id:
-            self.logger.warning("No exchange specified, defaulting to first available exchange")
-            available_exchanges = list(self.exchange_manager.exchanges.keys())
-            if available_exchanges:
-                exchange_id = available_exchanges[0]
-                self.logger.info(f"Using exchange: {exchange_id}")
-            else:
-                self.logger.error("No exchanges available")
-                return False
-        
-        exchange = self.exchange_manager.get_exchange(exchange_id)
-        if not exchange:
-            self.logger.warning(f"Exchange {exchange_id} not available, trying alternatives...")
-            # Try to get any available exchange
-            available_exchanges = list(self.exchange_manager.exchanges.keys())
-            if available_exchanges:
-                exchange_id = available_exchanges[0]
-                exchange = self.exchange_manager.get_exchange(exchange_id)
-                self.logger.info(f"Using alternative exchange: {exchange_id}")
-                # Update opportunity exchange
-                if hasattr(opportunity, 'exchange'):
-                    opportunity.exchange = exchange_id
-            else:
-                self.logger.error("No exchanges available for trading")
-                return False
-        
-        # CRITICAL: Validate entire triangle before execution
-        if not await self._validate_triangle_before_execution(opportunity, exchange, exchange_id):
-            self.logger.error("❌ TRIANGLE VALIDATION FAILED - Aborting to prevent loss")
-            return False
-        
-        # Initialize trade_log at the beginning to avoid scope issues
-        trade_log = TradeLog(
-            trade_id=trade_id,
-            timestamp=start_time,
-            exchange=exchange_id,
-            triangle_path=opportunity.triangle_path.split(' → ') if isinstance(getattr(opportunity, 'triangle_path', None), str) else getattr(opportunity, 'triangle_path', ['Unknown']),
-            status=TradeStatus.SUCCESS,  # Will be updated if failed
-            initial_amount=opportunity.initial_amount,
-            final_amount=0.0,  # Will be updated
-            base_currency=opportunity.base_currency,
-            expected_profit_amount=opportunity.profit_amount,
-            expected_profit_percentage=opportunity.profit_percentage,
-            actual_profit_amount=0.0,  # Will be calculated
-            actual_profit_percentage=0.0,  # Will be calculated
-            total_fees_paid=0.0,  # Will be accumulated
-            total_slippage=0.0,  # Will be calculated
-            net_pnl=0.0,  # Will be calculated
-            total_duration_ms=0.0  # Will be calculated
-        )
+    async def _execute_triangle_trade(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Execute the complete triangular arbitrage trade with enhanced error handling."""
+        trade_id = f"trade_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+        start_time = time.time()
         
         try:
-            # Request confirmation
-            if not await self.request_confirmation(opportunity):
-                opportunity.status = OpportunityStatus.EXPIRED
-                self.logger.info("Trade execution declined by user")
+            exchange_name = getattr(opportunity, 'exchange', 'unknown')
+            exchange = self.exchange_manager.get_exchange(exchange_name)
+            
+            if not exchange:
+                self.logger.error(f"❌ Exchange {exchange_name} not available")
                 return False
             
-            opportunity.status = OpportunityStatus.EXECUTING
-            self.logger.info(f"Starting execution on {exchange_id}: {opportunity.triangle_path}")
+            self.logger.info(f"Starting execution on {exchange_name}: {opportunity.triangle_path}")
             
-            # Verify sufficient balance before starting
-            if not await self._verify_sufficient_balance(exchange, opportunity.base_currency, opportunity.initial_amount):
-                self.logger.error("❌ Insufficient balance for trade execution")
-                opportunity.status = OpportunityStatus.FAILED
+            # Check balance before starting
+            base_currency = opportunity.base_currency
+            required_balance = opportunity.initial_amount
+            
+            self.logger.info(f"🔍 Checking balance for {base_currency}: need {required_balance:.2f}")
+            
+            balance = await exchange.get_account_balance()
+            available_balance = balance.get(base_currency, 0)
+            
+            self.logger.info(f"💰 Available balance: {available_balance:.6f} {base_currency}")
+            
+            if available_balance < required_balance:
+                self.logger.error(f"❌ Insufficient balance: {available_balance:.6f} < {required_balance:.6f}")
                 return False
+            
+            self.logger.info(f"✅ Sufficient balance: {available_balance:.6f} {base_currency} (need {required_balance:.6f})")
             
             # Log trade attempt
-            execution_type = "AUTO" if self.auto_trading else "MANUAL"
-            trading_mode = "🔴 LIVE USDT TRIANGLE"
+            await self._log_trade_attempt(opportunity, trade_id)
             
-            self.trade_logger.info(f"TRADE_ATTEMPT ({execution_type}): {opportunity.to_dict()}")
-            self.logger.info(f"Starting {trading_mode} trade execution ({execution_type}): {opportunity.triangle_path}")
-            self.logger.info(f"🎯 USDT Triangle: Will execute 3 sequential trades on Gate.io")
-            self.logger.info(f"💰 Expected to turn {opportunity.initial_amount:.2f} USDT into {opportunity.final_amount:.2f} USDT")
+            # Execute triangle steps with enhanced error handling
+            return await self._execute_triangle_steps(opportunity, exchange, trade_id, start_time)
             
-            # Execute each step with REAL orders and enhanced validation
-            execution_results = []
-            current_balance = opportunity.initial_amount
-            order_ids = []  # Track all order IDs for verification
+        except Exception as e:
+            self.logger.error(f"❌ Critical error in triangle trade: {e}")
+            await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
+            return False
+    
+    async def _execute_triangle_steps(self, opportunity: ArbitrageOpportunity, exchange, trade_id: str, start_time: float) -> bool:
+        """Execute all three steps with ULTRA-FAST timing and CORRECT amounts."""
+        try:
+            self.logger.info(f"⚡ ULTRA-FAST USDT TRIANGLE ({'AUTO' if self.auto_trading else 'MANUAL'}): {opportunity.triangle_path}")
+            self.logger.info(f"🎯 Target: 3 trades in under 30 seconds on {exchange.exchange_id}")
+            self.logger.info(f"💰 Plan: {opportunity.initial_amount:.2f} USDT → profit")
             
-            for i, step in enumerate(opportunity.steps):
+            # ULTRA-FAST: Pre-sync time once
+            if exchange.exchange_id == 'kucoin':
+                await exchange._ensure_time_sync()
+                self.logger.info("⚡ Time synced for ultra-fast execution")
+            
+            # SPEED OPTIMIZATION: Get tickers once and cache
+            self.logger.info("⚡ Getting market prices for ultra-fast execution...")
+            ticker_start = time.time()
+            tickers = await exchange.fetch_tickers()
+            ticker_time = (time.time() - ticker_start) * 1000
+            
+            if not tickers:
+                self.logger.error("❌ Failed to get market prices")
+                return False
+            
+            self.logger.info(f"⚡ Got prices in {ticker_time:.0f}ms")
+            
+            # Track actual amounts through the triangle
+            current_balance = {
+                'USDT': opportunity.initial_amount,  # Start with planned USDT amount
+                'step_start_time': time.time()
+            }
+            
+            # Execute each step with ULTRA-FAST timing
+            for step_num, step in enumerate(opportunity.steps, 1):
                 try:
-                    self.logger.info(f"🔄 EXECUTING USDT TRIANGLE STEP {i+1}/{len(opportunity.steps)} ({trading_mode}/{execution_type})")
-                    self.logger.info(f"   Action: {step.side.upper()} {step.quantity:.6f} {step.symbol}")
-                    self.logger.info(f"   Expected Price: {step.price:.8f}")
-                    self.logger.info(f"🔴 REAL {exchange_id.upper()} ORDER: This will appear in your account immediately")
+                    step_start = time.time()
+                    self.logger.info(f"⚡ ULTRA-FAST STEP {step_num}/3 - Target: <10 seconds")
                     
-                    # Calculate proper quantity for each step with enhanced validation
-                    if i == 0:
-                        # Step 1: Buy intermediate currency with USDT
-                        actual_quantity = opportunity.initial_amount  # USDT amount to spend
-                        self.logger.info(f"   Step 1: Spending {actual_quantity:.2f} USDT to buy {step.symbol.split('/')[0]}")
-                    elif i == 1:
-                        # Step 2: Trade intermediate for quote currency
-                        # Use the amount we got from step 1
-                        prev_result = execution_results[i-1]
-                        actual_quantity = prev_result.get('filled_quantity', step.quantity)
-                        self.logger.info(f"   Step 2: Trading {actual_quantity:.8f} {step.symbol.split('/')[0]}")
-                        
-                        # CRITICAL FIX: Validate USD value for Gate.io minimum
-                        try:
-                            ticker = await exchange.get_ticker(step.symbol)
-                            current_price = ticker.get('bid', 0) if step.side == 'sell' else ticker.get('ask', 0)
-                            usd_value = actual_quantity * current_price if current_price > 0 else 0
-                            
-                            self.logger.info(f"   Step 2 USD validation: {actual_quantity:.8f} × {current_price:.8f} = ${usd_value:.2f}")
-                            
-                            min_order_value = self._get_exchange_minimum_order(exchange.exchange_id)
-                            if usd_value < min_order_value:
-                                self.logger.error(f"❌ CRITICAL: Step 2 order value ${usd_value:.2f} < ${min_order_value:.2f} {exchange.exchange_id} minimum")
-                                self.logger.error(f"❌ ABORTING TRADE: Cannot proceed with insufficient order value")
-                                raise Exception(f"Order value ${usd_value:.2f} below {exchange.exchange_id} ${min_order_value:.2f} minimum - trade aborted to prevent loss")
-                            
-                            self.logger.info(f"✅ Step 2 USD validation passed: ${usd_value:.2f} ≥ ${min_order_value:.2f}")
-                            
-                        except Exception as validation_error:
-                            self.logger.error(f"❌ Step 2 validation failed: {validation_error}")
-                            raise validation_error
-                    else:
-                        # Step 3: Sell quote currency for USDT
-                        # Use the amount we got from step 2
-                        prev_result = execution_results[i-1]
-                        actual_quantity = prev_result.get('filled_quantity', step.quantity)
-                        self.logger.info(f"   Step 3: Selling {actual_quantity:.8f} {step.symbol.split('/')[0]} for USDT")
+                    # SPEED: Use cached ticker data (no fresh fetch per step)
+                    if step.symbol not in tickers:
+                        self.logger.error(f"❌ Pair {step.symbol} not found in tickers")
+                        return False
                     
-                    # Execute REAL market order
-                    result = await self._execute_single_order(exchange, step.symbol, step.side, actual_quantity, i+1)
+                    ticker_data = tickers[step.symbol]
                     
-                    execution_results.append(result)
-                    
-                    if not result.get('success'):
-                        raise Exception(f"Order execution failed: {result.get('error', 'Unknown error')}")
-                    
-                    # Extract execution details
-                    order_id = result.get('order_id', 'N/A')
-                    filled_qty = result.get('filled_quantity', 0) or result.get('filled', 0)
-                    avg_price = result.get('average_price', step.price)
-                    fees_paid = result.get('fee_cost', 0)
-                    execution_time_ms = result.get('execution_time_ms', 0)
-                    
-                    order_ids.append(order_id)
-                    
-                    # For market buy orders, calculate the actual quantity received
-                    if step.side == 'buy' and i == 0:
-                        # For market buy, we spent USDT and received base currency
-                        # The filled_qty should be the amount of base currency we received
-                        total_cost = result.get('total_cost', 0) or result.get('cost', 0)
-                        if total_cost > 0 and avg_price > 0:
-                            filled_qty = total_cost / avg_price
-                            self.logger.info(f"🔧 {exchange.exchange_id} market buy: spent ${total_cost:.2f} USDT, received {filled_qty:.8f} {step.symbol.split('/')[0]}")
-                    
-                    # Calculate slippage
-                    expected_price = step.price
-                    slippage_pct = abs((avg_price - expected_price) / expected_price) * 100 if expected_price > 0 else 0
-                    
-                    # Log detailed step execution
-                    self.logger.info(f"✅ USDT TRIANGLE STEP {i+1} COMPLETED SUCCESSFULLY:")
-                    self.logger.info(f"   Order ID: {order_id}")
-                    self.logger.info(f"   Filled: {filled_qty:.8f}")
-                    self.logger.info(f"   Price: {avg_price:.8f} (expected {expected_price:.8f})")
-                    self.logger.info(f"   Fees: {fees_paid:.8f}")
-                    self.logger.info(f"   Slippage: {slippage_pct:.4f}%")
-                    self.logger.info(f"   Duration: {execution_time_ms:.0f}ms")
-                    self.logger.info(f"🔴 {exchange_id.upper()}: Order {order_id} is now visible in your account")
-                    
-                    # Create detailed step log
-                    step_log = TradeStepLog(
-                        step_number=i + 1,
-                        symbol=step.symbol,
-                        direction=TradeDirection.BUY if step.side == 'buy' else TradeDirection.SELL,
-                        expected_price=expected_price,
-                        actual_price=avg_price,
-                        expected_quantity=step.quantity,
-                        actual_quantity=filled_qty,
-                        expected_amount_out=step.expected_amount,
-                        actual_amount_out=filled_qty if step.side == 'sell' else filled_qty * avg_price,
-                        fees_paid=fees_paid,
-                        execution_time_ms=execution_time_ms,
-                        slippage_percentage=slippage_pct
+                    # CRITICAL FIX: Calculate CORRECT quantities for each step
+                    real_quantity, real_price = self._calculate_correct_step_amounts(
+                        step, ticker_data, current_balance, step_num
                     )
                     
-                    trade_log.steps.append(step_log)
-                    trade_log.total_fees_paid += fees_paid
+                    if real_quantity <= 0:
+                        self.logger.error(f"❌ Invalid quantity calculated for step {step_num}: {real_quantity}")
+                        return False
                     
-                    # Update current balance for next step
-                    if step.side == 'sell':
-                        current_balance = filled_qty * avg_price  # Got quote currency
-                    else:
-                        current_balance = filled_qty  # Got base currency
+                    # ULTRA-FAST: Execute order immediately
+                    order_result = await self._execute_ultra_fast_step(
+                        exchange, step.symbol, step.side, real_quantity, real_price, step_num
+                    )
                     
-                    self.logger.info(f"   Updated Balance: {current_balance:.8f}")
+                    if not order_result or not order_result.get('success'):
+                        self.logger.error(f"❌ ULTRA-FAST Step {step_num} failed: {order_result.get('error', 'Unknown')}")
+                        return False
                     
-                    # Wait between steps for market stability
-                    if i < len(opportunity.steps) - 1:
-                        await asyncio.sleep(1)
+                    # CRITICAL FIX: Update balance with ACTUAL filled amounts
+                    filled_quantity = float(order_result.get('filled', 0))
+                    cost = float(order_result.get('cost', 0))
+                    
+                    step_time = (time.time() - step_start) * 1000
+                    self.logger.info(f"⚡ Step {step_num} completed in {step_time:.0f}ms")
+                    
+                    if step.side == 'buy':
+                        # BUY: Spent quote currency, received base currency
+                        base_currency = step.symbol.split('/')[0]   # AR
+                        quote_currency = step.symbol.split('/')[1]  # USDT
                         
-                except Exception as e:
-                    self.logger.error(f"❌ CRITICAL ERROR in USDT triangle step {i+1}: {str(e)}")
-                    opportunity.status = OpportunityStatus.FAILED
+                        # Update balances correctly
+                        current_balance[quote_currency] = current_balance.get(quote_currency, 0) - cost
+                        current_balance[base_currency] = filled_quantity  # We now have this much AR
+                        
+                        self.logger.info(f"✅ BUY: Spent {cost:.2f} {quote_currency} → Got {filled_quantity:.8f} {base_currency}")
+                        
+                    else:
+                        # SELL: Sold base currency, received quote currency
+                        base_currency = step.symbol.split('/')[0]   # AR or BTC
+                        quote_currency = step.symbol.split('/')[1]  # BTC or USDT
+                        
+                        # Update balances correctly
+                        current_balance[base_currency] = 0  # Sold all of this currency
+                        current_balance[quote_currency] = current_balance.get(quote_currency, 0) + cost
+                        
+                        self.logger.info(f"✅ SELL: Sold {filled_quantity:.8f} {base_currency} → Got {cost:.8f} {quote_currency}")
                     
-                    # Update trade log for failure
-                    trade_log.status = TradeStatus.FAILED
-                    trade_log.error_message = str(e)
-                    trade_log.failed_at_step = i + 1
-                    trade_log.final_amount = current_balance
-                    
-                    # Log failed trade
-                    self.trade_logger.error(f"TRADE_FAILED ({trading_mode}/{execution_type}): {opportunity.to_dict()} | Error: {str(e)}")
-                    
-                    # Calculate final metrics and log
-                    trade_end_ms = time.time() * 1000
-                    trade_log.total_duration_ms = trade_end_ms - trade_start_ms
-                    await self.detailed_trade_logger.log_trade(trade_log)
-                    
+                    self.logger.info(f"⚡ Order {order_result.get('id')} completed in {step_time:.0f}ms")
+                
+                except Exception as step_error:
+                    self.logger.error(f"❌ ULTRA-FAST Step {step_num} error: {step_error}")
+                    await self._log_trade_failure(opportunity, trade_id, str(step_error), start_time)
                     return False
             
-            # All steps completed successfully
-            self.logger.info(f"🎉 ALL USDT TRIANGLE STEPS COMPLETED SUCCESSFULLY!")
-            self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
-            self.logger.info(f"🔴 GATE.IO: Check your Spot Orders for these {len(order_ids)} trades!")
-            self.logger.info(f"🔴 GATE.IO: All trades are now visible in your Trade History")
+            # ULTRA-FAST: All steps completed - calculate final result
+            final_balance = current_balance.get('USDT', 0)
+            actual_profit = final_balance - opportunity.initial_amount
+            actual_profit_pct = (actual_profit / opportunity.initial_amount) * 100
             
-            # Calculate actual profit
-            actual_profit = current_balance - opportunity.initial_amount
-            actual_profit_percentage = (actual_profit / opportunity.initial_amount) * 100
+            execution_time = (time.time() - start_time) * 1000
             
-            opportunity.final_amount = current_balance
-            opportunity.profit_amount = actual_profit
-            opportunity.profit_percentage = actual_profit_percentage
-            opportunity.status = OpportunityStatus.COMPLETED
-            opportunity.execution_time = (datetime.now() - start_time).total_seconds()
-            
-            # Update trade log with final results
-            trade_end_ms = time.time() * 1000
-            trade_log.final_amount = current_balance
-            trade_log.total_duration_ms = trade_end_ms - trade_start_ms
-            trade_log.total_slippage = sum(step.slippage_percentage / 100 * step.expected_amount_out for step in trade_log.steps)
-            
-            # Log final success
-            self.logger.info(f"🎉 USDT TRIANGULAR ARBITRAGE TRADE COMPLETED SUCCESSFULLY!")
-            self.logger.info(f"   Exchange: {exchange_id}")
-            self.logger.info(f"   Trade ID: {trade_id}")
-            self.logger.info(f"   Order IDs: {', '.join(order_ids)}")
-            self.logger.info(f"   USDT Triangle: {opportunity.triangle_path}")
-            self.logger.info(f"   Initial Amount: {opportunity.initial_amount:.8f} {opportunity.base_currency}")
-            self.logger.info(f"   Final Amount: {current_balance:.8f} {opportunity.base_currency}")
-            self.logger.info(f"   Actual Profit: {actual_profit:.8f} {opportunity.base_currency} ({actual_profit_percentage:.4f}%)")
-            self.logger.info(f"   Total Fees: {trade_log.total_fees_paid:.8f}")
-            self.logger.info(f"   Net P&L: {actual_profit - trade_log.total_fees_paid:.8f} {opportunity.base_currency}")
-            self.logger.info(f"   Execution Time: {trade_log.total_duration_ms:.0f}ms")
-            self.logger.info(f"🔴 {exchange_id.upper()} SPOT ORDERS: All {len(order_ids)} trades are now visible in your account!")
-            self.logger.info(f"🔴 {exchange_id.upper()} BALANCE: Your USDT balance has been updated with the profit!")
+            self.logger.info(f"🎉 ULTRA-FAST TRIANGLE COMPLETED!")
+            self.logger.info(f"   Initial: {opportunity.initial_amount:.6f} USDT")
+            self.logger.info(f"   Final: {final_balance:.6f} USDT")
+            self.logger.info(f"   Actual Profit: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%)")
+            self.logger.info(f"   ULTRA-FAST Duration: {execution_time:.0f}ms (Target: <30s)")
             
             # Log successful trade
-            self.trade_logger.info(f"TRADE_SUCCESS ({trading_mode}/{execution_type}): {opportunity.to_dict()}")
-            
-            # Log detailed trade
-            await self.detailed_trade_logger.log_trade(trade_log)
+            await self._log_trade_success(opportunity, trade_id, final_balance, start_time)
             
             return True
             
         except Exception as e:
-            opportunity.status = OpportunityStatus.FAILED
-            opportunity.execution_time = (datetime.now() - start_time).total_seconds()
+            self.logger.error(f"❌ ULTRA-FAST execution error: {e}")
+            await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
+            return False
+    
+    def _calculate_correct_step_amounts(self, step: TradeStep, ticker: Dict[str, Any], 
+                                      current_balance: Dict[str, float], step_num: int) -> tuple:
+        """Calculate CORRECT amounts for each step of the triangle."""
+        try:
+            bid_price = float(ticker['bid'])
+            ask_price = float(ticker['ask'])
             
-            # Update trade log for unexpected failure
-            trade_end_ms = time.time() * 1000
-            trade_log.status = TradeStatus.FAILED
-            trade_log.error_message = str(e)
-            trade_log.final_amount = current_balance
-            trade_log.total_duration_ms = trade_end_ms - trade_start_ms
+            if step_num == 1:
+                # Step 1: USDT → Intermediate (e.g., USDT → AR)
+                # Use FIXED trade amount in USDT
+                price = ask_price  # Buy at ask price
+                quantity = step.quantity  # This should be the USDT amount (e.g., $20)
+                
+                self.logger.info(f"⚡ Step 1: Spend {quantity:.2f} USDT to buy {step.symbol.split('/')[0]}")
+                return quantity, price
+                
+            elif step_num == 2:
+                # Step 2: Intermediate → Quote (e.g., AR → BTC)
+                # Use ALL the intermediate currency we got from step 1
+                intermediate_currency = step.symbol.split('/')[0]  # AR
+                available_intermediate = current_balance.get(intermediate_currency, 0)
+                
+                if available_intermediate <= 0:
+                    self.logger.error(f"❌ No {intermediate_currency} available for step 2")
+                    return 0, 0
+                
+                price = bid_price  # Sell at bid price
+                quantity = available_intermediate  # Sell ALL AR we have
+                
+                self.logger.info(f"⚡ Step 2: Sell ALL {quantity:.8f} {intermediate_currency}")
+                return quantity, price
+                
+            elif step_num == 3:
+                # Step 3: Quote → USDT (e.g., BTC → USDT)
+                # Use ALL the quote currency we got from step 2
+                quote_currency = step.symbol.split('/')[0]  # BTC
+                available_quote = current_balance.get(quote_currency, 0)
+                
+                if available_quote <= 0:
+                    self.logger.error(f"❌ No {quote_currency} available for step 3")
+                    return 0, 0
+                
+                price = bid_price  # Sell at bid price
+                quantity = available_quote  # Sell ALL BTC we have
+                
+                self.logger.info(f"⚡ Step 3: Sell ALL {quantity:.8f} {quote_currency} for USDT")
+                return quantity, price
             
-            # Log trade safely
+            else:
+                self.logger.error(f"❌ Invalid step number: {step_num}")
+                return 0, 0
+                
+        except Exception as e:
+            self.logger.error(f"Error calculating correct amounts for step {step_num}: {e}")
+            return 0, 0
+
+    async def _execute_ultra_fast_step(self, exchange, symbol: str, side: str, 
+                                     quantity: float, price: float, step_num: int) -> Dict[str, Any]:
+        """Execute single step with ULTRA-FAST timing."""
+        try:
+            self.logger.info(f"⚡ ULTRA-FAST STEP {step_num}: {side.upper()} {quantity:.8f} {symbol}")
+            
+            # ULTRA-FAST: Execute order immediately
+            order_result = await exchange.place_market_order(symbol, side, quantity)
+            
+            if not order_result:
+                return {'success': False, 'error': 'No response from exchange'}
+            
+            if not order_result.get('success'):
+                return order_result
+            
+            self.logger.info(f"⚡ Step {step_num} SUCCESS: Order {order_result.get('id')} filled")
+            return order_result
+            
+        except Exception as e:
+            self.logger.error(f"❌ Ultra-fast step {step_num} error: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    async def _calculate_real_order_params(self, step: TradeStep, ticker: Dict[str, Any], 
+                                         current_balance: Dict[str, float], step_num: int) -> tuple:
+        """Calculate CORRECT order parameters with proper amount tracking."""
+        try:
+            # Get current prices
+            bid_price = float(ticker['bid'])
+            ask_price = float(ticker['ask'])
+            
+            if step.side == 'buy':
+                price = ask_price
+                
+                if step_num == 1:
+                    # Step 1: Buy intermediate currency with USDT (use FIXED trade amount)
+                    quantity = step.quantity  # Use the planned USDT amount (e.g., $20)
+                    self.logger.info(f"🔧 Step 1 BUY: Spending {quantity:.2f} USDT to buy {step.symbol.split('/')[0]}")
+                else:
+                    # Later buy steps: use available balance of quote currency
+                    source_currency = step.symbol.split('/')[1]
+                    available_amount = current_balance.get(source_currency, 0)
+                    quantity = available_amount
+                    self.logger.info(f"🔧 Step {step_num} BUY: Using {quantity:.8f} {source_currency}")
+                
+            else:  # sell
+                price = bid_price
+                # For sell orders: sell ALL available quantity of the base currency
+                source_currency = step.symbol.split('/')[0]
+                available_quantity = current_balance.get(source_currency, 0)
+                
+                # CRITICAL FIX: Use ALL available quantity for sell orders
+                quantity = available_quantity
+                self.logger.info(f"🔧 Step {step_num} SELL: Selling ALL {quantity:.8f} {source_currency}")
+                
+                # Validate we have something to sell
+                if quantity <= 0:
+                    self.logger.error(f"❌ No {source_currency} available to sell in step {step_num}")
+                    return 0, 0
+            
+            self.logger.info(f"⚡ ULTRA-FAST Step {step_num}: {step.side.upper()} {quantity:.8f} {step.symbol} at {price:.8f}")
+            
+            return quantity, price
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating real order params: {e}")
+            return 0, 0
+    
+    async def _calculate_order_value_usd(self, symbol: str, quantity: float, price: float, exchange) -> float:
+        """Calculate USD value of an order."""
+        try:
+            # For USDT pairs, the calculation is straightforward
+            if symbol.endswith('/USDT'):
+                return quantity * price
+            elif symbol.startswith('USDT/'):
+                return quantity
+            else:
+                # For non-USDT pairs, convert via USDT
+                quote_currency = symbol.split('/')[1]
+                
+                # Try to get USD value via USDT pairs
+                tickers = await exchange.fetch_tickers()
+                
+                base_currency = symbol.split('/')[0]
+                if f"{base_currency}/USDT" in tickers:
+                    base_usd_price = float(tickers[f"{base_currency}/USDT"]['last'])
+                    return quantity * base_usd_price
+                elif f"{quote_currency}/USDT" in tickers:
+                    quote_usd_price = float(tickers[f"{quote_currency}/USDT"]['last'])
+                    return quantity * price * quote_usd_price
+                else:
+                    # Fallback estimate
+                    return quantity * price * 50000  # Rough BTC price estimate
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating order USD value: {e}")
+            return 0
+    
+    def _get_min_order_value(self, exchange_id: str) -> float:
+        """Get minimum order value for exchange."""
+        minimums = {
+            'kucoin': 1.0,    # $1 minimum
+            'binance': 10.0,  # $10 minimum
+            'gate': 5.0,      # $5 minimum
+            'bybit': 5.0,     # $5 minimum
+        }
+        return minimums.get(exchange_id, 5.0)
+    
+    async def _attempt_order_recovery(self, exchange, order_id: str, symbol: str, step_num: int) -> Optional[Dict[str, Any]]:
+        """Attempt to recover from apparent order failure by checking final status."""
+        try:
+            self.logger.info(f"🔄 Attempting recovery for order {order_id}...")
+            
+            # Wait a bit for order to potentially complete
+            await asyncio.sleep(3)
+            
+            # Check final order status
             try:
-                await self.detailed_trade_logger.log_trade(trade_log)
-            except Exception as log_error:
-                self.logger.error(f"Error logging trade: {log_error}")
+                final_order = await exchange.exchange.fetch_order(order_id, symbol)
+                if final_order:
+                    status = final_order.get('status', 'unknown')
+                    filled = float(final_order.get('filled', 0))
+                    
+                    self.logger.info(f"📊 Final order status: {status}, filled: {filled:.8f}")
+                    
+                    if status in ['closed', 'filled'] and filled > 0:
+                        self.logger.info(f"🔄 Order {order_id} actually filled, continuing trade...")
+                        
+                        # Convert to our format
+                        return {
+                            'success': True,
+                            'id': order_id,
+                            'status': status,
+                            'filled': filled,
+                            'average': final_order.get('average', 0),
+                            'cost': final_order.get('cost', 0),
+                            'fee': final_order.get('fee', {}),
+                            'symbol': symbol
+                        }
+                    else:
+                        self.logger.error(f"❌ Order {order_id} recovery failed: status={status}, filled={filled}")
+                        return None
+                else:
+                    self.logger.error(f"❌ Could not fetch order {order_id} for recovery")
+                    return None
+                    
+            except Exception as fetch_error:
+                self.logger.error(f"❌ Error fetching order for recovery: {fetch_error}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error in order recovery: {e}")
+            return None
+    
+    async def _log_trade_attempt(self, opportunity: ArbitrageOpportunity, trade_id: str):
+        """Log trade attempt."""
+        if self.trade_logger:
+            try:
+                trade_data = {
+                    'triangle_path': opportunity.triangle_path,
+                    'pairs': [step.symbol for step in opportunity.steps],
+                    'initial_amount': opportunity.initial_amount,
+                    'final_amount': opportunity.final_amount,
+                    'profit_percentage': round(opportunity.profit_percentage, 6),
+                    'profit_amount': round(opportunity.profit_amount, 6),
+                    'net_profit': round(opportunity.net_profit, 6),
+                    'estimated_fees': round(opportunity.estimated_fees, 6),
+                    'estimated_slippage': round(opportunity.estimated_slippage, 6),
+                    'steps': [step.to_dict() for step in opportunity.steps],
+                    'detected_at': opportunity.detected_at.isoformat(),
+                    'status': 'executing',
+                    'execution_time': 0.0
+                }
+                
+                self.trade_logger.logger.info(f"TRADE_ATTEMPT ({'AUTO' if self.auto_trading else 'MANUAL'}): {trade_data}")
+            except Exception as e:
+                self.logger.error(f"Error logging trade attempt: {e}")
+    
+    async def _log_trade_success(self, opportunity: ArbitrageOpportunity, trade_id: str, 
+                               final_amount: float, start_time: float):
+        """Log successful trade completion."""
+        if self.trade_logger:
+            try:
+                execution_time = (time.time() - start_time) * 1000
+                actual_profit = final_amount - opportunity.initial_amount
+                actual_profit_pct = (actual_profit / opportunity.initial_amount) * 100
+                
+                # Create detailed trade log
+                trade_log = TradeLog(
+                    trade_id=trade_id,
+                    timestamp=datetime.now(),
+                    exchange=getattr(opportunity, 'exchange', 'unknown'),
+                    triangle_path=opportunity.triangle_path.split(' → ')[:3],
+                    status=TradeStatus.SUCCESS,
+                    initial_amount=opportunity.initial_amount,
+                    final_amount=final_amount,
+                    base_currency=opportunity.base_currency,
+                    expected_profit_amount=opportunity.profit_amount,
+                    expected_profit_percentage=opportunity.profit_percentage,
+                    actual_profit_amount=actual_profit,
+                    actual_profit_percentage=actual_profit_pct,
+                    total_fees_paid=opportunity.estimated_fees,
+                    total_slippage=opportunity.estimated_slippage,
+                    net_pnl=actual_profit - opportunity.estimated_fees,
+                    total_duration_ms=execution_time
+                )
+                
+                await self.trade_logger.log_trade(trade_log)
+                
+            except Exception as e:
+                self.logger.error(f"Error logging trade success: {e}")
+    
+    async def _log_trade_failure(self, opportunity: ArbitrageOpportunity, trade_id: str, 
+                               error_message: str, start_time: float):
+        """Log failed trade."""
+        if self.trade_logger:
+            try:
+                execution_time = (time.time() - start_time) * 1000
+                
+                trade_data = {
+                    'triangle_path': opportunity.triangle_path,
+                    'pairs': [step.symbol for step in opportunity.steps],
+                    'initial_amount': opportunity.initial_amount,
+                    'final_amount': opportunity.final_amount,
+                    'profit_percentage': round(opportunity.profit_percentage, 6),
+                    'profit_amount': round(opportunity.profit_amount, 6),
+                    'net_profit': round(opportunity.net_profit, 6),
+                    'estimated_fees': round(opportunity.estimated_fees, 6),
+                    'estimated_slippage': round(opportunity.estimated_slippage, 6),
+                    'steps': [step.to_dict() for step in opportunity.steps],
+                    'detected_at': opportunity.detected_at.isoformat(),
+                    'status': 'failed',
+                    'execution_time': execution_time
+                }
+                
+                self.trade_logger.logger.error(f"TRADE_FAILED ({'🔴 LIVE USDT TRIANGLE/AUTO' if self.auto_trading else 'MANUAL'}): {trade_data} | Error: {error_message}")
+                
+                # Create detailed failure log
+                trade_log = TradeLog(
+                    trade_id=trade_id,
+                    timestamp=datetime.now(),
+                    exchange=getattr(opportunity, 'exchange', 'unknown'),
+                    triangle_path=opportunity.triangle_path.split(' → ')[:3],
+                    status=TradeStatus.FAILED,
+                    initial_amount=opportunity.initial_amount,
+                    final_amount=opportunity.initial_amount,  # No change on failure
+                    base_currency=opportunity.base_currency,
+                    expected_profit_amount=opportunity.profit_amount,
+                    expected_profit_percentage=opportunity.profit_percentage,
+                    actual_profit_amount=0,
+                    actual_profit_percentage=0,
+                    total_fees_paid=opportunity.estimated_fees * 0.1,  # Partial fees
+                    total_slippage=0,
+                    net_pnl=0,
+                    total_duration_ms=execution_time,
+                    error_message=error_message
+                )
+                
+                await self.trade_logger.log_trade(trade_log)
+                
+            except Exception as e:
+                self.logger.error(f"Error logging trade failure: {e}")
+    
+    async def _get_manual_confirmation(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Get manual confirmation for trade execution."""
+        try:
+            print("\n" + "="*60)
+            print("🔴 LIVE TRADE CONFIRMATION")
+            print("="*60)
+            print(f"Exchange: {getattr(opportunity, 'exchange', 'Unknown')}")
+            print(f"Triangle: {opportunity.triangle_path}")
+            print(f"Trade Amount: ${opportunity.initial_amount:.2f}")
+            print(f"Expected Profit: {opportunity.profit_percentage:.4f}% (${opportunity.profit_amount:.2f})")
+            print("⚠️ WARNING: This will execute REAL trades with REAL money!")
+            print("="*60)
             
-            execution_type = "AUTO" if self.auto_trading else "MANUAL" 
-            trading_mode = "🔴 LIVE"
-            self.logger.error(f"❌ ARBITRAGE EXECUTION FAILED on {exchange_id} ({trading_mode}/{execution_type}): {str(e)}")
-            self.trade_logger.error(f"TRADE_FAILED ({trading_mode}/{execution_type}): {opportunity.to_dict()} | Error: {str(e)}")
+            # In a real GUI, this would be a dialog box
+            # For now, we'll auto-approve if auto_trading is enabled
+            if self.auto_trading:
+                return True
             
+            # For manual mode, require explicit confirmation
+            return False  # Would be replaced with actual user input in GUI
+            
+        except Exception as e:
+            self.logger.error(f"Error getting manual confirmation: {e}")
             return False

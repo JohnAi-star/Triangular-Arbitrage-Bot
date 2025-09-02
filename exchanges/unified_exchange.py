@@ -20,6 +20,7 @@ except Exception:
 
 import ccxt.async_support as ccxt
 import asyncio
+import time
 from typing import Dict, List, Any, Optional, Tuple, Callable
 from exchanges.base_exchange import BaseExchange
 from utils.logger import setup_logger
@@ -46,6 +47,10 @@ class UnifiedExchange(BaseExchange):
         self.live_trading = True  # 🔴 FORCE LIVE TRADING
         self.dry_run = False      # 🔴 NO DRY RUN MODE
         self.trading_pairs: Dict[str, Any] = {}
+        
+        # KuCoin timestamp synchronization
+        self.server_time_offset = 0
+        self.last_time_sync = 0
         
         # FORCE REAL TRADING ONLY
         self.logger.info(f"🔴 LIVE TRADING MODE ENABLED - REAL MONEY TRADES ON {self.exchange_id.upper()}")
@@ -92,7 +97,21 @@ class UnifiedExchange(BaseExchange):
                 exchange_config['password'] = self.config.get('passphrase')
                 self.logger.info(f"Added passphrase for {self.exchange_id}")
 
+            # KuCoin-specific timestamp synchronization
+            if self.exchange_id == 'kucoin':
+                exchange_config['options'].update({
+                    'adjustForTimeDifference': True,
+                    'recvWindow': 10000,  # 10 second window for faster execution
+                    'timeDifference': 0   # Will be auto-adjusted
+                })
+                self.logger.info("🕒 KuCoin timestamp synchronization enabled")
+
             self.exchange = exchange_class(exchange_config)
+            
+            # Synchronize server time for KuCoin
+            if self.exchange_id == 'kucoin':
+                await self._synchronize_kucoin_time()
+            
             await self.exchange.load_markets()
             await self._verify_real_connection()
             
@@ -131,6 +150,65 @@ class UnifiedExchange(BaseExchange):
             self.logger.error(f"❌ Failed to connect to {self.exchange_id}: {e}")
             self.logger.error("   Check your API credentials in .env file")
             return False
+
+    async def _synchronize_kucoin_time(self):
+        """Synchronize time with KuCoin server to prevent timestamp errors"""
+        try:
+            self.logger.info("🕒 Synchronizing time with KuCoin server...")
+            
+            # Get server time from KuCoin using correct method
+            try:
+                server_time_response = await self.exchange.public_get_timestamp()
+                server_time = int(server_time_response['data'])
+            except AttributeError:
+                # Fallback method for KuCoin
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://api.kucoin.com/api/v1/timestamp') as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            server_time = int(data['data'])
+                        else:
+                            raise Exception(f"Failed to get server time: {response.status}")
+            
+            # Calculate local time
+            local_time = int(time.time() * 1000)
+            
+            # Calculate offset
+            self.server_time_offset = server_time - local_time
+            self.last_time_sync = time.time()
+            
+            self.logger.info(f"✅ KuCoin time synchronized:")
+            self.logger.info(f"   Server time: {server_time}")
+            self.logger.info(f"   Local time: {local_time}")
+            self.logger.info(f"   Offset: {self.server_time_offset}ms")
+            
+            # Apply the offset to the exchange
+            if hasattr(self.exchange, 'options'):
+                self.exchange.options['timeDifference'] = self.server_time_offset
+                # Also set adjustForTimeDifference to True
+                self.exchange.options['adjustForTimeDifference'] = True
+                self.logger.info(f"🕒 Applied {self.server_time_offset}ms offset to KuCoin exchange")
+            
+        except Exception as e:
+            # Use system time offset as fallback
+            self.server_time_offset = 0
+            self.last_time_sync = time.time()
+            self.logger.warning(f"⚠️ Time synchronization failed: {e}")
+            self.logger.info("Using system time - applying 1-second buffer for safety")
+            
+            # Apply safety buffer
+            if hasattr(self.exchange, 'options'):
+                self.exchange.options['timeDifference'] = 1000  # 1 second buffer
+                self.exchange.options['adjustForTimeDifference'] = True
+
+    async def _ensure_time_sync(self):
+        """Ensure time is synchronized before critical operations"""
+        if self.exchange_id == 'kucoin':
+            current_time = time.time()
+            # Re-sync every 2 minutes for better accuracy
+            if current_time - self.last_time_sync > 120:
+                await self._synchronize_kucoin_time()
 
     async def _check_internet_connectivity(self) -> bool:
         import aiohttp
@@ -265,6 +343,9 @@ class UnifiedExchange(BaseExchange):
     async def place_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
         """Execute REAL market order on exchange that will appear in your account."""
         try:
+            # Ensure time synchronization for KuCoin
+            await self._ensure_time_sync()
+            
             self.logger.info(f"🔴 EXECUTING REAL {self.exchange_id.upper()} ORDER:")
             self.logger.info(f"   Symbol: {symbol}")
             self.logger.info(f"   Side: {side.upper()}")
@@ -311,24 +392,41 @@ class UnifiedExchange(BaseExchange):
                     self.logger.info(f"🔧 Gate.io MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
                     order = await self.exchange.create_market_order(symbol, side, qty)
             elif self.exchange_id == 'kucoin':
-                self.logger.info("🔧 Using KuCoin specific order format...")
+                self.logger.info("🔧 Using KuCoin specific order format with timestamp sync...")
                 
-                # KuCoin market order handling
+                # Get synchronized timestamp
+                current_timestamp = int(time.time() * 1000) + self.server_time_offset + 1000  # Add 1s buffer
+                
                 if side.lower() == 'buy':
                     # For market BUY orders, KuCoin needs the quote currency amount (USDT to spend)
                     self.logger.info(f"🔧 KuCoin MARKET BUY: Spending {qty:.2f} USDT to buy {symbol}")
+                    
+                    # ULTRA-FAST: Use simplified order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
                         side='buy',
                         amount=qty,  # USDT amount to spend
                         price=None,
-                        params={'quoteOrderQty': qty}  # KuCoin specific parameter
+                        params={
+                            'funds': str(qty),  # Use 'funds' parameter for market buy
+                            'timestamp': current_timestamp
+                        }
                     )
                 else:
-                    # For market SELL orders, use standard format
+                    # For market SELL orders, use standard format with timestamp
                     self.logger.info(f"🔧 KuCoin MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
-                    order = await self.exchange.create_market_order(symbol, side, qty)
+                    order = await self.exchange.create_order(
+                        symbol=symbol,
+                        type='market',
+                        side='sell',
+                        amount=qty,
+                        price=None,
+                        params={
+                            'size': str(qty),  # Use 'size' parameter for market sell
+                            'timestamp': current_timestamp
+                        }
+                    )
             else:
                 # Standard order for other exchanges
                 order = await self.exchange.create_market_order(symbol, side, qty)
@@ -345,8 +443,40 @@ class UnifiedExchange(BaseExchange):
                     'amount': qty
                 }
             
-            # Extract order details
+            # Extract initial order details
             order_id = order.get('id', 'Unknown')
+            initial_status = order.get('status', 'Unknown')
+            
+            self.logger.info(f"📋 Initial order response: ID={order_id}, Status={initial_status}")
+            
+            # CRITICAL FIX: Wait for order execution completion
+            if order_id and order_id != 'Unknown':
+                self.logger.info(f"⏳ Waiting for order {order_id} to fill...")
+                
+                # Wait for order completion with timeout and retries
+                final_order = await self._wait_for_order_completion(order_id, symbol, timeout_seconds=30)
+                
+                if final_order:
+                    order = final_order  # Use the completed order data
+                    self.logger.info(f"✅ Order {order_id} completed successfully")
+                else:
+                    self.logger.error(f"❌ Order {order_id} failed to complete within timeout")
+                    return {
+                        'success': False,
+                        'status': 'timeout',
+                        'error': f'Order {order_id} timeout after 30 seconds',
+                        'id': order_id
+                    }
+            else:
+                self.logger.error("❌ No valid order ID received")
+                return {
+                    'success': False,
+                    'status': 'failed',
+                    'error': 'No valid order ID received',
+                    'raw_order': order
+                }
+            
+            # Extract final order details after completion
             status = order.get('status', 'Unknown')
             filled_qty = float(order.get('filled', 0) or 0)
             avg_price = float(order.get('average', 0) or order.get('price', 0) or 0)
@@ -361,8 +491,8 @@ class UnifiedExchange(BaseExchange):
                 fee_cost = float(fee_info.get('cost', 0) or 0)
                 fee_currency = fee_info.get('currency', 'Unknown')
             
-            # Log comprehensive order details
-            self.logger.info(f"✅ {self.exchange_id.upper()} ORDER RESPONSE RECEIVED:")
+            # Log final order details after completion
+            self.logger.info(f"✅ {self.exchange_id.upper()} ORDER COMPLETED:")
             self.logger.info(f"   Order ID: {order_id}")
             self.logger.info(f"   Status: {status}")
             self.logger.info(f"   Filled Quantity: {filled_qty:.8f}")
@@ -413,6 +543,61 @@ class UnifiedExchange(BaseExchange):
             self.logger.error(f"   Quantity: {qty}")
             self.logger.error(f"   Exception Type: {type(e).__name__}")
             
+            # If timestamp error, try to re-sync and retry once
+            if self.exchange_id == 'kucoin' and 'KC-API-TIMESTAMP' in str(e):
+                self.logger.info("🕒 Timestamp error detected, re-synchronizing and retrying...")
+                await self._synchronize_kucoin_time()
+                
+                try:
+                    # Retry the order with fresh timestamp
+                    current_timestamp = int(time.time() * 1000) + self.server_time_offset
+                    
+                    if side.lower() == 'buy':
+                        retry_order = await self.exchange.create_order(
+                            symbol=symbol,
+                            type='market',
+                            side='buy',
+                            amount=qty,
+                            price=None,
+                            params={
+                                'quoteOrderQty': qty,
+                                'timestamp': current_timestamp
+                            }
+                        )
+                    else:
+                        retry_order = await self.exchange.create_order(
+                            symbol=symbol,
+                            type='market',
+                            side='sell',
+                            amount=qty,
+                            price=None,
+                            params={'timestamp': current_timestamp}
+                        )
+                    
+                    if retry_order and retry_order.get('id'):
+                        self.logger.info(f"✅ Retry successful after time sync: {retry_order['id']}")
+                        
+                        # Wait for completion
+                        final_order = await self._wait_for_order_completion(retry_order['id'], symbol, timeout_seconds=30)
+                        
+                        if final_order:
+                            return {
+                                'success': True,
+                                'id': retry_order['id'],
+                                'status': final_order.get('status'),
+                                'filled': float(final_order.get('filled', 0)),
+                                'average': float(final_order.get('average', 0)),
+                                'cost': float(final_order.get('cost', 0)),
+                                'fee': final_order.get('fee', {}),
+                                'symbol': symbol,
+                                'side': side,
+                                'amount': qty,
+                                'retry_success': True
+                            }
+                        
+                except Exception as retry_error:
+                    self.logger.error(f"❌ Retry also failed: {retry_error}")
+            
             return {
                 'success': False,
                 'status': 'failed',
@@ -422,6 +607,61 @@ class UnifiedExchange(BaseExchange):
                 'amount': qty,
                 'exception_type': type(e).__name__
             }
+
+    async def _wait_for_order_completion(self, order_id: str, symbol: str, timeout_seconds: int = 30) -> Optional[Dict[str, Any]]:
+        """ULTRA-FAST order completion with 50ms checking"""
+        try:
+            start_time = time.time()
+            check_interval = 0.05  # ULTRA-FAST: Check every 50ms
+            max_checks = int(timeout_seconds / check_interval)
+            
+            self.logger.info(f"⚡ ULTRA-FAST monitoring order {order_id} (timeout: {timeout_seconds}s)")
+            
+            for attempt in range(max_checks):
+                try:
+                    # Fetch current order status
+                    current_order = await self.exchange.fetch_order(order_id, symbol)
+                    
+                    if current_order:
+                        status = current_order.get('status', 'unknown')
+                        filled = float(current_order.get('filled', 0) or 0)
+                        
+                        if attempt % 10 == 0:  # Log every 0.5 seconds
+                            self.logger.debug(f"⚡ Order {order_id} check #{attempt + 1}: status={status}, filled={filled:.8f}")
+                        
+                        # Check if order is completed
+                        if status in ['closed', 'filled'] and filled > 0:
+                            elapsed = time.time() - start_time
+                            self.logger.info(f"⚡ ULTRA-FAST: Order {order_id} FILLED in {elapsed:.1f}s")
+                            return current_order
+                        elif status in ['canceled', 'cancelled', 'rejected']:
+                            self.logger.error(f"❌ Order {order_id} was {status}")
+                            return None
+                        
+                        # KuCoin specific: Check for 'done' status
+                        if status == 'done' and filled > 0:
+                            elapsed = time.time() - start_time
+                            self.logger.info(f"⚡ ULTRA-FAST: KuCoin order {order_id} DONE in {elapsed:.1f}s")
+                            return current_order
+                    
+                    # Wait before next check
+                    await asyncio.sleep(check_interval)
+                    
+                except Exception as fetch_error:
+                    if attempt % 20 == 0:  # Only log every 20th error to reduce spam
+                        self.logger.warning(f"⚠️ Error fetching order {order_id} status: {fetch_error}")
+                    await asyncio.sleep(check_interval)
+                    continue
+            
+            # Timeout reached
+            elapsed = time.time() - start_time
+            self.logger.error(f"❌ Order {order_id} timeout after {elapsed:.1f}s")
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error waiting for order completion: {e}")
+            return None
 
     async def get_account_balance(self) -> Dict[str, float]:
         if not self.is_connected:

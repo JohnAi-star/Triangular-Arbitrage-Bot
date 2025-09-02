@@ -478,7 +478,7 @@ class ArbitrageBotGUI:
                 
             except Exception as e:
                 self.logger.error(f"Error in bot main loop: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)  # Faster error recovery
     
     def stop_bot(self):
         """Stop the arbitrage bot."""

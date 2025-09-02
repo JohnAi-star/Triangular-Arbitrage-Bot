@@ -620,9 +620,9 @@ class SimpleTriangleDetector:
     
     async def _start_kucoin_websocket(self):
         """Special WebSocket handling for KuCoin with proper token management"""
-        self.logger.info("🌐 Starting KuCoin WebSocket with token authentication...")
+        self.logger.info("🌐 Starting OPTIMIZED KuCoin WebSocket...")
         
-        max_retries = 3
+        max_retries = 10  # More retries for stability
         retry_count = 0
         
         while retry_count < max_retries:
@@ -640,10 +640,15 @@ class SimpleTriangleDetector:
                             self.logger.info(f"🔑 KuCoin WebSocket URL: {endpoint}")
                             
                             # Connect to KuCoin WebSocket
-                            async with websockets.connect(websocket_url, ping_interval=20, ping_timeout=10) as websocket:
+                            async with websockets.connect(
+                                websocket_url, 
+                                ping_interval=10,  # Faster ping
+                                ping_timeout=5,    # Shorter timeout
+                                close_timeout=5    # Faster close
+                            ) as websocket:
                                 self.websocket = websocket
                                 self.running = True
-                                self.logger.info("✅ Connected to KuCoin WebSocket successfully")
+                                self.logger.info("✅ OPTIMIZED KuCoin WebSocket connected")
                                 
                                 # Send welcome message
                                 welcome_msg = {
@@ -672,7 +677,7 @@ class SimpleTriangleDetector:
                                         if message and message.strip():
                                             self.process_data(message)
                                     except Exception as e:
-                                        self.logger.error(f"Error processing KuCoin message: {e}")
+                                        self.logger.debug(f"KuCoin message error: {e}")  # Reduce error spam
                         else:
                             raise Exception(f"Failed to get KuCoin token: {response.status}")
                             
