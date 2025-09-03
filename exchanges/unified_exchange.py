@@ -343,45 +343,30 @@ class UnifiedExchange(BaseExchange):
     async def place_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
         """Execute REAL market order on exchange that will appear in your account."""
         try:
-            # Ensure time synchronization for KuCoin
-            await self._ensure_time_sync()
+            # LIGHTNING SPEED: Skip time sync for maximum speed
             
             # CRITICAL FIX: Round quantity to proper decimal precision for KuCoin
             if self.exchange_id == 'kucoin':
                 qty = await self._round_to_kucoin_precision(symbol, qty)
-                self.logger.info(f"🔧 KuCoin precision fix: Rounded quantity to {qty:.8f}")
+                self.logger.debug(f"🔧 Precision: {qty:.8f}")
             
-            self.logger.info(f"🔴 EXECUTING REAL {self.exchange_id.upper()} ORDER:")
-            self.logger.info(f"   Symbol: {symbol}")
-            self.logger.info(f"   Side: {side.upper()}")
-            self.logger.info(f"   Quantity: {qty:.8f}")
+            self.logger.info(f"⚡ LIGHTNING ORDER: {side.upper()} {qty:.8f} {symbol}")
             
             # Validate inputs
             if not symbol or not side or qty <= 0:
                 raise ValueError(f"Invalid order parameters: symbol={symbol}, side={side}, qty={qty}")
             
-            # Get current market info for logging
-            try:
-                ticker = await self.get_ticker(symbol)
-                current_price = ticker.get('last', 0)
-                estimated_value = qty * current_price if side == 'sell' else qty
-                self.logger.info(f"   Current Price: {current_price:.8f}")
-                self.logger.info(f"   Estimated Value: ${estimated_value:.2f}")
-            except Exception:
-                pass  # Continue even if ticker fails
-            
-            # Execute the REAL market order with exchange-specific handling
-            self.logger.info(f"🚀 Sending order to {self.exchange_id}...")
+            # LIGHTNING SPEED: Skip price logging for maximum speed
             
             # Gate.io specific order handling
             if self.exchange_id == 'gate':
-                self.logger.info("🔧 Using Gate.io specific order format...")
+                self.logger.debug("🔧 Gate.io format")
                 
                 # Gate.io requires special handling for market buy orders
                 if side.lower() == 'buy':
                     # For market BUY orders, Gate.io needs the USDT amount to spend (quote quantity)
                     # Set the option to use quote quantity for market buy orders
-                    self.logger.info(f"🔧 Gate.io MARKET BUY: Spending {qty:.2f} USDT to buy {symbol}")
+                    self.logger.debug(f"🔧 Gate.io BUY: {qty:.2f} USDT")
                     
                     # Use Gate.io specific parameters for market buy
                     order = await self.exchange.create_order(
@@ -394,19 +379,19 @@ class UnifiedExchange(BaseExchange):
                     )
                 else:
                     # For market SELL orders, use standard format
-                    self.logger.info(f"🔧 Gate.io MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
+                    self.logger.debug(f"🔧 Gate.io SELL: {qty:.8f}")
                     order = await self.exchange.create_market_order(symbol, side, qty)
             elif self.exchange_id == 'kucoin':
-                self.logger.info("🔧 Using KuCoin specific order format with timestamp sync...")
+                self.logger.debug("🔧 KuCoin format")
                 
-                # Get synchronized timestamp
-                current_timestamp = int(time.time() * 1000) + self.server_time_offset + 1000  # Add 1s buffer
+                # LIGHTNING SPEED: Use simple timestamp with buffer
+                current_timestamp = int(time.time() * 1000) + 2000  # 2-second buffer for speed
                 
                 if side.lower() == 'buy':
                     # For market BUY orders, KuCoin needs the quote currency amount (USDT to spend)
-                    self.logger.info(f"🔧 KuCoin MARKET BUY: Spending {qty:.2f} USDT to buy {symbol}")
+                    self.logger.debug(f"🔧 KuCoin BUY: {qty:.2f} USDT")
                     
-                    # ULTRA-FAST: Use simplified order format
+                    # LIGHTNING SPEED: Simplified order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
@@ -420,7 +405,7 @@ class UnifiedExchange(BaseExchange):
                     )
                 else:
                     # For market SELL orders, use standard format with timestamp
-                    self.logger.info(f"🔧 KuCoin MARKET SELL: Selling {qty:.8f} {symbol.split('/')[0]}")
+                    self.logger.debug(f"🔧 KuCoin SELL: {qty:.8f}")
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
@@ -438,7 +423,7 @@ class UnifiedExchange(BaseExchange):
             
             
             if not order:
-                self.logger.error("❌ No response from exchange")
+                self.logger.error("❌ No response")
                 return {
                     'success': False,
                     'status': 'failed',
@@ -452,28 +437,28 @@ class UnifiedExchange(BaseExchange):
             order_id = order.get('id', 'Unknown')
             initial_status = order.get('status', 'Unknown')
             
-            self.logger.info(f"📋 Initial order response: ID={order_id}, Status={initial_status}")
+            self.logger.debug(f"📋 Order: {order_id}")
             
             # CRITICAL FIX: Wait for order execution completion
             if order_id and order_id != 'Unknown':
-                self.logger.info(f"⏳ Waiting for order {order_id} to fill...")
+                self.logger.debug(f"⏳ Waiting for {order_id}...")
                 
-                # Wait for order completion with timeout and retries
-                final_order = await self._wait_for_order_completion(order_id, symbol, timeout_seconds=30)
+                # LIGHTNING SPEED: Reduced timeout for faster execution
+                final_order = await self._wait_for_order_completion_lightning(order_id, symbol, timeout_seconds=15)
                 
                 if final_order:
                     order = final_order  # Use the completed order data
-                    self.logger.info(f"✅ Order {order_id} completed successfully")
+                    self.logger.debug(f"✅ {order_id} completed")
                 else:
-                    self.logger.error(f"❌ Order {order_id} failed to complete within timeout")
+                    self.logger.error(f"❌ {order_id} timeout")
                     return {
                         'success': False,
                         'status': 'timeout',
-                        'error': f'Order {order_id} timeout after 30 seconds',
+                        'error': f'Order timeout after 15 seconds',
                         'id': order_id
                     }
             else:
-                self.logger.error("❌ No valid order ID received")
+                self.logger.error("❌ No order ID")
                 return {
                     'success': False,
                     'status': 'failed',
@@ -496,21 +481,12 @@ class UnifiedExchange(BaseExchange):
                 fee_cost = float(fee_info.get('cost', 0) or 0)
                 fee_currency = fee_info.get('currency', 'Unknown')
             
-            # Log final order details after completion
-            self.logger.info(f"✅ {self.exchange_id.upper()} ORDER COMPLETED:")
-            self.logger.info(f"   Order ID: {order_id}")
-            self.logger.info(f"   Status: {status}")
-            self.logger.info(f"   Filled Quantity: {filled_qty:.8f}")
-            self.logger.info(f"   Average Price: {avg_price:.8f}")
-            self.logger.info(f"   Total Cost: {total_cost:.8f}")
-            self.logger.info(f"   Fee: {fee_cost:.8f} {fee_currency}")
+            # LIGHTNING SPEED: Minimal logging
+            self.logger.info(f"⚡ {order_id}: {filled_qty:.8f} @ {avg_price:.8f} = {total_cost:.8f}")
             
             # Verify order was executed successfully
             if status in ['closed', 'filled'] and filled_qty > 0:
-                self.logger.info(f"🎉 ORDER SUCCESSFULLY EXECUTED ON {self.exchange_id.upper()}!")
-                self.logger.info(f"   ✅ This trade is now visible in your {self.exchange_id} account")
-                self.logger.info(f"   ✅ Order ID {order_id} can be found in your trade history")
-                self.logger.info(f"   ✅ Profit/Loss will be reflected in your balance")
+                self.logger.debug(f"⚡ SUCCESS: {order_id}")
                 
                 # Return success with all details
                 return {
@@ -531,7 +507,7 @@ class UnifiedExchange(BaseExchange):
             else:
                 # Order not filled or failed
                 error_msg = f"Order not executed: status={status}, filled={filled_qty}"
-                self.logger.error(f"❌ {self.exchange_id.upper()} ORDER FAILED: {error_msg}")
+                self.logger.error(f"❌ ORDER FAILED: {error_msg}")
                 return {
                     'success': False,
                     'status': 'failed',
@@ -542,30 +518,25 @@ class UnifiedExchange(BaseExchange):
             
         except Exception as e:
             error_msg = f"{self.exchange_id} order execution failed: {str(e)}"
-            self.logger.error(f"❌ CRITICAL ERROR: {error_msg}")
-            self.logger.error(f"   Symbol: {symbol}")
-            self.logger.error(f"   Side: {side}")
-            self.logger.error(f"   Quantity: {qty}")
-            self.logger.error(f"   Exception Type: {type(e).__name__}")
+            self.logger.error(f"❌ ERROR: {error_msg}")
             
             # If timestamp error, try to re-sync and retry once
             if self.exchange_id == 'kucoin' and 'KC-API-TIMESTAMP' in str(e):
-                self.logger.info("🕒 Timestamp error detected, re-synchronizing and retrying...")
-                await self._synchronize_kucoin_time()
+                self.logger.info("⚡ LIGHTNING RETRY: Timestamp error, retrying with buffer...")
                 
                 try:
-                    # Retry the order with fresh timestamp
-                    current_timestamp = int(time.time() * 1000) + self.server_time_offset
+                    # LIGHTNING RETRY: Use larger buffer for retry
+                    current_timestamp = int(time.time() * 1000) + 3000  # 3-second buffer
                     
                     if side.lower() == 'buy':
                         retry_order = await self.exchange.create_order(
                             symbol=symbol,
                             type='market',
                             side='buy',
-                            amount=qty,
+                            amount=None,
                             price=None,
                             params={
-                                'quoteOrderQty': qty,
+                                'funds': f"{qty:.2f}",
                                 'timestamp': current_timestamp
                             }
                         )
@@ -576,14 +547,17 @@ class UnifiedExchange(BaseExchange):
                             side='sell',
                             amount=qty,
                             price=None,
-                            params={'timestamp': current_timestamp}
+                            params={
+                                'size': f"{qty:.8f}",
+                                'timestamp': current_timestamp
+                            }
                         )
                     
                     if retry_order and retry_order.get('id'):
-                        self.logger.info(f"✅ Retry successful after time sync: {retry_order['id']}")
+                        self.logger.info(f"⚡ LIGHTNING RETRY SUCCESS: {retry_order['id']}")
                         
                         # Wait for completion
-                        final_order = await self._wait_for_order_completion(retry_order['id'], symbol, timeout_seconds=30)
+                        final_order = await self._wait_for_order_completion_lightning(retry_order['id'], symbol, timeout_seconds=15)
                         
                         if final_order:
                             return {
@@ -601,7 +575,7 @@ class UnifiedExchange(BaseExchange):
                             }
                         
                 except Exception as retry_error:
-                    self.logger.error(f"❌ Retry also failed: {retry_error}")
+                    self.logger.error(f"❌ Retry failed: {retry_error}")
             
             return {
                 'success': False,
@@ -613,6 +587,58 @@ class UnifiedExchange(BaseExchange):
                 'exception_type': type(e).__name__
             }
     
+    async def _wait_for_order_completion_lightning(self, order_id: str, symbol: str, timeout_seconds: int = 15) -> Optional[Dict[str, Any]]:
+        """LIGHTNING order completion with 100ms checking for maximum speed."""
+        try:
+            start_time = time.time()
+            check_interval = 0.1  # LIGHTNING: Check every 100ms
+            max_checks = int(timeout_seconds / check_interval)
+            
+            self.logger.debug(f"⚡ LIGHTNING monitoring {order_id} (timeout: {timeout_seconds}s)")
+            
+            for attempt in range(max_checks):
+                try:
+                    # Fetch current order status
+                    current_order = await self.exchange.fetch_order(order_id, symbol)
+                    
+                    if current_order:
+                        status = current_order.get('status', 'unknown')
+                        filled = float(current_order.get('filled', 0) or 0)
+                        
+                        # Check if order is completed
+                        if status in ['closed', 'filled'] and filled > 0:
+                            elapsed = time.time() - start_time
+                            self.logger.info(f"⚡ LIGHTNING: {order_id} FILLED in {elapsed:.1f}s")
+                            return current_order
+                        elif status in ['canceled', 'cancelled', 'rejected']:
+                            self.logger.error(f"❌ Order {order_id} was {status}")
+                            return None
+                        
+                        # KuCoin specific: Check for 'done' status
+                        if status == 'done' and filled > 0:
+                            elapsed = time.time() - start_time
+                            self.logger.info(f"⚡ LIGHTNING: {order_id} DONE in {elapsed:.1f}s")
+                            return current_order
+                    
+                    # LIGHTNING SPEED: Shorter wait between checks
+                    await asyncio.sleep(check_interval)
+                    
+                except Exception as fetch_error:
+                    # Reduce error logging for speed
+                    if attempt % 50 == 0:  # Only log every 50th error
+                        self.logger.debug(f"⚠️ Fetch error: {fetch_error}")
+                    await asyncio.sleep(check_interval)
+                    continue
+            
+            # Timeout reached
+            elapsed = time.time() - start_time
+            self.logger.error(f"❌ {order_id} timeout after {elapsed:.1f}s")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error waiting for order: {e}")
+            return None
+
     async def _round_to_kucoin_precision(self, symbol: str, quantity: float) -> float:
         """Round quantity to KuCoin's required decimal precision"""
         try:
@@ -655,13 +681,13 @@ class UnifiedExchange(BaseExchange):
             return round(quantity, 6)
 
     async def _wait_for_order_completion(self, order_id: str, symbol: str, timeout_seconds: int = 30) -> Optional[Dict[str, Any]]:
-        """ULTRA-FAST order completion with 50ms checking"""
+        """Standard order completion monitoring (fallback)"""
         try:
             start_time = time.time()
-            check_interval = 0.05  # ULTRA-FAST: Check every 50ms
+            check_interval = 0.1  # Check every 100ms
             max_checks = int(timeout_seconds / check_interval)
             
-            self.logger.info(f"⚡ ULTRA-FAST monitoring order {order_id} (timeout: {timeout_seconds}s)")
+            self.logger.debug(f"⚡ Monitoring {order_id} (timeout: {timeout_seconds}s)")
             
             for attempt in range(max_checks):
                 try:
@@ -672,13 +698,13 @@ class UnifiedExchange(BaseExchange):
                         status = current_order.get('status', 'unknown')
                         filled = float(current_order.get('filled', 0) or 0)
                         
-                        if attempt % 10 == 0:  # Log every 0.5 seconds
+                        if attempt % 20 == 0:  # Log every 2 seconds
                             self.logger.debug(f"⚡ Order {order_id} check #{attempt + 1}: status={status}, filled={filled:.8f}")
                         
                         # Check if order is completed
                         if status in ['closed', 'filled'] and filled > 0:
                             elapsed = time.time() - start_time
-                            self.logger.info(f"⚡ ULTRA-FAST: Order {order_id} FILLED in {elapsed:.1f}s")
+                            self.logger.info(f"⚡ Order {order_id} FILLED in {elapsed:.1f}s")
                             return current_order
                         elif status in ['canceled', 'cancelled', 'rejected']:
                             self.logger.error(f"❌ Order {order_id} was {status}")
@@ -687,14 +713,14 @@ class UnifiedExchange(BaseExchange):
                         # KuCoin specific: Check for 'done' status
                         if status == 'done' and filled > 0:
                             elapsed = time.time() - start_time
-                            self.logger.info(f"⚡ ULTRA-FAST: KuCoin order {order_id} DONE in {elapsed:.1f}s")
+                            self.logger.info(f"⚡ KuCoin order {order_id} DONE in {elapsed:.1f}s")
                             return current_order
                     
                     # Wait before next check
                     await asyncio.sleep(check_interval)
                     
                 except Exception as fetch_error:
-                    if attempt % 20 == 0:  # Only log every 20th error to reduce spam
+                    if attempt % 50 == 0:  # Only log every 50th error to reduce spam
                         self.logger.warning(f"⚠️ Error fetching order {order_id} status: {fetch_error}")
                     await asyncio.sleep(check_interval)
                     continue

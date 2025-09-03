@@ -249,7 +249,7 @@ class MultiExchangeDetector:
                 }
             return {}
         except Exception as e:
-            self.self.logger.error(f"Direct balance fetch failed: {str(e)}")
+            self.logger.error(f"Direct balance fetch failed: {str(e)}")
             return {}
 
     def _format_balance(self, balance: Dict[str, float]) -> str:
