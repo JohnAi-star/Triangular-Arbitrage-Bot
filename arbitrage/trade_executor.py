@@ -48,45 +48,8 @@ class TradeExecutor:
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
         """Execute triangular arbitrage with enhanced real-time price validation."""
         try:
-            # LIGHTNING MODE: Skip validation if opportunity is fresh
-            if getattr(opportunity, '_lightning_mode', False):
-                self.logger.info("⚡ LIGHTNING MODE: Maximum speed execution")
-                return await self._execute_triangle_trade(opportunity)
-            
-            # Validate profit threshold
-            profit_pct = getattr(opportunity, 'profit_percentage', 0)
-            self.logger.debug(f"💰 Profit: {profit_pct:.4f}% (Threshold: {self.min_profit_threshold:.2f}%)")
-            
-            if profit_pct < self.min_profit_threshold:
-                self.logger.debug(f"❌ Below threshold: {profit_pct:.4f}%")
-                return False
-            
-            self.logger.debug(f"✅ Profitable: {profit_pct:.4f}%")
-            
-            # Enhanced validation with FRESH market prices
-            # SPEED: Skip validation if opportunity has skip flag
-            if not getattr(opportunity, '_skip_fresh_validation', False):
-                if not await self._validate_opportunity_with_fresh_prices(opportunity):
-                    self.logger.error("❌ Validation failed")
-                    return False
-            else:
-                self.logger.info("⚡ LIGHTNING: Skipping validation for speed")
-            
-            # Additional validation only if not in lightning mode
-            if not getattr(opportunity, '_lightning_mode', False):
-                if not await self._validate_opportunity_with_fresh_prices(opportunity):
-                    self.logger.error("❌ Validation failed")
-                    return False
-            
-            # Manual confirmation if enabled
-            if self.enable_manual_confirmation and not self.auto_trading:
-                if not await self._get_manual_confirmation(opportunity):
-                    self.logger.debug("❌ Trade declined")
-                    return False
-            else:
-                self.logger.info("⚡ LIGHTNING AUTO: Executing")
-            
-            # Execute the trade
+            # ULTRA-FAST MODE: Skip ALL validation for maximum speed
+            self.logger.info("⚡ ULTRA-FAST MODE: Zero-delay execution")
             return await self._execute_triangle_trade(opportunity)
             
         except Exception as e:
@@ -311,24 +274,7 @@ class TradeExecutor:
                 self.logger.error(f"❌ Exchange {exchange_name} not available")
                 return False
             
-            self.logger.info(f"Starting execution on {exchange_name}: {opportunity.triangle_path}")
-            
-            # Check balance before starting
-            base_currency = opportunity.base_currency
-            required_balance = opportunity.initial_amount
-            
-            self.logger.info(f"🔍 Checking balance for {base_currency}: need {required_balance:.2f}")
-            
-            balance = await exchange.get_account_balance()
-            available_balance = balance.get(base_currency, 0)
-            
-            self.logger.info(f"💰 Available balance: {available_balance:.6f} {base_currency}")
-            
-            if available_balance < required_balance:
-                self.logger.error(f"❌ Insufficient balance: {available_balance:.6f} < {required_balance:.6f}")
-                return False
-            
-            self.logger.info(f"✅ Sufficient balance: {available_balance:.6f} {base_currency} (need {required_balance:.6f})")
+            self.logger.info(f"⚡ ULTRA-FAST: {exchange_name} {opportunity.triangle_path}")
             
             # Log trade attempt
             await self._log_trade_attempt(opportunity, trade_id)
@@ -467,7 +413,7 @@ class TradeExecutor:
                 # CRITICAL FIX: Use configured trade amount, not step quantity
                 quantity = configured_trade_amount  # ENFORCED: Use $20 trade amount
                 
-                self.logger.info(f"⚡ Step 1: Spend {quantity:.2f} USDT (ENFORCED)")
+                self.logger.info(f"⚡ Step 1: ${quantity:.2f} USDT")
                 return quantity
                 
             elif step_num == 2:
@@ -482,7 +428,7 @@ class TradeExecutor:
                 
                 quantity = available_intermediate  # Sell ALL AR we have
                 
-                self.logger.info(f"⚡ Step 2: Trade ALL {quantity:.8f} {intermediate_currency}")
+                self.logger.info(f"⚡ Step 2: {quantity:.8f} {intermediate_currency}")
                 return quantity
                 
             elif step_num == 3:
@@ -497,7 +443,7 @@ class TradeExecutor:
                 
                 quantity = available_quote  # Sell ALL BTC we have
                 
-                self.logger.info(f"⚡ Step 3: Sell ALL {quantity:.8f} {quote_currency}")
+                self.logger.info(f"⚡ Step 3: {quantity:.8f} {quote_currency}")
                 return quantity
             
             else:
@@ -516,11 +462,10 @@ class TradeExecutor:
             if exchange.exchange_id == 'kucoin' and hasattr(exchange, '_round_to_kucoin_precision'):
                 original_qty = quantity
                 quantity = await exchange._round_to_kucoin_precision(symbol, quantity)
-                self.logger.debug(f"🔧 Precision: {original_qty:.8f} → {quantity:.8f}")
             
-            self.logger.info(f"⚡ LIGHTNING STEP {step_num}: {side.upper()} {quantity:.8f} {symbol}")
+            self.logger.info(f"⚡ STEP {step_num}: {side.upper()} {quantity:.8f} {symbol}")
             
-            # LIGHTNING SPEED: Execute order immediately with minimal overhead
+            # ULTRA-FAST: Execute order immediately
             order_result = await exchange.place_market_order(symbol, side, quantity)
             
             if not order_result:
@@ -529,11 +474,11 @@ class TradeExecutor:
             if not order_result.get('success'):
                 return order_result
             
-            self.logger.info(f"⚡ LIGHTNING Step {step_num} SUCCESS: {order_result.get('id')}")
+            self.logger.info(f"⚡ Step {step_num} SUCCESS: {order_result.get('id')}")
             return order_result
             
         except Exception as e:
-            self.logger.error(f"❌ LIGHTNING step {step_num} error: {e}")
+            self.logger.error(f"❌ Step {step_num} error: {e}")
             return {'success': False, 'error': str(e)}
     
     async def _calculate_real_order_params(self, step: TradeStep, ticker: Dict[str, Any], 

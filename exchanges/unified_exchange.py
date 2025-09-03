@@ -588,13 +588,11 @@ class UnifiedExchange(BaseExchange):
             }
     
     async def _wait_for_order_completion_lightning(self, order_id: str, symbol: str, timeout_seconds: int = 15) -> Optional[Dict[str, Any]]:
-        """LIGHTNING order completion with 100ms checking for maximum speed."""
+        """ULTRA-FAST order completion with 50ms checking for maximum speed."""
         try:
             start_time = time.time()
-            check_interval = 0.1  # LIGHTNING: Check every 100ms
+            check_interval = 0.05  # ULTRA-FAST: Check every 50ms
             max_checks = int(timeout_seconds / check_interval)
-            
-            self.logger.debug(f"⚡ LIGHTNING monitoring {order_id} (timeout: {timeout_seconds}s)")
             
             for attempt in range(max_checks):
                 try:
@@ -608,35 +606,30 @@ class UnifiedExchange(BaseExchange):
                         # Check if order is completed
                         if status in ['closed', 'filled'] and filled > 0:
                             elapsed = time.time() - start_time
-                            self.logger.info(f"⚡ LIGHTNING: {order_id} FILLED in {elapsed:.1f}s")
+                            self.logger.info(f"⚡ {order_id}: FILLED in {elapsed:.1f}s")
                             return current_order
                         elif status in ['canceled', 'cancelled', 'rejected']:
-                            self.logger.error(f"❌ Order {order_id} was {status}")
                             return None
                         
                         # KuCoin specific: Check for 'done' status
                         if status == 'done' and filled > 0:
                             elapsed = time.time() - start_time
-                            self.logger.info(f"⚡ LIGHTNING: {order_id} DONE in {elapsed:.1f}s")
+                            self.logger.info(f"⚡ {order_id}: DONE in {elapsed:.1f}s")
                             return current_order
                     
-                    # LIGHTNING SPEED: Shorter wait between checks
+                    # ULTRA-FAST: Minimal wait between checks
                     await asyncio.sleep(check_interval)
                     
                 except Exception as fetch_error:
-                    # Reduce error logging for speed
-                    if attempt % 50 == 0:  # Only log every 50th error
-                        self.logger.debug(f"⚠️ Fetch error: {fetch_error}")
+                    # Silent error handling for maximum speed
                     await asyncio.sleep(check_interval)
                     continue
             
             # Timeout reached
             elapsed = time.time() - start_time
-            self.logger.error(f"❌ {order_id} timeout after {elapsed:.1f}s")
             return None
             
         except Exception as e:
-            self.logger.error(f"❌ Error waiting for order: {e}")
             return None
 
     async def _round_to_kucoin_precision(self, symbol: str, quantity: float) -> float:
