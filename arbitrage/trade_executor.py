@@ -37,7 +37,8 @@ class TradeExecutor:
         self.logger.info(f"🔴 LIVE TradeExecutor initialized")
         self.logger.info(f"   Auto Trading: {self.auto_trading}")
         self.logger.info(f"   Paper Trading: {self.paper_trading}")
-        self.logger.info(f"   Min Profit Threshold: {self.min_profit_threshold}%")
+        self.logger.info(f"   Min Profit Threshold: 0.4% (FIXED)")
+        self.logger.info(f"   LIGHTNING MODE: Zero WebSocket overhead")
     
     def set_websocket_manager(self, websocket_manager):
         """Set WebSocket manager for real-time updates."""
@@ -48,8 +49,8 @@ class TradeExecutor:
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
         """Execute triangular arbitrage with enhanced real-time price validation."""
         try:
-            # ULTRA-FAST MODE: Skip ALL validation for maximum speed
-            self.logger.info("⚡ ULTRA-FAST MODE: Zero-delay execution")
+            # LIGHTNING MODE: Zero WebSocket dependencies
+            self.logger.info("⚡ LIGHTNING MODE: Zero WebSocket overhead")
             return await self._execute_triangle_trade(opportunity)
             
         except Exception as e:
@@ -274,7 +275,7 @@ class TradeExecutor:
                 self.logger.error(f"❌ Exchange {exchange_name} not available")
                 return False
             
-            self.logger.info(f"⚡ ULTRA-FAST: {exchange_name} {opportunity.triangle_path}")
+            self.logger.info(f"⚡ LIGHTNING: {exchange_name} {opportunity.triangle_path}")
             
             # Log trade attempt
             await self._log_trade_attempt(opportunity, trade_id)
@@ -463,7 +464,7 @@ class TradeExecutor:
                 original_qty = quantity
                 quantity = await exchange._round_to_kucoin_precision(symbol, quantity)
             
-            self.logger.info(f"⚡ STEP {step_num}: {side.upper()} {quantity:.8f} {symbol}")
+            # Silent execution for maximum speed
             
             # ULTRA-FAST: Execute order immediately
             order_result = await exchange.place_market_order(symbol, side, quantity)
@@ -474,7 +475,7 @@ class TradeExecutor:
             if not order_result.get('success'):
                 return order_result
             
-            self.logger.info(f"⚡ Step {step_num} SUCCESS: {order_result.get('id')}")
+            # Silent success for speed
             return order_result
             
         except Exception as e:

@@ -437,48 +437,48 @@ class ArbitrageBotGUI:
                     # Filter for profitable opportunities only
                     profitable_opportunities = [
                         opp for opp in opportunities[:5]  # Top 5 opportunities  
-                        if (getattr(opp, 'profit_percentage', 0) >= 0.3 and  # LOWERED to 0.3% for faster execution
+                        if (getattr(opp, 'profit_percentage', 0) >= 0.4 and  # Fixed to 0.4% as requested
                             hasattr(opp, 'triangle_path') and
                             self._is_valid_usdt_triangle_for_execution(opp.triangle_path))  # Only valid USDT triangles
                     ]
                     
                     if profitable_opportunities:
-                        self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable USDT opportunities (≥0.3%)")
+                        self.logger.info(f"🤖 AUTO-TRADING: Found {len(profitable_opportunities)} profitable USDT opportunities (≥0.4%)")
                         
                         for i, opportunity in enumerate(profitable_opportunities[:1]):  # Execute ONLY the best one
                             try:
-                                self.logger.info(f"⚡ LIGHTNING AUTO-EXECUTING USDT Trade #{i+1}: {opportunity}")
+                                self.logger.info(f"⚡ LIGHTNING AUTO-EXECUTING Trade #{i+1}: {opportunity}")
                                 
                                 # Convert ArbitrageResult to proper format for execution
                                 try:
                                     executable_opportunity = self._convert_result_to_opportunity(opportunity)
-                                    # ⚡ LIGHTNING SPEED: Execute immediately
+                                    # ⚡ LIGHTNING MODE: Execute immediately
                                     success = await self.executor.execute_arbitrage(executable_opportunity)
                                 except Exception as convert_error:
                                     self.logger.error(f"❌ Failed to convert opportunity: {convert_error}")
                                     continue
                                 
                                 if success:
-                                    self.add_to_trading_history(f"⚡ LIGHTNING AUTO-TRADE SUCCESS: {opportunity}")
-                                    self.logger.info(f"🎉 LIGHTNING auto-trade #{i+1} completed successfully!")
+                                    self.add_to_trading_history(f"⚡ LIGHTNING SUCCESS: {opportunity}")
+                                    self.logger.info(f"🎉 LIGHTNING trade #{i+1} completed!")
                                 else:
                                     self.add_to_trading_history(f"❌ AUTO-TRADE FAILED: {opportunity}")
                                     self.logger.error(f"❌ Auto-trade #{i+1} failed")
                                     
-                                # ⚡ NO WAIT - immediate next scan
+                                # ⚡ LIGHTNING: No wait - immediate next scan
                                 break  # Only execute one trade per scan for safety
                                 
                             except Exception as e:
                                 self.logger.error(f"❌ Error in auto-execution #{i+1}: {e}")
                                 self.add_to_trading_history(f"❌ AUTO-TRADE ERROR: {str(e)}")
                     else:
-                        self.logger.debug(f"🤖 AUTO-TRADING: No profitable opportunities found (need ≥0.3% profit)")
+                        self.logger.debug(f"🤖 AUTO-TRADING: No profitable opportunities found (need ≥0.4% profit)")
                 
-                await asyncio.sleep(0.5)  # ⚡ FASTER scanning - every 0.5 seconds
+                await asyncio.sleep(0.2)  # ⚡ LIGHTNING scanning - every 0.2 seconds
                 
             except Exception as e:
                 self.logger.error(f"Error in bot main loop: {e}")
-                await asyncio.sleep(1)  # Faster error recovery
+                await asyncio.sleep(0.5)  # Lightning error recovery
     
     def stop_bot(self):
         """Stop the arbitrage bot."""

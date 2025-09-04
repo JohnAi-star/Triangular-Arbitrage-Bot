@@ -343,30 +343,30 @@ class UnifiedExchange(BaseExchange):
     async def place_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
         """Execute REAL market order on exchange that will appear in your account."""
         try:
-            # LIGHTNING SPEED: Skip time sync for maximum speed
+            # LIGHTNING MODE: Zero overhead execution
             
             # CRITICAL FIX: Round quantity to proper decimal precision for KuCoin
             if self.exchange_id == 'kucoin':
                 qty = await self._round_to_kucoin_precision(symbol, qty)
-                self.logger.debug(f"🔧 Precision: {qty:.8f}")
+                # Silent precision for speed
             
-            self.logger.info(f"⚡ LIGHTNING ORDER: {side.upper()} {qty:.8f} {symbol}")
+            # Silent order for maximum speed
             
             # Validate inputs
             if not symbol or not side or qty <= 0:
                 raise ValueError(f"Invalid order parameters: symbol={symbol}, side={side}, qty={qty}")
             
-            # LIGHTNING SPEED: Skip price logging for maximum speed
+            # LIGHTNING MODE: Direct execution
             
             # Gate.io specific order handling
             if self.exchange_id == 'gate':
-                self.logger.debug("🔧 Gate.io format")
+                # Silent Gate.io handling
                 
                 # Gate.io requires special handling for market buy orders
                 if side.lower() == 'buy':
                     # For market BUY orders, Gate.io needs the USDT amount to spend (quote quantity)
                     # Set the option to use quote quantity for market buy orders
-                    self.logger.debug(f"🔧 Gate.io BUY: {qty:.2f} USDT")
+                    # Silent buy handling
                     
                     # Use Gate.io specific parameters for market buy
                     order = await self.exchange.create_order(
@@ -379,19 +379,19 @@ class UnifiedExchange(BaseExchange):
                     )
                 else:
                     # For market SELL orders, use standard format
-                    self.logger.debug(f"🔧 Gate.io SELL: {qty:.8f}")
+                    # Silent sell handling
                     order = await self.exchange.create_market_order(symbol, side, qty)
             elif self.exchange_id == 'kucoin':
-                self.logger.debug("🔧 KuCoin format")
+                # Silent KuCoin handling
                 
-                # LIGHTNING SPEED: Use simple timestamp with buffer
-                current_timestamp = int(time.time() * 1000) + 2000  # 2-second buffer for speed
+                # LIGHTNING MODE: Minimal timestamp buffer
+                current_timestamp = int(time.time() * 1000) + 1000  # 1-second buffer for speed
                 
                 if side.lower() == 'buy':
                     # For market BUY orders, KuCoin needs the quote currency amount (USDT to spend)
-                    self.logger.debug(f"🔧 KuCoin BUY: {qty:.2f} USDT")
+                    # Silent buy handling
                     
-                    # LIGHTNING SPEED: Simplified order format
+                    # LIGHTNING MODE: Direct order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
@@ -405,7 +405,7 @@ class UnifiedExchange(BaseExchange):
                     )
                 else:
                     # For market SELL orders, use standard format with timestamp
-                    self.logger.debug(f"🔧 KuCoin SELL: {qty:.8f}")
+                    # Silent sell handling
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
@@ -423,7 +423,7 @@ class UnifiedExchange(BaseExchange):
             
             
             if not order:
-                self.logger.error("❌ No response")
+                # Silent error for speed
                 return {
                     'success': False,
                     'status': 'failed',
@@ -437,28 +437,28 @@ class UnifiedExchange(BaseExchange):
             order_id = order.get('id', 'Unknown')
             initial_status = order.get('status', 'Unknown')
             
-            self.logger.debug(f"📋 Order: {order_id}")
+            # Silent order tracking
             
             # CRITICAL FIX: Wait for order execution completion
             if order_id and order_id != 'Unknown':
-                self.logger.debug(f"⏳ Waiting for {order_id}...")
+                # Silent waiting
                 
-                # LIGHTNING SPEED: Reduced timeout for faster execution
-                final_order = await self._wait_for_order_completion_lightning(order_id, symbol, timeout_seconds=15)
+                # LIGHTNING MODE: Ultra-fast timeout
+                final_order = await self._wait_for_order_completion_lightning(order_id, symbol, timeout_seconds=8)
                 
                 if final_order:
                     order = final_order  # Use the completed order data
-                    self.logger.debug(f"✅ {order_id} completed")
+                    # Silent completion
                 else:
-                    self.logger.error(f"❌ {order_id} timeout")
+                    # Silent timeout
                     return {
                         'success': False,
                         'status': 'timeout',
-                        'error': f'Order timeout after 15 seconds',
+                        'error': f'Order timeout after 8 seconds',
                         'id': order_id
                     }
             else:
-                self.logger.error("❌ No order ID")
+                # Silent error
                 return {
                     'success': False,
                     'status': 'failed',
@@ -588,10 +588,10 @@ class UnifiedExchange(BaseExchange):
             }
     
     async def _wait_for_order_completion_lightning(self, order_id: str, symbol: str, timeout_seconds: int = 15) -> Optional[Dict[str, Any]]:
-        """ULTRA-FAST order completion with 50ms checking for maximum speed."""
+        """LIGHTNING order completion with 25ms checking for maximum speed."""
         try:
             start_time = time.time()
-            check_interval = 0.05  # ULTRA-FAST: Check every 50ms
+            check_interval = 0.025  # LIGHTNING: Check every 25ms
             max_checks = int(timeout_seconds / check_interval)
             
             for attempt in range(max_checks):
@@ -606,7 +606,7 @@ class UnifiedExchange(BaseExchange):
                         # Check if order is completed
                         if status in ['closed', 'filled'] and filled > 0:
                             elapsed = time.time() - start_time
-                            self.logger.info(f"⚡ {order_id}: FILLED in {elapsed:.1f}s")
+                            # Silent completion
                             return current_order
                         elif status in ['canceled', 'cancelled', 'rejected']:
                             return None
@@ -614,10 +614,10 @@ class UnifiedExchange(BaseExchange):
                         # KuCoin specific: Check for 'done' status
                         if status == 'done' and filled > 0:
                             elapsed = time.time() - start_time
-                            self.logger.info(f"⚡ {order_id}: DONE in {elapsed:.1f}s")
+                            # Silent completion
                             return current_order
                     
-                    # ULTRA-FAST: Minimal wait between checks
+                    # LIGHTNING: Minimal wait between checks
                     await asyncio.sleep(check_interval)
                     
                 except Exception as fetch_error:
