@@ -69,7 +69,7 @@ class Config:
 
     # WebSocket
     WEBSOCKET_RECONNECT_ATTEMPTS: int = 5
-    WEBSOCKET_RECONNECT_DELAY: int = 2  # INSTANT: Faster reconnection
+    WEBSOCKET_RECONNECT_DELAY: int = 1  # INSTANT: Faster reconnection
 
     @classmethod
     def validate(cls) -> bool:

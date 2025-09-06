@@ -476,9 +476,19 @@ class ArbitrageBotGUI:
                 
                 await asyncio.sleep(0.1)  # 🚀 INSTANT scanning - every 0.1 seconds
                 
+                # INSTANT: Disable WebSocket during auto-trading for speed
+                if self.auto_trading_var.get():
+                    # Temporarily disable WebSocket for maximum execution speed
+                    if hasattr(self, 'websocket_manager'):
+                        self.websocket_manager.running = False
+                    
+                    # Re-enable after brief pause
+                    await asyncio.sleep(0.5)
+                    if hasattr(self, 'websocket_manager'):
+                        self.websocket_manager.running = True
+                
             except Exception as e:
                 self.logger.error(f"Error in bot main loop: {e}")
-                await asyncio.sleep(0.2)  # INSTANT error recovery
     
     def stop_bot(self):
         """Stop the arbitrage bot."""

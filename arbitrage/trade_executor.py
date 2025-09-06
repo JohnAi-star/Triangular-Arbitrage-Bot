@@ -67,22 +67,36 @@ class TradeExecutor:
     async def _disable_websocket_during_execution(self):
         """Disable WebSocket during trade execution for maximum speed"""
         try:
-            # Stop WebSocket scanning temporarily
+            # INSTANT: Completely disable WebSocket during execution
             if hasattr(self.exchange_manager, 'detector_websocket_running'):
                 self.exchange_manager.detector_websocket_running = False
-                self.logger.info("🚀 INSTANT: WebSocket scanning disabled for execution")
+                # INSTANT: Silent disable
+            
+            # INSTANT: Also disable SimpleTriangleDetector WebSocket
+            if hasattr(self.exchange_manager, 'simple_detector'):
+                if hasattr(self.exchange_manager.simple_detector, 'running'):
+                    self.exchange_manager.simple_detector.running = False
+                    # INSTANT: Silent disable
         except Exception as e:
-            self.logger.debug(f"WebSocket disable error: {e}")
+            # INSTANT: Silent error handling
+            pass
     
     async def _re_enable_websocket_after_execution(self):
         """Re-enable WebSocket after trade execution"""
         try:
-            # Restart WebSocket scanning after execution
+            # INSTANT: Re-enable WebSocket after execution
             if hasattr(self.exchange_manager, 'detector_websocket_running'):
                 self.exchange_manager.detector_websocket_running = True
-                self.logger.info("🚀 INSTANT: WebSocket scanning re-enabled")
+                # INSTANT: Silent re-enable
+            
+            # INSTANT: Re-enable SimpleTriangleDetector WebSocket
+            if hasattr(self.exchange_manager, 'simple_detector'):
+                if hasattr(self.exchange_manager.simple_detector, 'running'):
+                    self.exchange_manager.simple_detector.running = True
+                    # INSTANT: Silent re-enable
         except Exception as e:
-            self.logger.debug(f"WebSocket re-enable error: {e}")
+            # INSTANT: Silent error handling
+            pass
     
     async def _validate_opportunity_with_fresh_prices(self, opportunity: ArbitrageOpportunity) -> bool:
         """Validate opportunity with FRESH market prices and realistic calculations."""
@@ -318,21 +332,22 @@ class TradeExecutor:
     async def _execute_triangle_steps(self, opportunity: ArbitrageOpportunity, exchange, trade_id: str, start_time: float) -> bool:
         """Execute all three steps with ULTRA-FAST timing and CORRECT amounts."""
         try:
-            self.logger.info(f"⚡ ULTRA-FAST USDT TRIANGLE ({'AUTO' if self.auto_trading else 'MANUAL'}): {opportunity.triangle_path}")
-            self.logger.info(f"🎯 LIGHTNING TARGET: 3 trades in under 15 seconds on {exchange.exchange_id}")
+            # INSTANT: Silent execution for maximum speed
             # CRITICAL FIX: Use configured trade amount, not opportunity amount
             configured_trade_amount = min(20.0, opportunity.initial_amount)  # ENFORCE $20 maximum
-            self.logger.info(f"💰 Plan: {configured_trade_amount:.2f} USDT → profit (ENFORCED: max $20)")
+            # INSTANT: Silent planning
             
-            # LIGHTNING SPEED: Skip time sync for speed (use buffer instead)
+            # INSTANT: Pre-sync time before execution
             if exchange.exchange_id == 'kucoin':
-                # Use 2-second buffer instead of sync for maximum speed
+                # INSTANT: Ensure time is synced before starting
+                await exchange._ensure_time_sync()
+                
+                # Use 1-second buffer for maximum speed
                 if hasattr(exchange.exchange, 'options'):
-                    exchange.exchange.options['timeDifference'] = 2000  # 2-second buffer
-                self.logger.info("⚡ LIGHTNING: Using 2s buffer for maximum speed")
+                    exchange.exchange.options['timeDifference'] = 1000  # 1-second buffer
+                # INSTANT: Silent buffer application
             
-            # LIGHTNING SPEED: Skip ticker fetch, use cached prices from validation
-            self.logger.info("⚡ LIGHTNING: Using pre-validated prices for maximum speed")
+            # INSTANT: Use pre-validated prices
             
             # Track actual amounts through the triangle
             current_balance = {
@@ -344,7 +359,7 @@ class TradeExecutor:
             for step_num, step in enumerate(opportunity.steps, 1):
                 try:
                     step_start = time.time()
-                    self.logger.info(f"⚡ LIGHTNING STEP {step_num}/3 - Target: <5 seconds")
+                    # INSTANT: Silent step execution
                     
                     # CRITICAL FIX: Calculate CORRECT quantities for each step
                     real_quantity = self._calculate_lightning_step_amounts(
@@ -352,16 +367,16 @@ class TradeExecutor:
                     )
                     
                     if real_quantity <= 0:
-                        self.logger.error(f"❌ Invalid quantity calculated for step {step_num}: {real_quantity}")
+                        # INSTANT: Silent error
                         return False
                     
-                    # LIGHTNING SPEED: Execute order immediately with minimal logging
+                    # INSTANT: Execute order immediately
                     order_result = await self._execute_lightning_step(
                         exchange, step.symbol, step.side, real_quantity, step_num
                     )
                     
                     if not order_result or not order_result.get('success'):
-                        self.logger.error(f"❌ LIGHTNING Step {step_num} failed: {order_result.get('error', 'Unknown')}")
+                        # INSTANT: Silent failure
                         return False
                     
                     # CRITICAL FIX: Update balance with ACTUAL filled amounts
@@ -370,7 +385,7 @@ class TradeExecutor:
                     average_price = float(order_result.get('average', 0))
                     
                     step_time = (time.time() - step_start) * 1000
-                    self.logger.info(f"⚡ LIGHTNING Step {step_num}: {step_time:.0f}ms")
+                    # INSTANT: Silent timing
                     
                     if step.side == 'buy':
                         # BUY: Spent quote currency, received base currency
@@ -380,7 +395,7 @@ class TradeExecutor:
                         # Update balances correctly
                         current_balance[quote_currency] = current_balance.get(quote_currency, 0) - cost
                         current_balance[base_currency] = filled_quantity  # We now have this much AR
-                        self.logger.info(f"⚡ BUY: {cost:.2f} {quote_currency} → {filled_quantity:.8f} {base_currency}")
+                        # INSTANT: Silent balance update
                         
                     else:
                         # SELL: Sold base currency, received quote currency
@@ -395,32 +410,32 @@ class TradeExecutor:
                             # Final step: selling for USDT
                             received_usdt = cost  # This is the USDT we received
                             current_balance[quote_currency] = received_usdt
-                            self.logger.info(f"⚡ FINAL: {filled_quantity:.8f} {base_currency} → {received_usdt:.2f} USDT")
+                            # INSTANT: Silent final step
                         else:
                             # Intermediate step: selling for another crypto
                             received_amount = filled_quantity * average_price if average_price > 0 else cost
                             current_balance[quote_currency] = received_amount
-                            self.logger.info(f"⚡ SELL: {filled_quantity:.8f} {base_currency} → {received_amount:.8f} {quote_currency}")
+                            # INSTANT: Silent intermediate step
                     
-                    # Minimal logging for speed
+                    # INSTANT: No logging during execution
                 
                 except Exception as step_error:
-                    self.logger.error(f"❌ LIGHTNING Step {step_num} error: {step_error}")
+                    # INSTANT: Silent step error
                     await self._log_trade_failure(opportunity, trade_id, str(step_error), start_time)
                     return False
             
-            # LIGHTNING: All steps completed - calculate final result
+            # INSTANT: All steps completed - calculate final result
             final_balance = current_balance.get('USDT', 0)
             actual_profit = final_balance - configured_trade_amount  # CRITICAL FIX: Use configured amount
             actual_profit_pct = (actual_profit / configured_trade_amount) * 100
             
             execution_time = (time.time() - start_time) * 1000
             
-            self.logger.info(f"🎉 LIGHTNING TRIANGLE COMPLETED!")
-            self.logger.info(f"   Initial: {configured_trade_amount:.6f} USDT")
-            self.logger.info(f"   Final: {final_balance:.6f} USDT")
-            self.logger.info(f"   Actual Profit: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%)")
-            self.logger.info(f"   LIGHTNING Duration: {execution_time:.0f}ms (Target: <15s)")
+            # INSTANT: Silent completion logging
+            if actual_profit > 0:
+                self.logger.info(f"🎉 INSTANT PROFIT: +${actual_profit:.4f} in {execution_time:.0f}ms")
+            else:
+                self.logger.info(f"📊 INSTANT COMPLETE: ${actual_profit:.4f} in {execution_time:.0f}ms")
             
             # Log successful trade
             await self._log_trade_success(opportunity, trade_id, final_balance, start_time)
@@ -428,7 +443,7 @@ class TradeExecutor:
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ LIGHTNING execution error: {e}")
+            # INSTANT: Silent execution error
             await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
             return False
     
@@ -555,8 +570,32 @@ class TradeExecutor:
     
     async def _execute_lightning_step(self, exchange, symbol: str, side: str, 
                                     quantity: float, step_num: int) -> Dict[str, Any]:
-        """Execute single step with LIGHTNING timing - alias for _execute_instant_step."""
-        return await self._execute_instant_step(exchange, symbol, side, quantity, step_num)
+        """Execute single step with INSTANT timing - zero overhead."""
+        try:
+            # INSTANT: Pre-sync time for KuCoin before order
+            if exchange.exchange_id == 'kucoin':
+                # Ensure timestamp is fresh
+                current_timestamp = int(time.time() * 1000) + 500  # 0.5-second buffer
+                
+                # Apply timestamp to exchange options
+                if hasattr(exchange.exchange, 'options'):
+                    exchange.exchange.options['timeDifference'] = 500
+            
+            # INSTANT: Execute order immediately
+            order_result = await exchange.place_market_order(symbol, side, quantity)
+            
+            if not order_result:
+                return {'success': False, 'error': 'No response from exchange'}
+            
+            if not order_result.get('success'):
+                return order_result
+            
+            # INSTANT: Return immediately
+            return order_result
+            
+        except Exception as e:
+            # INSTANT: Silent error
+            return {'success': False, 'error': str(e)}
     
     async def _calculate_real_order_params(self, step: TradeStep, ticker: Dict[str, Any], 
                                          current_balance: Dict[str, float], step_num: int) -> tuple:

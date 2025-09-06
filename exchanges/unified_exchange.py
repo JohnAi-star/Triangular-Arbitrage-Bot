@@ -154,13 +154,13 @@ class UnifiedExchange(BaseExchange):
     async def _synchronize_kucoin_time(self):
         """Synchronize time with KuCoin server to prevent timestamp errors"""
         try:
-            self.logger.info("🕒 Synchronizing time with KuCoin server...")
+            # INSTANT: Silent time sync for maximum speed
             
             # Get server time from KuCoin using correct method
             try:
                 # Use direct API call for more reliable time sync
                 import aiohttp
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as session:
                     async with session.get('https://api.kucoin.com/api/v1/timestamp') as response:
                         if response.status == 200:
                             data = await response.json()
@@ -170,7 +170,7 @@ class UnifiedExchange(BaseExchange):
             except AttributeError:
                 # Fallback method for KuCoin
                 import aiohttp
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as session:
                     async with session.get('https://api.kucoin.com/api/v1/timestamp') as response:
                         if response.status == 200:
                             data = await response.json()
@@ -185,36 +185,32 @@ class UnifiedExchange(BaseExchange):
             self.server_time_offset = server_time - local_time
             self.last_time_sync = time.time()
             
-            self.logger.info(f"✅ KuCoin time synchronized:")
-            self.logger.info(f"   Server time: {server_time}")
-            self.logger.info(f"   Local time: {local_time}")
-            self.logger.info(f"   Offset: {self.server_time_offset}ms")
+            # INSTANT: Silent sync
             
             # Apply the offset to the exchange
             if hasattr(self.exchange, 'options'):
                 self.exchange.options['timeDifference'] = self.server_time_offset
                 # Also set adjustForTimeDifference to True
                 self.exchange.options['adjustForTimeDifference'] = True
-                self.logger.info(f"🕒 Applied {self.server_time_offset}ms offset to KuCoin exchange")
+                # INSTANT: Silent application
             
         except Exception as e:
             # Use conservative buffer as fallback
-            self.server_time_offset = 5000  # 5-second buffer for safety
+            self.server_time_offset = 2000  # 2-second buffer for speed
             self.last_time_sync = time.time()
-            self.logger.warning(f"⚠️ Time synchronization failed: {e}")
-            self.logger.info("Using 5-second buffer for safety")
+            # INSTANT: Silent fallback
             
             # Apply safety buffer
             if hasattr(self.exchange, 'options'):
-                self.exchange.options['timeDifference'] = 5000  # 5-second buffer
+                self.exchange.options['timeDifference'] = 2000  # 2-second buffer
                 self.exchange.options['adjustForTimeDifference'] = True
 
     async def _ensure_time_sync(self):
         """Ensure time is synchronized before critical operations"""
         if self.exchange_id == 'kucoin':
             current_time = time.time()
-            # Re-sync every 2 minutes for better accuracy
-            if current_time - self.last_time_sync > 120:
+            # INSTANT: Re-sync every 30 seconds for speed
+            if current_time - self.last_time_sync > 30:
                 await self._synchronize_kucoin_time()
 
     async def _check_internet_connectivity(self) -> bool:
@@ -529,11 +525,11 @@ class UnifiedExchange(BaseExchange):
             
             # If timestamp error, try to re-sync and retry once
             if self.exchange_id == 'kucoin' and 'KC-API-TIMESTAMP' in str(e):
-                self.logger.info("⚡ LIGHTNING RETRY: Timestamp error, retrying with buffer...")
+                # INSTANT: Silent retry
                 
                 try:
-                    # LIGHTNING RETRY: Use larger buffer for retry
-                    current_timestamp = int(time.time() * 1000) + 3000  # 3-second buffer
+                    # INSTANT RETRY: Use minimal buffer for speed
+                    current_timestamp = int(time.time() * 1000) + 1000  # 1-second buffer
                     
                     if side.lower() == 'buy':
                         retry_order = await self.exchange.create_order(
@@ -561,10 +557,10 @@ class UnifiedExchange(BaseExchange):
                         )
                     
                     if retry_order and retry_order.get('id'):
-                        self.logger.info(f"⚡ LIGHTNING RETRY SUCCESS: {retry_order['id']}")
+                        # INSTANT: Silent retry success
                         
                         # Wait for completion
-                        final_order = await self._wait_for_order_completion_instant(retry_order['id'], symbol, timeout_seconds=15)
+                        final_order = await self._wait_for_order_completion_instant(retry_order['id'], symbol, timeout_seconds=8)
                         
                         if final_order:
                             return {
@@ -582,7 +578,8 @@ class UnifiedExchange(BaseExchange):
                             }
                         
                 except Exception as retry_error:
-                    self.logger.error(f"❌ Retry failed: {retry_error}")
+                    # INSTANT: Silent retry failure
+                    pass
             
             return {
                 'success': False,
@@ -595,10 +592,10 @@ class UnifiedExchange(BaseExchange):
             }
     
     async def _wait_for_order_completion_instant(self, order_id: str, symbol: str, timeout_seconds: int = 5) -> Optional[Dict[str, Any]]:
-        """INSTANT order completion with 20ms checking for maximum speed."""
+        """INSTANT order completion with 10ms checking for maximum speed."""
         try:
             start_time = time.time()
-            check_interval = 0.02  # INSTANT: Check every 20ms
+            check_interval = 0.01  # INSTANT: Check every 10ms
             max_checks = int(timeout_seconds / check_interval)
             
             for attempt in range(max_checks):
