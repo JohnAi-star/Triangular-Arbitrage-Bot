@@ -474,11 +474,11 @@ class ArbitrageBotGUI:
                     else:
                         self.logger.debug(f"🤖 AUTO-TRADING: No profitable opportunities found (need ≥0.4% profit)")
                 
-                await asyncio.sleep(0.2)  # ⚡ LIGHTNING scanning - every 0.2 seconds
+                await asyncio.sleep(0.1)  # 🚀 INSTANT scanning - every 0.1 seconds
                 
             except Exception as e:
                 self.logger.error(f"Error in bot main loop: {e}")
-                await asyncio.sleep(0.5)  # Lightning error recovery
+                await asyncio.sleep(0.2)  # INSTANT error recovery
     
     def stop_bot(self):
         """Stop the arbitrage bot."""

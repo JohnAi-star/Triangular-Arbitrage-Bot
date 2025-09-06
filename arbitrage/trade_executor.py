@@ -49,13 +49,40 @@ class TradeExecutor:
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
         """Execute triangular arbitrage with enhanced real-time price validation."""
         try:
-            # LIGHTNING MODE: Zero WebSocket dependencies
-            self.logger.info("⚡ LIGHTNING MODE: Zero WebSocket overhead")
+            # INSTANT MODE: Complete WebSocket shutdown during execution
+            self.logger.info("🚀 INSTANT MODE: Disabling WebSocket for maximum speed")
+            
+            # CRITICAL: Disable WebSocket during execution to prevent delays
+            await self._disable_websocket_during_execution()
+            
             return await self._execute_triangle_trade(opportunity)
             
         except Exception as e:
             self.logger.error(f"❌ Error in execute_arbitrage: {e}")
             return False
+        finally:
+            # Re-enable WebSocket after execution
+            await self._re_enable_websocket_after_execution()
+    
+    async def _disable_websocket_during_execution(self):
+        """Disable WebSocket during trade execution for maximum speed"""
+        try:
+            # Stop WebSocket scanning temporarily
+            if hasattr(self.exchange_manager, 'detector_websocket_running'):
+                self.exchange_manager.detector_websocket_running = False
+                self.logger.info("🚀 INSTANT: WebSocket scanning disabled for execution")
+        except Exception as e:
+            self.logger.debug(f"WebSocket disable error: {e}")
+    
+    async def _re_enable_websocket_after_execution(self):
+        """Re-enable WebSocket after trade execution"""
+        try:
+            # Restart WebSocket scanning after execution
+            if hasattr(self.exchange_manager, 'detector_websocket_running'):
+                self.exchange_manager.detector_websocket_running = True
+                self.logger.info("🚀 INSTANT: WebSocket scanning re-enabled")
+        except Exception as e:
+            self.logger.debug(f"WebSocket re-enable error: {e}")
     
     async def _validate_opportunity_with_fresh_prices(self, opportunity: ArbitrageOpportunity) -> bool:
         """Validate opportunity with FRESH market prices and realistic calculations."""
@@ -405,16 +432,15 @@ class TradeExecutor:
             await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
             return False
     
-    def _calculate_lightning_step_amounts(self, step: TradeStep, current_balance: Dict[str, float], 
+    def _calculate_instant_step_amounts(self, step: TradeStep, current_balance: Dict[str, float], 
                                         step_num: int, configured_trade_amount: float) -> float:
-        """Calculate CORRECT amounts for each step with LIGHTNING speed."""
+        """Calculate CORRECT amounts for each step with INSTANT speed."""
         try:
             if step_num == 1:
                 # Step 1: USDT → Intermediate (e.g., USDT → AR)
                 # CRITICAL FIX: Use configured trade amount, not step quantity
                 quantity = configured_trade_amount  # ENFORCED: Use $20 trade amount
                 
-                self.logger.info(f"⚡ Step 1: ${quantity:.2f} USDT")
                 return quantity
                 
             elif step_num == 2:
@@ -429,7 +455,6 @@ class TradeExecutor:
                 
                 quantity = available_intermediate  # Sell ALL AR we have
                 
-                self.logger.info(f"⚡ Step 2: {quantity:.8f} {intermediate_currency}")
                 return quantity
                 
             elif step_num == 3:
@@ -444,7 +469,6 @@ class TradeExecutor:
                 
                 quantity = available_quote  # Sell ALL BTC we have
                 
-                self.logger.info(f"⚡ Step 3: {quantity:.8f} {quote_currency}")
                 return quantity
             
             else:
@@ -455,18 +479,65 @@ class TradeExecutor:
             self.logger.error(f"Error calculating correct amounts for step {step_num}: {e}")
             return 0
 
-    async def _execute_lightning_step(self, exchange, symbol: str, side: str, 
+    def _calculate_lightning_step_amounts(self, step: TradeStep, current_balance: Dict[str, float], 
+                                        step_num: int, configured_trade_amount: float) -> float:
+        """Calculate CORRECT amounts for each step with LIGHTNING speed."""
+        try:
+            if step_num == 1:
+                # Step 1: USDT → Intermediate (e.g., USDT → SCRT)
+                # CRITICAL FIX: Use configured trade amount, not step quantity
+                quantity = configured_trade_amount  # ENFORCED: Use $20 trade amount
+                
+                return quantity
+                
+            elif step_num == 2:
+                # Step 2: Intermediate → Quote (e.g., SCRT → BTC)
+                # Use ALL the intermediate currency we got from step 1
+                intermediate_currency = step.symbol.split('/')[0]  # SCRT
+                available_intermediate = current_balance.get(intermediate_currency, 0)
+                
+                if available_intermediate <= 0:
+                    self.logger.error(f"❌ No {intermediate_currency} available for step 2 (balance: {current_balance})")
+                    return 0
+                
+                quantity = available_intermediate  # Sell ALL SCRT we have
+                
+                return quantity
+                
+            elif step_num == 3:
+                # Step 3: Quote → USDT (e.g., BTC → USDT)
+                # Use ALL the quote currency we got from step 2
+                quote_currency = step.symbol.split('/')[0]  # BTC
+                available_quote = current_balance.get(quote_currency, 0)
+                
+                if available_quote <= 0:
+                    self.logger.error(f"❌ No {quote_currency} available for step 3 (balance: {current_balance})")
+                    return 0
+                
+                quantity = available_quote  # Sell ALL BTC we have
+                
+                return quantity
+            
+            else:
+                self.logger.error(f"❌ Invalid step number: {step_num}")
+                return 0
+                
+        except Exception as e:
+            self.logger.error(f"Error calculating lightning amounts for step {step_num}: {e}")
+            return 0
+
+    async def _execute_instant_step(self, exchange, symbol: str, side: str, 
                                     quantity: float, step_num: int) -> Dict[str, Any]:
-        """Execute single step with LIGHTNING timing."""
+        """Execute single step with INSTANT timing - zero overhead."""
         try:
             # CRITICAL FIX: Apply KuCoin precision rounding before execution
             if exchange.exchange_id == 'kucoin' and hasattr(exchange, '_round_to_kucoin_precision'):
                 original_qty = quantity
                 quantity = await exchange._round_to_kucoin_precision(symbol, quantity)
             
-            # Silent execution for maximum speed
+            # INSTANT: Zero logging, zero delays
             
-            # ULTRA-FAST: Execute order immediately
+            # INSTANT: Execute order immediately with zero overhead
             order_result = await exchange.place_market_order(symbol, side, quantity)
             
             if not order_result:
@@ -475,12 +546,17 @@ class TradeExecutor:
             if not order_result.get('success'):
                 return order_result
             
-            # Silent success for speed
+            # INSTANT: Return immediately
             return order_result
             
         except Exception as e:
             self.logger.error(f"❌ Step {step_num} error: {e}")
             return {'success': False, 'error': str(e)}
+    
+    async def _execute_lightning_step(self, exchange, symbol: str, side: str, 
+                                    quantity: float, step_num: int) -> Dict[str, Any]:
+        """Execute single step with LIGHTNING timing - alias for _execute_instant_step."""
+        return await self._execute_instant_step(exchange, symbol, side, quantity, step_num)
     
     async def _calculate_real_order_params(self, step: TradeStep, ticker: Dict[str, Any], 
                                          current_balance: Dict[str, float], step_num: int) -> tuple:

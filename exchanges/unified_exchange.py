@@ -101,8 +101,8 @@ class UnifiedExchange(BaseExchange):
             if self.exchange_id == 'kucoin':
                 exchange_config['options'].update({
                     'adjustForTimeDifference': True,
-                    'recvWindow': 10000,  # 10 second window for faster execution
-                    'timeDifference': 0   # Will be auto-adjusted
+                    'recvWindow': 60000,  # 60 second window for reliability
+                    'timeDifference': 5000   # 5-second buffer for safety
                 })
                 self.logger.info("🕒 KuCoin timestamp synchronization enabled")
 
@@ -158,8 +158,15 @@ class UnifiedExchange(BaseExchange):
             
             # Get server time from KuCoin using correct method
             try:
-                server_time_response = await self.exchange.fetch_time()
-                server_time = int(server_time_response['data'])
+                # Use direct API call for more reliable time sync
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get('https://api.kucoin.com/api/v1/timestamp') as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            server_time = int(data['data'])
+                        else:
+                            raise Exception(f"Failed to get server time: {response.status}")
             except AttributeError:
                 # Fallback method for KuCoin
                 import aiohttp
@@ -191,15 +198,15 @@ class UnifiedExchange(BaseExchange):
                 self.logger.info(f"🕒 Applied {self.server_time_offset}ms offset to KuCoin exchange")
             
         except Exception as e:
-            # Use system time offset as fallback
-            self.server_time_offset = 0
+            # Use conservative buffer as fallback
+            self.server_time_offset = 5000  # 5-second buffer for safety
             self.last_time_sync = time.time()
             self.logger.warning(f"⚠️ Time synchronization failed: {e}")
-            self.logger.info("Using system time - applying 1-second buffer for safety")
+            self.logger.info("Using 5-second buffer for safety")
             
             # Apply safety buffer
             if hasattr(self.exchange, 'options'):
-                self.exchange.options['timeDifference'] = 1000  # 1 second buffer
+                self.exchange.options['timeDifference'] = 5000  # 5-second buffer
                 self.exchange.options['adjustForTimeDifference'] = True
 
     async def _ensure_time_sync(self):
@@ -557,7 +564,7 @@ class UnifiedExchange(BaseExchange):
                         self.logger.info(f"⚡ LIGHTNING RETRY SUCCESS: {retry_order['id']}")
                         
                         # Wait for completion
-                        final_order = await self._wait_for_order_completion_lightning(retry_order['id'], symbol, timeout_seconds=15)
+                        final_order = await self._wait_for_order_completion_instant(retry_order['id'], symbol, timeout_seconds=15)
                         
                         if final_order:
                             return {
@@ -587,11 +594,11 @@ class UnifiedExchange(BaseExchange):
                 'exception_type': type(e).__name__
             }
     
-    async def _wait_for_order_completion_lightning(self, order_id: str, symbol: str, timeout_seconds: int = 15) -> Optional[Dict[str, Any]]:
-        """LIGHTNING order completion with 25ms checking for maximum speed."""
+    async def _wait_for_order_completion_instant(self, order_id: str, symbol: str, timeout_seconds: int = 5) -> Optional[Dict[str, Any]]:
+        """INSTANT order completion with 20ms checking for maximum speed."""
         try:
             start_time = time.time()
-            check_interval = 0.025  # LIGHTNING: Check every 25ms
+            check_interval = 0.02  # INSTANT: Check every 20ms
             max_checks = int(timeout_seconds / check_interval)
             
             for attempt in range(max_checks):
@@ -606,7 +613,7 @@ class UnifiedExchange(BaseExchange):
                         # Check if order is completed
                         if status in ['closed', 'filled'] and filled > 0:
                             elapsed = time.time() - start_time
-                            # Silent completion
+                            # INSTANT completion
                             return current_order
                         elif status in ['canceled', 'cancelled', 'rejected']:
                             return None
@@ -614,14 +621,14 @@ class UnifiedExchange(BaseExchange):
                         # KuCoin specific: Check for 'done' status
                         if status == 'done' and filled > 0:
                             elapsed = time.time() - start_time
-                            # Silent completion
+                            # INSTANT completion
                             return current_order
                     
-                    # LIGHTNING: Minimal wait between checks
+                    # INSTANT: Minimal wait between checks
                     await asyncio.sleep(check_interval)
                     
                 except Exception as fetch_error:
-                    # Silent error handling for maximum speed
+                    # INSTANT error handling
                     await asyncio.sleep(check_interval)
                     continue
             
@@ -631,6 +638,10 @@ class UnifiedExchange(BaseExchange):
             
         except Exception as e:
             return None
+
+    async def _wait_for_order_completion_lightning(self, order_id: str, symbol: str, timeout_seconds: int = 8) -> Optional[Dict[str, Any]]:
+        """Lightning order completion - alias for instant completion."""
+        return await self._wait_for_order_completion_instant(order_id, symbol, timeout_seconds)
 
     async def _round_to_kucoin_precision(self, symbol: str, quantity: float) -> float:
         """Round quantity to KuCoin's required decimal precision"""

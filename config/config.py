@@ -61,15 +61,15 @@ class Config:
 
     # Slippage and Order Risk
     MAX_SLIPPAGE_PERCENTAGE: float = 0.05
-    ORDER_TIMEOUT_SECONDS: int = 30
+    ORDER_TIMEOUT_SECONDS: int = 5  # INSTANT: 5-second timeout for maximum speed
 
     # GUI Settings
-    GUI_UPDATE_INTERVAL: int = 1000  # ms
+    GUI_UPDATE_INTERVAL: int = 500  # INSTANT: 500ms GUI updates
     MAX_OPPORTUNITIES_DISPLAY: int = 50
 
     # WebSocket
     WEBSOCKET_RECONNECT_ATTEMPTS: int = 5
-    WEBSOCKET_RECONNECT_DELAY: int = 5
+    WEBSOCKET_RECONNECT_DELAY: int = 2  # INSTANT: Faster reconnection
 
     @classmethod
     def validate(cls) -> bool:
