@@ -141,6 +141,13 @@ class UnifiedExchange(BaseExchange):
             self.trading_pairs = {
                 s: m for s, m in self.exchange.markets.items() if m.get("active", False)
             }
+            
+            # Log available pairs for debugging
+            total_pairs = len(self.trading_pairs)
+            usdt_pairs = len([p for p in self.trading_pairs.keys() if 'USDT' in p])
+            btc_pairs = len([p for p in self.trading_pairs.keys() if 'BTC' in p])
+            
+            self.logger.info(f"📊 {self.exchange_id} trading pairs: {total_pairs} total, {usdt_pairs} USDT pairs, {btc_pairs} BTC pairs")
 
             self.is_connected = True
             self.logger.info(f"✅ Connected to {self.exchange_id} - REAL ACCOUNT ACCESS")
@@ -154,55 +161,24 @@ class UnifiedExchange(BaseExchange):
     async def _synchronize_kucoin_time(self):
         """Synchronize time with KuCoin server to prevent timestamp errors"""
         try:
-            # INSTANT: Silent time sync for maximum speed
-            
-            # Get server time from KuCoin using correct method
-            try:
-                # Use direct API call for more reliable time sync
-                import aiohttp
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as session:
-                    async with session.get('https://api.kucoin.com/api/v1/timestamp') as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            server_time = int(data['data'])
-                        else:
-                            raise Exception(f"Failed to get server time: {response.status}")
-            except AttributeError:
-                # Fallback method for KuCoin
-                import aiohttp
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as session:
-                    async with session.get('https://api.kucoin.com/api/v1/timestamp') as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            server_time = int(data['data'])
-                        else:
-                            raise Exception(f"Failed to get server time: {response.status}")
-            
-            # Calculate local time
-            local_time = int(time.time() * 1000)
-            
-            # Calculate offset
-            self.server_time_offset = server_time - local_time
+            # INSTANT: Use system time with minimal buffer for maximum speed
+            current_time = int(time.time() * 1000)
+            self.server_time_offset = 1000  # 1-second buffer for safety
             self.last_time_sync = time.time()
             
-            # INSTANT: Silent sync
-            
-            # Apply the offset to the exchange
+            # Apply minimal buffer to exchange
             if hasattr(self.exchange, 'options'):
-                self.exchange.options['timeDifference'] = self.server_time_offset
-                # Also set adjustForTimeDifference to True
+                self.exchange.options['timeDifference'] = 1000  # 1-second buffer
                 self.exchange.options['adjustForTimeDifference'] = True
-                # INSTANT: Silent application
             
         except Exception as e:
-            # Use conservative buffer as fallback
-            self.server_time_offset = 2000  # 2-second buffer for speed
+            # Use minimal buffer as fallback
+            self.server_time_offset = 1000  # 1-second buffer for speed
             self.last_time_sync = time.time()
-            # INSTANT: Silent fallback
             
-            # Apply safety buffer
+            # Apply minimal buffer
             if hasattr(self.exchange, 'options'):
-                self.exchange.options['timeDifference'] = 2000  # 2-second buffer
+                self.exchange.options['timeDifference'] = 1000  # 1-second buffer
                 self.exchange.options['adjustForTimeDifference'] = True
 
     async def _ensure_time_sync(self):
@@ -363,14 +339,10 @@ class UnifiedExchange(BaseExchange):
             
             # Gate.io specific order handling
             if self.exchange_id == 'gate':
-                # Silent Gate.io handling
-                
                 # Gate.io requires special handling for market buy orders
                 if side.lower() == 'buy':
                     # For market BUY orders, Gate.io needs the USDT amount to spend (quote quantity)
                     # Set the option to use quote quantity for market buy orders
-                    # Silent buy handling
-                    
                     # Use Gate.io specific parameters for market buy
                     order = await self.exchange.create_order(
                         symbol=symbol,
@@ -382,19 +354,13 @@ class UnifiedExchange(BaseExchange):
                     )
                 else:
                     # For market SELL orders, use standard format
-                    # Silent sell handling
                     order = await self.exchange.create_market_order(symbol, side, qty)
             elif self.exchange_id == 'kucoin':
-                # Silent KuCoin handling
-                
-                # LIGHTNING MODE: Minimal timestamp buffer
-                current_timestamp = int(time.time() * 1000) + 1000  # 1-second buffer for speed
+                # INSTANT: Use current time with minimal buffer
+                current_timestamp = int(time.time() * 1000) + 500  # 0.5-second buffer for speed
                 
                 if side.lower() == 'buy':
-                    # For market BUY orders, KuCoin needs the quote currency amount (USDT to spend)
-                    # Silent buy handling
-                    
-                    # LIGHTNING MODE: Direct order format
+                    # INSTANT: Direct KuCoin buy order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
@@ -407,8 +373,7 @@ class UnifiedExchange(BaseExchange):
                         }
                     )
                 else:
-                    # For market SELL orders, use standard format with timestamp
-                    # Silent sell handling
+                    # INSTANT: Direct KuCoin sell order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
                         type='market',
@@ -424,9 +389,7 @@ class UnifiedExchange(BaseExchange):
                 # Standard order for other exchanges
                 order = await self.exchange.create_market_order(symbol, side, qty)
             
-            
             if not order:
-                # Silent error for speed
                 return {
                     'success': False,
                     'status': 'failed',
@@ -440,20 +403,14 @@ class UnifiedExchange(BaseExchange):
             order_id = order.get('id', 'Unknown')
             initial_status = order.get('status', 'Unknown')
             
-            # Silent order tracking
-            
             # CRITICAL FIX: Wait for order execution completion
             if order_id and order_id != 'Unknown':
-                # Silent waiting
-                
                 # LIGHTNING MODE: Ultra-fast timeout
                 final_order = await self._wait_for_order_completion_lightning(order_id, symbol, timeout_seconds=8)
                 
                 if final_order:
                     order = final_order  # Use the completed order data
-                    # Silent completion
                 else:
-                    # Silent timeout
                     return {
                         'success': False,
                         'status': 'timeout',
@@ -461,7 +418,6 @@ class UnifiedExchange(BaseExchange):
                         'id': order_id
                     }
             else:
-                # Silent error
                 return {
                     'success': False,
                     'status': 'failed',
@@ -525,8 +481,6 @@ class UnifiedExchange(BaseExchange):
             
             # If timestamp error, try to re-sync and retry once
             if self.exchange_id == 'kucoin' and 'KC-API-TIMESTAMP' in str(e):
-                # INSTANT: Silent retry
-                
                 try:
                     # INSTANT RETRY: Use minimal buffer for speed
                     current_timestamp = int(time.time() * 1000) + 1000  # 1-second buffer
@@ -578,8 +532,7 @@ class UnifiedExchange(BaseExchange):
                             }
                         
                 except Exception as retry_error:
-                    # INSTANT: Silent retry failure
-                    pass
+                    pass  # Silent retry failure for speed
             
             return {
                 'success': False,
@@ -592,10 +545,10 @@ class UnifiedExchange(BaseExchange):
             }
     
     async def _wait_for_order_completion_instant(self, order_id: str, symbol: str, timeout_seconds: int = 5) -> Optional[Dict[str, Any]]:
-        """INSTANT order completion with 10ms checking for maximum speed."""
+        """INSTANT order completion with 5ms checking for maximum speed."""
         try:
             start_time = time.time()
-            check_interval = 0.01  # INSTANT: Check every 10ms
+            check_interval = 0.005  # INSTANT: Check every 5ms
             max_checks = int(timeout_seconds / check_interval)
             
             for attempt in range(max_checks):
@@ -609,28 +562,21 @@ class UnifiedExchange(BaseExchange):
                         
                         # Check if order is completed
                         if status in ['closed', 'filled'] and filled > 0:
-                            elapsed = time.time() - start_time
-                            # INSTANT completion
                             return current_order
                         elif status in ['canceled', 'cancelled', 'rejected']:
                             return None
                         
                         # KuCoin specific: Check for 'done' status
                         if status == 'done' and filled > 0:
-                            elapsed = time.time() - start_time
-                            # INSTANT completion
                             return current_order
                     
-                    # INSTANT: Minimal wait between checks
+                    # INSTANT: Ultra-minimal wait between checks
                     await asyncio.sleep(check_interval)
                     
                 except Exception as fetch_error:
-                    # INSTANT error handling
                     await asyncio.sleep(check_interval)
                     continue
             
-            # Timeout reached
-            elapsed = time.time() - start_time
             return None
             
         except Exception as e:
@@ -895,3 +841,24 @@ class UnifiedExchange(BaseExchange):
             return bal.get('BNB', 0.0)
         except Exception:
             return 0.0
+
+    async def validate_trading_pairs(self, pairs: List[str]) -> List[str]:
+        """Validate that trading pairs exist on this exchange"""
+        try:
+            if not self.trading_pairs:
+                await self.exchange.load_markets()
+                self.trading_pairs = {
+                    s: m for s, m in self.exchange.markets.items() if m.get("active", False)
+                }
+            
+            valid_pairs = []
+            for pair in pairs:
+                if pair in self.trading_pairs:
+                    valid_pairs.append(pair)
+                else:
+                    self.logger.debug(f"❌ Invalid pair for {self.exchange_id}: {pair}")
+            
+            return valid_pairs
+        except Exception as e:
+            self.logger.error(f"Error validating pairs: {e}")
+            return []

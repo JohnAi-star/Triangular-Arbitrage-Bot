@@ -40,6 +40,10 @@ class Config:
     REQUIRE_USDT_ANCHOR: bool = True
     MAX_TRIANGLES: int = int(os.getenv('MAX_TRIANGLES', '300'))  # Reduced for better performance
     MIN_VOLUME_USDT: float = float(os.getenv('MIN_VOLUME_USDT', '0'))  # optional filter if volumes available
+    
+    # Trading pair validation
+    VALIDATE_PAIRS_BEFORE_EXECUTION: bool = True  # Always validate pairs exist
+    SKIP_INVALID_TRIANGLES: bool = True  # Skip triangles with invalid pairs
 
     # Fee & Trading Mode
     USE_FEE_TOKENS: bool = os.getenv('USE_FEE_TOKENS', 'true').lower() == 'true'
@@ -69,7 +73,7 @@ class Config:
 
     # WebSocket
     WEBSOCKET_RECONNECT_ATTEMPTS: int = 5
-    WEBSOCKET_RECONNECT_DELAY: int = 1  # INSTANT: Faster reconnection
+    WEBSOCKET_RECONNECT_DELAY: int = 0.5  # INSTANT: Faster reconnection
 
     @classmethod
     def validate(cls) -> bool:

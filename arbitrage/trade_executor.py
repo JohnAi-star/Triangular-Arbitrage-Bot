@@ -70,13 +70,11 @@ class TradeExecutor:
             # INSTANT: Completely disable WebSocket during execution
             if hasattr(self.exchange_manager, 'detector_websocket_running'):
                 self.exchange_manager.detector_websocket_running = False
-                # INSTANT: Silent disable
             
             # INSTANT: Also disable SimpleTriangleDetector WebSocket
             if hasattr(self.exchange_manager, 'simple_detector'):
                 if hasattr(self.exchange_manager.simple_detector, 'running'):
                     self.exchange_manager.simple_detector.running = False
-                    # INSTANT: Silent disable
         except Exception as e:
             # INSTANT: Silent error handling
             pass
@@ -87,13 +85,11 @@ class TradeExecutor:
             # INSTANT: Re-enable WebSocket after execution
             if hasattr(self.exchange_manager, 'detector_websocket_running'):
                 self.exchange_manager.detector_websocket_running = True
-                # INSTANT: Silent re-enable
             
             # INSTANT: Re-enable SimpleTriangleDetector WebSocket
             if hasattr(self.exchange_manager, 'simple_detector'):
                 if hasattr(self.exchange_manager.simple_detector, 'running'):
                     self.exchange_manager.simple_detector.running = True
-                    # INSTANT: Silent re-enable
         except Exception as e:
             # INSTANT: Silent error handling
             pass
@@ -145,6 +141,46 @@ class TradeExecutor:
                 self.logger.error(f"❌ Exchange {exchange_name} not found")
                 return False
             
+            # Check if exchange has markets loaded
+            if not hasattr(exchange, 'trading_pairs') or not exchange.trading_pairs:
+                self.logger.warning(f"⚠️ No trading pairs cached for {exchange_name}")
+                # Try to load trading pairs
+                try:
+                    trading_pairs = await exchange.get_trading_pairs()
+                    if trading_pairs:
+                        available_pairs = set(trading_pairs)
+                    else:
+                        self.logger.error(f"❌ Could not load trading pairs for {exchange_name}")
+                        return False
+                except Exception as e:
+                    self.logger.error(f"❌ Error loading trading pairs: {e}")
+                    return False
+            else:
+                available_pairs = set(exchange.trading_pairs.keys())
+            
+            # Define required pairs for USDT triangle
+            pair1 = f"{intermediate_currency}/USDT"      # e.g., TFUEL/USDT
+            pair2 = f"{intermediate_currency}/{quote_currency}"  # e.g., TFUEL/BTC
+            pair3 = f"{quote_currency}/USDT"             # e.g., BTC/USDT
+            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # e.g., BTC/TFUEL
+            
+            self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
+            
+            # Check if all required pairs exist
+            pair1_exists = pair1 in available_pairs
+            pair2_exists = pair2 in available_pairs or alt_pair2 in available_pairs
+            pair3_exists = pair3 in available_pairs
+            
+            if not (pair1_exists and pair2_exists and pair3_exists):
+                self.logger.error(f"❌ Missing trading pairs for {exchange_name}:")
+                self.logger.error(f"   {pair1}: {'✅' if pair1_exists else '❌ NOT FOUND'}")
+                self.logger.error(f"   {pair2}: {'✅' if pair2 in available_pairs else '❌ NOT FOUND'}")
+                self.logger.error(f"   {alt_pair2}: {'✅' if alt_pair2 in available_pairs else '❌ NOT FOUND'}")
+                self.logger.error(f"   {pair3}: {'✅' if pair3_exists else '❌ NOT FOUND'}")
+                return False
+            
+            self.logger.info(f"✅ All trading pairs validated for {exchange_name}: {pair1}, {pair2 if pair2 in available_pairs else alt_pair2}, {pair3}")
+            
             # SPEED OPTIMIZATION: Use cached tickers if available (under 5 seconds old)
             if hasattr(exchange, '_last_tickers_cache') and hasattr(exchange, '_last_cache_time'):
                 cache_age = time.time() - exchange._last_cache_time
@@ -159,14 +195,6 @@ class TradeExecutor:
                 tickers = await exchange.fetch_tickers()
                 exchange._last_tickers_cache = tickers
                 exchange._last_cache_time = time.time()
-            
-            # Define required pairs for USDT triangle
-            pair1 = f"{intermediate_currency}/USDT"      # e.g., TFUEL/USDT
-            pair2 = f"{intermediate_currency}/{quote_currency}"  # e.g., TFUEL/BTC
-            pair3 = f"{quote_currency}/USDT"             # e.g., BTC/USDT
-            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # e.g., BTC/TFUEL
-            
-            self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
             
             if not tickers:
                 self.logger.error("❌ Failed to fetch fresh ticker data")
@@ -332,10 +360,8 @@ class TradeExecutor:
     async def _execute_triangle_steps(self, opportunity: ArbitrageOpportunity, exchange, trade_id: str, start_time: float) -> bool:
         """Execute all three steps with ULTRA-FAST timing and CORRECT amounts."""
         try:
-            # INSTANT: Silent execution for maximum speed
             # CRITICAL FIX: Use configured trade amount, not opportunity amount
             configured_trade_amount = min(20.0, opportunity.initial_amount)  # ENFORCE $20 maximum
-            # INSTANT: Silent planning
             
             # INSTANT: Pre-sync time before execution
             if exchange.exchange_id == 'kucoin':
@@ -345,97 +371,115 @@ class TradeExecutor:
                 # Use 1-second buffer for maximum speed
                 if hasattr(exchange.exchange, 'options'):
                     exchange.exchange.options['timeDifference'] = 1000  # 1-second buffer
-                # INSTANT: Silent buffer application
             
-            # INSTANT: Use pre-validated prices
+            # CRITICAL FIX: Track ACTUAL asset amounts (not USD values) through the triangle
+            actual_amounts = {}
             
-            # Track actual amounts through the triangle
-            current_balance = {
-                'USDT': configured_trade_amount,  # CRITICAL FIX: Use configured amount
-                'step_start_time': time.time()
-            }
+            # Parse triangle path to get currencies
+            triangle_path = getattr(opportunity, 'triangle_path', '')
+            if isinstance(triangle_path, str):
+                import re
+                currencies = re.findall(r'([A-Z0-9]+)', triangle_path)
+                if len(currencies) >= 3:
+                    base_currency, intermediate_currency, quote_currency = currencies[0], currencies[1], currencies[2]
+                else:
+                    self.logger.error(f"❌ Invalid triangle path: {triangle_path}")
+                    return False
+            else:
+                self.logger.error(f"❌ Triangle path is not string: {type(triangle_path)}")
+                return False
             
-            # Execute each step with LIGHTNING timing (target: 5 seconds per step)
+            self.logger.info(f"🔧 FIXED EXECUTION: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
+            
             for step_num, step in enumerate(opportunity.steps, 1):
                 try:
                     step_start = time.time()
-                    # INSTANT: Silent step execution
                     
-                    # CRITICAL FIX: Calculate CORRECT quantities for each step
-                    real_quantity = self._calculate_lightning_step_amounts(
-                        step, current_balance, step_num, configured_trade_amount
-                    )
+                    # CRITICAL FIX: Use CORRECT asset amounts from previous steps
+                    if step_num == 1:
+                        # Step 1: Buy intermediate currency with USDT
+                        real_quantity = configured_trade_amount  # $20 USDT to spend
+                        self.logger.info(f"🔧 Step 1: Spending {real_quantity:.2f} USDT to buy {intermediate_currency}")
+                    elif step_num == 2:
+                        # Step 2: Use ACTUAL intermediate currency amount from step 1
+                        real_quantity = actual_amounts.get('step1_filled', 0)
+                        if real_quantity <= 0:
+                            self.logger.error(f"❌ No {intermediate_currency} received from step 1")
+                            return False
+                        self.logger.info(f"🔧 Step 2: Selling {real_quantity:.8f} {intermediate_currency} for {quote_currency}")
+                    elif step_num == 3:
+                        # Step 3: Use ACTUAL quote currency amount from step 2 (CRITICAL FIX)
+                        real_quantity = actual_amounts.get('step2_received', 0)
+                        if real_quantity <= 0:
+                            self.logger.error(f"❌ No {quote_currency} received from step 2")
+                            return False
+                        self.logger.info(f"🔧 Step 3: Selling {real_quantity:.8f} {quote_currency} for USDT")
+                    else:
+                        self.logger.error(f"❌ Invalid step number: {step_num}")
+                        return False
                     
                     if real_quantity <= 0:
-                        # INSTANT: Silent error
+                        self.logger.error(f"❌ Invalid quantity for step {step_num}: {real_quantity}")
                         return False
                     
-                    # INSTANT: Execute order immediately
-                    order_result = await self._execute_lightning_step(
-                        exchange, step.symbol, step.side, real_quantity, step_num
-                    )
+                    # Execute the order with actual amount
+                    order_result = await self._execute_lightning_step(exchange, step.symbol, step.side, real_quantity, step_num)
                     
                     if not order_result or not order_result.get('success'):
-                        # INSTANT: Silent failure
+                        self.logger.error(f"❌ Step {step_num} failed: {order_result.get('error', 'Unknown error')}")
                         return False
                     
-                    # CRITICAL FIX: Update balance with ACTUAL filled amounts
+                    # CRITICAL FIX: Store CORRECT asset amounts for next step
                     filled_quantity = float(order_result.get('filled', 0))
                     cost = float(order_result.get('cost', 0))
-                    average_price = float(order_result.get('average', 0))
+                    
+                    # CRITICAL FIX: Store CORRECT amounts based on order type and what we received
+                    if step_num == 1:
+                        # Step 1: We bought intermediate currency with USDT
+                        # For BUY orders: 'filled' = amount of intermediate currency we received
+                        actual_amounts['step1_filled'] = filled_quantity  # TWT amount received
+                        self.logger.info(f"✅ Step 1: Received {filled_quantity:.8f} {intermediate_currency}")
+                    elif step_num == 2:
+                        # Step 2: We sold intermediate for quote currency
+                        # For SELL orders: 'filled' = amount we sold, 'cost' = amount we received
+                        # CRITICAL: Use 'cost' for what we received, not 'filled'
+                        if step.side == 'sell':
+                            actual_amounts['step2_received'] = cost  # BTC amount received (in quote currency)
+                            self.logger.info(f"✅ Step 2: Sold {filled_quantity:.8f} {intermediate_currency}, received {cost:.8f} {quote_currency}")
+                        else:
+                            actual_amounts['step2_received'] = filled_quantity  # For buy orders
+                            self.logger.info(f"✅ Step 2: Bought {filled_quantity:.8f} {quote_currency}")
+                    elif step_num == 3:
+                        # Step 3: We sold quote currency for USDT
+                        # For SELL orders: 'cost' = USDT amount received
+                        actual_amounts['step3_usdt'] = cost  # USDT amount received
+                        self.logger.info(f"✅ Step 3: Sold {filled_quantity:.8f} {quote_currency}, received {cost:.2f} USDT")
                     
                     step_time = (time.time() - step_start) * 1000
-                    # INSTANT: Silent timing
+                    self.logger.info(f"⚡ Step {step_num} completed in {step_time:.0f}ms")
                     
-                    if step.side == 'buy':
-                        # BUY: Spent quote currency, received base currency
-                        base_currency = step.symbol.split('/')[0]   # AR
-                        quote_currency = step.symbol.split('/')[1]  # USDT
-                        
-                        # Update balances correctly
-                        current_balance[quote_currency] = current_balance.get(quote_currency, 0) - cost
-                        current_balance[base_currency] = filled_quantity  # We now have this much AR
-                        # INSTANT: Silent balance update
-                        
-                    else:
-                        # SELL: Sold base currency, received quote currency
-                        base_currency = step.symbol.split('/')[0]   # AR or BTC
-                        quote_currency = step.symbol.split('/')[1]  # BTC or USDT
-                        
-                        # Update balances correctly
-                        current_balance[base_currency] = 0  # Sold all of this currency
-                        
-                        # CRITICAL FIX: For KuCoin, use the actual received amount
-                        if quote_currency == 'USDT':
-                            # Final step: selling for USDT
-                            received_usdt = cost  # This is the USDT we received
-                            current_balance[quote_currency] = received_usdt
-                            # INSTANT: Silent final step
-                        else:
-                            # Intermediate step: selling for another crypto
-                            received_amount = filled_quantity * average_price if average_price > 0 else cost
-                            current_balance[quote_currency] = received_amount
-                            # INSTANT: Silent intermediate step
-                    
-                    # INSTANT: No logging during execution
-                
-                except Exception as step_error:
-                    # INSTANT: Silent step error
-                    await self._log_trade_failure(opportunity, trade_id, str(step_error), start_time)
+                except Exception as e:
+                    self.logger.error(f"❌ Error in step {step_num}: {e}")
                     return False
             
-            # INSTANT: All steps completed - calculate final result
-            final_balance = current_balance.get('USDT', 0)
-            actual_profit = final_balance - configured_trade_amount  # CRITICAL FIX: Use configured amount
+            # CRITICAL FIX: Use ACTUAL USDT received from step 3
+            final_balance = actual_amounts.get('step3_usdt', 0)
+            
+            if final_balance <= 0:
+                self.logger.error(f"❌ No USDT received from final step")
+                return False
+            
+            # Calculate ACTUAL profit using real amounts
+            actual_profit = final_balance - configured_trade_amount
             actual_profit_pct = (actual_profit / configured_trade_amount) * 100
             
-            execution_time = (time.time() - start_time) * 1000
+            total_execution_time = (time.time() - start_time) * 1000
             
-            # INSTANT: Silent completion logging
-            if actual_profit > 0:
-                self.logger.info(f"🎉 INSTANT PROFIT: +${actual_profit:.4f} in {execution_time:.0f}ms")
-            else:
-                self.logger.info(f"📊 INSTANT COMPLETE: ${actual_profit:.4f} in {execution_time:.0f}ms")
+            self.logger.info(f"🎉 EXECUTION COMPLETE:")
+            self.logger.info(f"   Initial: {configured_trade_amount:.2f} USDT")
+            self.logger.info(f"   Final: {final_balance:.2f} USDT")
+            self.logger.info(f"   Actual Profit: ${actual_profit:.4f} ({actual_profit_pct:.4f}%)")
+            self.logger.info(f"   Duration: {total_execution_time:.0f}ms")
             
             # Log successful trade
             await self._log_trade_success(opportunity, trade_id, final_balance, start_time)
@@ -443,130 +487,9 @@ class TradeExecutor:
             return True
             
         except Exception as e:
-            # INSTANT: Silent execution error
+            self.logger.error(f"❌ Error in triangle steps execution: {e}")
             await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
             return False
-    
-    def _calculate_instant_step_amounts(self, step: TradeStep, current_balance: Dict[str, float], 
-                                        step_num: int, configured_trade_amount: float) -> float:
-        """Calculate CORRECT amounts for each step with INSTANT speed."""
-        try:
-            if step_num == 1:
-                # Step 1: USDT → Intermediate (e.g., USDT → AR)
-                # CRITICAL FIX: Use configured trade amount, not step quantity
-                quantity = configured_trade_amount  # ENFORCED: Use $20 trade amount
-                
-                return quantity
-                
-            elif step_num == 2:
-                # Step 2: Intermediate → Quote (e.g., AR → BTC)
-                # Use ALL the intermediate currency we got from step 1
-                intermediate_currency = step.symbol.split('/')[0]  # AR
-                available_intermediate = current_balance.get(intermediate_currency, 0)
-                
-                if available_intermediate <= 0:
-                    self.logger.error(f"❌ No {intermediate_currency} available for step 2 (balance: {current_balance})")
-                    return 0
-                
-                quantity = available_intermediate  # Sell ALL AR we have
-                
-                return quantity
-                
-            elif step_num == 3:
-                # Step 3: Quote → USDT (e.g., BTC → USDT)
-                # Use ALL the quote currency we got from step 2
-                quote_currency = step.symbol.split('/')[0]  # BTC
-                available_quote = current_balance.get(quote_currency, 0)
-                
-                if available_quote <= 0:
-                    self.logger.error(f"❌ No {quote_currency} available for step 3 (balance: {current_balance})")
-                    return 0
-                
-                quantity = available_quote  # Sell ALL BTC we have
-                
-                return quantity
-            
-            else:
-                self.logger.error(f"❌ Invalid step number: {step_num}")
-                return 0
-                
-        except Exception as e:
-            self.logger.error(f"Error calculating correct amounts for step {step_num}: {e}")
-            return 0
-
-    def _calculate_lightning_step_amounts(self, step: TradeStep, current_balance: Dict[str, float], 
-                                        step_num: int, configured_trade_amount: float) -> float:
-        """Calculate CORRECT amounts for each step with LIGHTNING speed."""
-        try:
-            if step_num == 1:
-                # Step 1: USDT → Intermediate (e.g., USDT → SCRT)
-                # CRITICAL FIX: Use configured trade amount, not step quantity
-                quantity = configured_trade_amount  # ENFORCED: Use $20 trade amount
-                
-                return quantity
-                
-            elif step_num == 2:
-                # Step 2: Intermediate → Quote (e.g., SCRT → BTC)
-                # Use ALL the intermediate currency we got from step 1
-                intermediate_currency = step.symbol.split('/')[0]  # SCRT
-                available_intermediate = current_balance.get(intermediate_currency, 0)
-                
-                if available_intermediate <= 0:
-                    self.logger.error(f"❌ No {intermediate_currency} available for step 2 (balance: {current_balance})")
-                    return 0
-                
-                quantity = available_intermediate  # Sell ALL SCRT we have
-                
-                return quantity
-                
-            elif step_num == 3:
-                # Step 3: Quote → USDT (e.g., BTC → USDT)
-                # Use ALL the quote currency we got from step 2
-                quote_currency = step.symbol.split('/')[0]  # BTC
-                available_quote = current_balance.get(quote_currency, 0)
-                
-                if available_quote <= 0:
-                    self.logger.error(f"❌ No {quote_currency} available for step 3 (balance: {current_balance})")
-                    return 0
-                
-                quantity = available_quote  # Sell ALL BTC we have
-                
-                return quantity
-            
-            else:
-                self.logger.error(f"❌ Invalid step number: {step_num}")
-                return 0
-                
-        except Exception as e:
-            self.logger.error(f"Error calculating lightning amounts for step {step_num}: {e}")
-            return 0
-
-    async def _execute_instant_step(self, exchange, symbol: str, side: str, 
-                                    quantity: float, step_num: int) -> Dict[str, Any]:
-        """Execute single step with INSTANT timing - zero overhead."""
-        try:
-            # CRITICAL FIX: Apply KuCoin precision rounding before execution
-            if exchange.exchange_id == 'kucoin' and hasattr(exchange, '_round_to_kucoin_precision'):
-                original_qty = quantity
-                quantity = await exchange._round_to_kucoin_precision(symbol, quantity)
-            
-            # INSTANT: Zero logging, zero delays
-            
-            # INSTANT: Execute order immediately with zero overhead
-            order_result = await exchange.place_market_order(symbol, side, quantity)
-            
-            if not order_result:
-                return {'success': False, 'error': 'No response from exchange'}
-            
-            if not order_result.get('success'):
-                return order_result
-            
-            # INSTANT: Return immediately
-            return order_result
-            
-        except Exception as e:
-            self.logger.error(f"❌ Step {step_num} error: {e}")
-            return {'success': False, 'error': str(e)}
     
     async def _execute_lightning_step(self, exchange, symbol: str, side: str, 
                                     quantity: float, step_num: int) -> Dict[str, Any]:
@@ -594,139 +517,7 @@ class TradeExecutor:
             return order_result
             
         except Exception as e:
-            # INSTANT: Silent error
             return {'success': False, 'error': str(e)}
-    
-    async def _calculate_real_order_params(self, step: TradeStep, ticker: Dict[str, Any], 
-                                         current_balance: Dict[str, float], step_num: int) -> tuple:
-        """Calculate CORRECT order parameters with proper amount tracking."""
-        try:
-            # Get current prices
-            bid_price = float(ticker['bid'])
-            ask_price = float(ticker['ask'])
-            
-            if step.side == 'buy':
-                price = ask_price
-                
-                if step_num == 1:
-                    # Step 1: Buy intermediate currency with USDT (use FIXED trade amount)
-                    quantity = step.quantity  # Use the planned USDT amount (e.g., $20)
-                    self.logger.info(f"🔧 Step 1 BUY: Spending {quantity:.2f} USDT to buy {step.symbol.split('/')[0]}")
-                else:
-                    # Later buy steps: use available balance of quote currency
-                    source_currency = step.symbol.split('/')[1]
-                    available_amount = current_balance.get(source_currency, 0)
-                    quantity = available_amount
-                    self.logger.info(f"🔧 Step {step_num} BUY: Using {quantity:.8f} {source_currency}")
-                
-            else:  # sell
-                price = bid_price
-                # For sell orders: sell ALL available quantity of the base currency
-                source_currency = step.symbol.split('/')[0]
-                available_quantity = current_balance.get(source_currency, 0)
-                
-                # CRITICAL FIX: Use ALL available quantity for sell orders
-                quantity = available_quantity
-                self.logger.info(f"🔧 Step {step_num} SELL: Selling ALL {quantity:.8f} {source_currency}")
-                
-                # Validate we have something to sell
-                if quantity <= 0:
-                    self.logger.error(f"❌ No {source_currency} available to sell in step {step_num}")
-                    return 0, 0
-            
-            self.logger.info(f"⚡ ULTRA-FAST Step {step_num}: {step.side.upper()} {quantity:.8f} {step.symbol} at {price:.8f}")
-            
-            return quantity, price
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating real order params: {e}")
-            return 0, 0
-    
-    async def _calculate_order_value_usd(self, symbol: str, quantity: float, price: float, exchange) -> float:
-        """Calculate USD value of an order."""
-        try:
-            # For USDT pairs, the calculation is straightforward
-            if symbol.endswith('/USDT'):
-                return quantity * price
-            elif symbol.startswith('USDT/'):
-                return quantity
-            else:
-                # For non-USDT pairs, convert via USDT
-                quote_currency = symbol.split('/')[1]
-                
-                # Try to get USD value via USDT pairs
-                tickers = await exchange.fetch_tickers()
-                
-                base_currency = symbol.split('/')[0]
-                if f"{base_currency}/USDT" in tickers:
-                    base_usd_price = float(tickers[f"{base_currency}/USDT"]['last'])
-                    return quantity * base_usd_price
-                elif f"{quote_currency}/USDT" in tickers:
-                    quote_usd_price = float(tickers[f"{quote_currency}/USDT"]['last'])
-                    return quantity * price * quote_usd_price
-                else:
-                    # Fallback estimate
-                    return quantity * price * 50000  # Rough BTC price estimate
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating order USD value: {e}")
-            return 0
-    
-    def _get_min_order_value(self, exchange_id: str) -> float:
-        """Get minimum order value for exchange."""
-        minimums = {
-            'kucoin': 1.0,    # $1 minimum
-            'binance': 10.0,  # $10 minimum
-            'gate': 5.0,      # $5 minimum
-            'bybit': 5.0,     # $5 minimum
-        }
-        return minimums.get(exchange_id, 5.0)
-    
-    async def _attempt_order_recovery(self, exchange, order_id: str, symbol: str, step_num: int) -> Optional[Dict[str, Any]]:
-        """Attempt to recover from apparent order failure by checking final status."""
-        try:
-            self.logger.info(f"🔄 Attempting recovery for order {order_id}...")
-            
-            # Wait a bit for order to potentially complete
-            await asyncio.sleep(3)
-            
-            # Check final order status
-            try:
-                final_order = await exchange.exchange.fetch_order(order_id, symbol)
-                if final_order:
-                    status = final_order.get('status', 'unknown')
-                    filled = float(final_order.get('filled', 0))
-                    
-                    self.logger.info(f"📊 Final order status: {status}, filled: {filled:.8f}")
-                    
-                    if status in ['closed', 'filled'] and filled > 0:
-                        self.logger.info(f"🔄 Order {order_id} actually filled, continuing trade...")
-                        
-                        # Convert to our format
-                        return {
-                            'success': True,
-                            'id': order_id,
-                            'status': status,
-                            'filled': filled,
-                            'average': final_order.get('average', 0),
-                            'cost': final_order.get('cost', 0),
-                            'fee': final_order.get('fee', {}),
-                            'symbol': symbol
-                        }
-                    else:
-                        self.logger.error(f"❌ Order {order_id} recovery failed: status={status}, filled={filled}")
-                        return None
-                else:
-                    self.logger.error(f"❌ Could not fetch order {order_id} for recovery")
-                    return None
-                    
-            except Exception as fetch_error:
-                self.logger.error(f"❌ Error fetching order for recovery: {fetch_error}")
-                return None
-                
-        except Exception as e:
-            self.logger.error(f"❌ Error in order recovery: {e}")
-            return None
     
     async def _log_trade_attempt(self, opportunity: ArbitrageOpportunity, trade_id: str):
         """Log trade attempt."""

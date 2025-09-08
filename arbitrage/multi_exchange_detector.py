@@ -458,7 +458,12 @@ class MultiExchangeDetector:
                         balance_available=124.76,  # Your actual USDT balance
                         required_balance=self.max_trade_amount
                     )
-                    all_results.append(result)
+                    # CRITICAL: Only show opportunities with valid trading pairs
+                    if self._validate_triangle_pairs(self.simple_detector.exchange_id, result.triangle_path):
+                        all_results.append(result)
+                        self.logger.debug(f"✅ Valid display opportunity: {self.simple_detector.exchange_id} {' → '.join(result.triangle_path)} = {result.profit_percentage:.4f}%")
+                    else:
+                        self.logger.debug(f"❌ Skipped invalid display opportunity: {self.simple_detector.exchange_id} {' → '.join(result.triangle_path)}")
         
         # STEP 2: Scan traditional triangular paths for the SELECTED exchanges only
         connected_exchanges = list(self.exchange_manager.exchanges.keys())
@@ -828,7 +833,7 @@ class MultiExchangeDetector:
                 'WEN', 'MYRO', 'POPCAT', 'MEW', 'MOTHER', 'DADDY', 'SIGMA', 'RETARDIO',
                 
                 # Additional high-volume tokens
-                'NEAR', 'ROSE', 'ONE', 'HARMONY', 'CELO', 'KLAY', 'FLOW', 'EGLD', 'ELROND',
+                'NEAR', 'ROSE', 'ONE', 'HARMONEY', 'CELO', 'KLAY', 'FLOW', 'EGLD', 'ELROND',
                 'AVAX', 'LUNA', 'LUNC', 'USTC', 'ATOM', 'OSMO', 'JUNO', 'SCRT', 'REGEN',
                 'STARS', 'HUAHUA', 'CMDX', 'CRE', 'XPRT', 'NGM', 'IOV', 'BOOT', 'CHEQ'
             }
@@ -859,7 +864,7 @@ class MultiExchangeDetector:
         else:
             # Default major currencies
             return {
-                'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
+                'BTC', 'ETH', 'USDT', 'USDC', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVax',
                 'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
             }
     
@@ -1009,6 +1014,7 @@ class MultiExchangeDetector:
             
             # Extract triangle path
             triangle_path = opportunity.triangle_path
+            # Get exchange instance
             if len(triangle_path) < 3:
                 raise ValueError("Invalid triangle path")
             
