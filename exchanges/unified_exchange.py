@@ -327,7 +327,24 @@ class UnifiedExchange(BaseExchange):
             # CRITICAL FIX: Round quantity to proper decimal precision for KuCoin
             if self.exchange_id == 'kucoin':
                 qty = await self._round_to_kucoin_precision(symbol, qty)
-                # Silent precision for speed
+                
+                # CRITICAL: Additional validation for step 3 stablecoin pairs
+                if 'USDC/USDT' in symbol or 'USDT/USDC' in symbol:
+                    # Ensure USDC/USDT orders meet KuCoin requirements
+                    if qty < 0.01:
+                        self.logger.error(f"❌ USDC/USDT order too small: {qty:.8f} < 0.01 minimum")
+                        return {
+                            'success': False,
+                            'status': 'failed',
+                            'error': f'Order size {qty:.8f} below minimum 0.01 for {symbol}',
+                            'symbol': symbol,
+                            'side': side,
+                            'amount': qty
+                        }
+                    
+                    # Round to exactly 2 decimal places for USDC/USDT
+                    qty = round(qty, 2)
+                    self.logger.info(f"🔧 USDC/USDT precision fix: {qty:.2f}")
             
             # Silent order for maximum speed
             
@@ -373,6 +390,15 @@ class UnifiedExchange(BaseExchange):
                         }
                     )
                 else:
+                    # CRITICAL FIX: Handle USDC/USDT sell orders with proper precision
+                    if symbol in ['USDC/USDT', 'USDT/USDC']:
+                        # For stablecoin pairs, use exactly 2 decimal places
+                        formatted_qty = f"{qty:.2f}"
+                        self.logger.info(f"🔧 Stablecoin sell order: {symbol} quantity={formatted_qty}")
+                    else:
+                        # For other pairs, use 8 decimal places
+                        formatted_qty = f"{qty:.8f}"
+                    
                     # INSTANT: Direct KuCoin sell order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
@@ -381,7 +407,7 @@ class UnifiedExchange(BaseExchange):
                         amount=qty,
                         price=None,
                         params={
-                            'size': f"{qty:.8f}",  # CRITICAL FIX: Proper formatting for sell quantity
+                            'size': formatted_qty,  # CRITICAL FIX: Use proper precision formatting
                             'timestamp': current_timestamp
                         }
                     )
@@ -596,14 +622,30 @@ class UnifiedExchange(BaseExchange):
                 'DOT/USDT': 4, 'ADA/USDT': 4, 'SOL/USDT': 4,
                 'KCS/USDT': 4, 'MATIC/USDT': 4, 'AVAX/USDT': 4,
                 
+                # CRITICAL: USDC/USDT precision (step 3 failures)
+                'USDC/USDT': 2,  # USDC/USDT requires 2 decimal places only
+                'USDT/USDC': 2,  # Reverse pair
+                'BUSD/USDT': 2,  # Other stablecoin pairs
+                'USDT/BUSD': 2,
+                'TUSD/USDT': 2,
+                'USDT/TUSD': 2,
+                
                 # Cross pairs - 6 decimal places
                 'DOT/KCS': 6, 'ETH/BTC': 6, 'BNB/BTC': 6,
                 'ADA/BTC': 6, 'SOL/BTC': 6, 'DOT/BTC': 6,
                 'KCS/BTC': 6, 'AR/BTC': 6, 'INJ/BTC': 6,
+                'SCRT/BTC': 6, 'VRA/BTC': 6, 'TWT/BTC': 6,
+                'LRC/BTC': 6, 'ANKR/BTC': 6, 'RLC/BTC': 6,
                 
                 # Small value pairs - 2-4 decimal places
                 'AR/USDT': 4, 'INJ/USDT': 4, 'TFUEL/USDT': 4,
                 'TRX/USDT': 4, 'DOGE/USDT': 4, 'XRP/USDT': 4,
+                'VRA/USDT': 4, 'SCRT/USDT': 4, 'TWT/USDT': 4,
+                'LRC/USDT': 4, 'ANKR/USDT': 4, 'RLC/USDT': 4,
+                
+                # Cross stablecoin pairs - special precision
+                'VRA/USDC': 6, 'SCRT/USDC': 6, 'TWT/USDC': 6,
+                'LRC/USDC': 6, 'ANKR/USDC': 6, 'RLC/USDC': 6,
                 
                 # Default precision
                 'default': 6
@@ -615,17 +657,35 @@ class UnifiedExchange(BaseExchange):
             # Round to the required precision
             rounded_qty = round(quantity, precision)
             
-            # Ensure minimum quantity (KuCoin minimum is usually 0.0001)
-            if rounded_qty < 0.0001:
-                rounded_qty = 0.0001
+            # Apply symbol-specific minimum quantities
+            min_quantities = {
+                'USDC/USDT': 0.01,    # USDC/USDT minimum 0.01 USDC
+                'USDT/USDC': 0.01,    # Reverse pair
+                'BUSD/USDT': 0.01,    # Other stablecoin minimums
+                'BTC/USDT': 0.00000001,  # BTC minimum
+                'ETH/USDT': 0.000001,    # ETH minimum
+                'default': 0.0001       # Default minimum
+            }
+            
+            min_qty = min_quantities.get(symbol, min_quantities['default'])
+            
+            # Ensure minimum quantity
+            if rounded_qty < min_qty:
+                rounded_qty = min_qty
+                self.logger.warning(f"⚠️ Quantity below minimum for {symbol}: {quantity:.8f} → {rounded_qty:.8f}")
             
             self.logger.info(f"🔧 KuCoin precision: {symbol} {quantity:.8f} → {rounded_qty:.8f} ({precision} decimals)")
             return rounded_qty
             
         except Exception as e:
             self.logger.error(f"Error rounding quantity for {symbol}: {e}")
-            # Fallback: round to 6 decimal places
-            return round(quantity, 6)
+            # Fallback: round to appropriate precision based on symbol type
+            if 'USDC' in symbol and 'USDT' in symbol:
+                return round(quantity, 2)  # Stablecoin pairs need 2 decimals
+            elif 'BTC' in symbol:
+                return round(quantity, 8)  # BTC pairs need 8 decimals
+            else:
+                return round(quantity, 6)  # Default 6 decimals
 
     async def _wait_for_order_completion(self, order_id: str, symbol: str, timeout_seconds: int = 30) -> Optional[Dict[str, Any]]:
         """Standard order completion monitoring (fallback)"""

@@ -1,5 +1,5 @@
 """
-Enhanced Trade Executor with Real-Time Price Validation and KuCoin Order Fixes
+Trade executor for triangular arbitrage opportunities with dynamic market analysis.
 """
 
 import asyncio
@@ -7,648 +7,937 @@ import time
 import uuid
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-
-from models.arbitrage_opportunity import ArbitrageOpportunity, TradeStep, OpportunityStatus
+from models.arbitrage_opportunity import ArbitrageOpportunity, OpportunityStatus
 from models.trade_log import TradeLog, TradeStepLog, TradeStatus, TradeDirection
 from utils.logger import setup_logger
 from utils.trade_logger import get_trade_logger
-from config.config import Config
 
 class TradeExecutor:
-    """Enhanced trade executor with real-time price validation and proper order tracking."""
+    """Executes triangular arbitrage trades with dynamic market analysis and adaptive timing."""
     
     def __init__(self, exchange_manager, config: Dict[str, Any]):
         self.exchange_manager = exchange_manager
         self.config = config
         self.logger = setup_logger('TradeExecutor')
+        self.trade_logger = get_trade_logger()
         self.websocket_manager = None
-        self.trade_logger = None
         
-        # Trading settings
+        # Trading configuration
         self.auto_trading = config.get('auto_trading', False)
         self.paper_trading = False  # ALWAYS LIVE TRADING
         self.enable_manual_confirmation = config.get('enable_manual_confirmation', False)
-        self.min_profit_threshold = config.get('min_profit_threshold', 0.3)
+        self.min_profit_threshold = config.get('min_profit_threshold', 0.4)
         
-        # Order tracking
-        self.active_orders = {}
-        self.completed_trades = []
+        # Dynamic execution settings
+        self.use_dynamic_execution = True
+        self.dynamic_monitoring_enabled = True
+        self.adaptive_waiting_enabled = True
         
-        self.logger.info(f"🔴 LIVE TradeExecutor initialized")
+        # Execution tracking
+        self.active_trades = {}
+        self.trade_history = []
+        
+        self.logger.info(f"🚀 TradeExecutor initialized")
         self.logger.info(f"   Auto Trading: {self.auto_trading}")
         self.logger.info(f"   Paper Trading: {self.paper_trading}")
-        self.logger.info(f"   Min Profit Threshold: 0.4% (FIXED)")
-        self.logger.info(f"   LIGHTNING MODE: Zero WebSocket overhead")
+        self.logger.info(f"   Min Profit Threshold: {self.min_profit_threshold}%")
+        self.logger.info(f"   Dynamic Execution: {self.use_dynamic_execution}")
+        self.logger.info(f"   Adaptive Waiting: {self.adaptive_waiting_enabled}")
     
     def set_websocket_manager(self, websocket_manager):
-        """Set WebSocket manager for real-time updates."""
+        """Set WebSocket manager for real-time updates"""
         self.websocket_manager = websocket_manager
-        self.trade_logger = get_trade_logger(websocket_manager)
-        self.logger.info("✅ WebSocket manager and trade logger configured")
+        if self.trade_logger:
+            self.trade_logger.websocket_manager = websocket_manager
+        self.logger.info("✅ WebSocket manager set for trade executor")
     
     async def execute_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Execute triangular arbitrage with enhanced real-time price validation."""
-        try:
-            # INSTANT MODE: Complete WebSocket shutdown during execution
-            self.logger.info("🚀 INSTANT MODE: Disabling WebSocket for maximum speed")
-            
-            # CRITICAL: Disable WebSocket during execution to prevent delays
-            await self._disable_websocket_during_execution()
-            
-            return await self._execute_triangle_trade(opportunity)
-            
-        except Exception as e:
-            self.logger.error(f"❌ Error in execute_arbitrage: {e}")
-            return False
-        finally:
-            # Re-enable WebSocket after execution
-            await self._re_enable_websocket_after_execution()
-    
-    async def _disable_websocket_during_execution(self):
-        """Disable WebSocket during trade execution for maximum speed"""
-        try:
-            # INSTANT: Completely disable WebSocket during execution
-            if hasattr(self.exchange_manager, 'detector_websocket_running'):
-                self.exchange_manager.detector_websocket_running = False
-            
-            # INSTANT: Also disable SimpleTriangleDetector WebSocket
-            if hasattr(self.exchange_manager, 'simple_detector'):
-                if hasattr(self.exchange_manager.simple_detector, 'running'):
-                    self.exchange_manager.simple_detector.running = False
-        except Exception as e:
-            # INSTANT: Silent error handling
-            pass
-    
-    async def _re_enable_websocket_after_execution(self):
-        """Re-enable WebSocket after trade execution"""
-        try:
-            # INSTANT: Re-enable WebSocket after execution
-            if hasattr(self.exchange_manager, 'detector_websocket_running'):
-                self.exchange_manager.detector_websocket_running = True
-            
-            # INSTANT: Re-enable SimpleTriangleDetector WebSocket
-            if hasattr(self.exchange_manager, 'simple_detector'):
-                if hasattr(self.exchange_manager.simple_detector, 'running'):
-                    self.exchange_manager.simple_detector.running = True
-        except Exception as e:
-            # INSTANT: Silent error handling
-            pass
-    
-    async def _validate_opportunity_with_fresh_prices(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Validate opportunity with FRESH market prices and realistic calculations."""
-        try:
-            self.logger.info("⚡ ULTRA-FAST VALIDATION: Checking USDT triangle...")
-            
-            # Extract triangle path
-            triangle_path = getattr(opportunity, 'triangle_path', '')
-            if isinstance(triangle_path, str):
-                # Parse triangle path using regex for better accuracy
-                import re
-                currencies = re.findall(r'([A-Z0-9]+)', triangle_path)
-                if len(currencies) >= 3:
-                    base_currency, intermediate_currency, quote_currency = currencies[0], currencies[1], currencies[2]
-                    self.logger.info(f"✅ Regex extracted currencies: {base_currency} → {intermediate_currency} → {quote_currency}")
-                else:
-                    self.logger.error(f"❌ Invalid triangle path format: {triangle_path}")
-                    return False
-            else:
-                self.logger.error(f"❌ Triangle path is not a string: {type(triangle_path)}")
-                return False
-            
-            # Validate currencies exist on the exchange
-            exchange_name = getattr(opportunity, 'exchange', 'unknown')
-            valid_currencies = self._get_valid_currencies_for_exchange(exchange_name)
-            
-            self.logger.info(f"🔍 Validating currencies for {exchange_name}: {[base_currency, intermediate_currency, quote_currency]}")
-            
-            if not all(currency in valid_currencies for currency in [base_currency, intermediate_currency, quote_currency]):
-                invalid_currencies = [c for c in [base_currency, intermediate_currency, quote_currency] if c not in valid_currencies]
-                self.logger.error(f"❌ Invalid currencies for {exchange_name}: {invalid_currencies}")
-                return False
-            
-            self.logger.info(f"✅ All currencies valid for {exchange_name}: {base_currency} → {intermediate_currency} → {quote_currency}")
-            
-            # Validate this is a USDT triangle
-            if base_currency != 'USDT':
-                self.logger.error(f"❌ Only USDT triangles allowed, got: {base_currency}")
-                return False
-            
-            self.logger.info(f"🔍 Validating USDT triangle: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
-            
-            # Get exchange instance
-            exchange = self.exchange_manager.get_exchange(exchange_name)
-            if not exchange:
-                self.logger.error(f"❌ Exchange {exchange_name} not found")
-                return False
-            
-            # Check if exchange has markets loaded
-            if not hasattr(exchange, 'trading_pairs') or not exchange.trading_pairs:
-                self.logger.warning(f"⚠️ No trading pairs cached for {exchange_name}")
-                # Try to load trading pairs
-                try:
-                    trading_pairs = await exchange.get_trading_pairs()
-                    if trading_pairs:
-                        available_pairs = set(trading_pairs)
-                    else:
-                        self.logger.error(f"❌ Could not load trading pairs for {exchange_name}")
-                        return False
-                except Exception as e:
-                    self.logger.error(f"❌ Error loading trading pairs: {e}")
-                    return False
-            else:
-                available_pairs = set(exchange.trading_pairs.keys())
-            
-            # Define required pairs for USDT triangle
-            pair1 = f"{intermediate_currency}/USDT"      # e.g., TFUEL/USDT
-            pair2 = f"{intermediate_currency}/{quote_currency}"  # e.g., TFUEL/BTC
-            pair3 = f"{quote_currency}/USDT"             # e.g., BTC/USDT
-            alt_pair2 = f"{quote_currency}/{intermediate_currency}"  # e.g., BTC/TFUEL
-            
-            self.logger.info(f"🔍 Checking required pairs: {pair1}, {pair2} (or {alt_pair2}), {pair3}")
-            
-            # Check if all required pairs exist
-            pair1_exists = pair1 in available_pairs
-            pair2_exists = pair2 in available_pairs or alt_pair2 in available_pairs
-            pair3_exists = pair3 in available_pairs
-            
-            if not (pair1_exists and pair2_exists and pair3_exists):
-                self.logger.error(f"❌ Missing trading pairs for {exchange_name}:")
-                self.logger.error(f"   {pair1}: {'✅' if pair1_exists else '❌ NOT FOUND'}")
-                self.logger.error(f"   {pair2}: {'✅' if pair2 in available_pairs else '❌ NOT FOUND'}")
-                self.logger.error(f"   {alt_pair2}: {'✅' if alt_pair2 in available_pairs else '❌ NOT FOUND'}")
-                self.logger.error(f"   {pair3}: {'✅' if pair3_exists else '❌ NOT FOUND'}")
-                return False
-            
-            self.logger.info(f"✅ All trading pairs validated for {exchange_name}: {pair1}, {pair2 if pair2 in available_pairs else alt_pair2}, {pair3}")
-            
-            # SPEED OPTIMIZATION: Use cached tickers if available (under 5 seconds old)
-            if hasattr(exchange, '_last_tickers_cache') and hasattr(exchange, '_last_cache_time'):
-                cache_age = time.time() - exchange._last_cache_time
-                if cache_age < 5:  # Use cache if under 5 seconds old
-                    tickers = exchange._last_tickers_cache
-                    self.logger.info(f"⚡ SPEED: Using cached tickers ({cache_age:.1f}s old)")
-                else:
-                    tickers = await exchange.fetch_tickers()
-                    exchange._last_tickers_cache = tickers
-                    exchange._last_cache_time = time.time()
-            else:
-                tickers = await exchange.fetch_tickers()
-                exchange._last_tickers_cache = tickers
-                exchange._last_cache_time = time.time()
-            
-            if not tickers:
-                self.logger.error("❌ Failed to fetch fresh ticker data")
-                return False
-            
-            # Validate all required pairs exist
-            if not (pair1 in tickers and pair3 in tickers):
-                self.logger.error(f"❌ Missing USDT pairs: {pair1} or {pair3}")
-                return False
-            
-            # Check intermediate pair (try both directions)
-            if pair2 in tickers:
-                use_direct_pair2 = True
-                pair2_symbol = pair2
-            elif alt_pair2 in tickers:
-                use_direct_pair2 = False
-                pair2_symbol = alt_pair2
-            else:
-                self.logger.error(f"❌ Missing intermediate pair: {pair2} or {alt_pair2}")
-                return False
-            
-            # Get fresh price data
-            t1 = tickers[pair1]
-            t2 = tickers[pair2_symbol]
-            t3 = tickers[pair3]
-            
-            # Validate price data
-            if not all(t.get('bid') and t.get('ask') and t.get('last') for t in [t1, t2, t3]):
-                self.logger.error("❌ Invalid price data in fresh tickers")
-                return False
-            
-            # Calculate REALISTIC triangle with FRESH prices
-            start_amount = min(20.0, opportunity.initial_amount)  # Use opportunity amount
-            
-            # Step 1: USDT → intermediate (buy intermediate with USDT)
-            price1 = float(t1['ask'])  # Buy at ask price
-            amount_intermediate = start_amount / price1
-            
-            # Step 2: intermediate → quote
-            if use_direct_pair2:
-                # Direct pair: sell intermediate for quote
-                price2 = float(t2['bid'])  # Sell at bid price
-                amount_quote = amount_intermediate * price2
-            else:
-                # Inverse pair: buy quote with intermediate
-                price2 = float(t2['ask'])  # Buy at ask price
-                amount_quote = amount_intermediate / price2
-            
-            # Step 3: quote → USDT (sell quote for USDT)
-            price3 = float(t3['bid'])  # Sell at bid price
-            final_usdt = amount_quote * price3
-            
-            # Calculate realistic profit
-            gross_profit = final_usdt - start_amount
-            gross_profit_pct = (gross_profit / start_amount) * 100
-            
-            # Apply realistic trading costs
-            total_costs = 0.15  # 0.15% total costs (optimized for KuCoin with KCS)
-            net_profit_pct = gross_profit_pct - total_costs
-            
-            self.logger.info("⚡ LIGHTNING triangle validation:")
-            self.logger.info(f"   Step 1: ${start_amount:.2f} USDT → {amount_intermediate:.6f} {intermediate_currency}")
-            self.logger.info(f"   Step 2: {amount_intermediate:.6f} {intermediate_currency} → {amount_quote:.6f} {quote_currency}")
-            
-            # CRITICAL: Check if Step 2 order value meets minimum requirements
-            step2_usd_value = amount_intermediate * price1  # USD value of intermediate currency
-            self.logger.info(f"   Step 2 USD value: ${step2_usd_value:.2f}")
-            
-            if step2_usd_value < 1.0:  # KuCoin minimum order value
-                self.logger.error(f"❌ CRITICAL: Step 2 order value ${step2_usd_value:.2f} < $1.00 minimum")
-                self.logger.error("❌ This triangle is not viable due to low intermediate currency value")
-                return False
-            
-            self.logger.info(f"   Step 3: {amount_quote:.6f} {quote_currency} → ${final_usdt:.2f} USDT")
-            self.logger.info(f"   ⚡ LIGHTNING profit with cached prices: {net_profit_pct:.4f}%")
-            
-            # SPEED: Accept opportunities that were profitable when detected
-            # Don't re-validate profit threshold to prevent opportunity expiration
-            original_profit = getattr(opportunity, 'profit_percentage', 0)
-            if original_profit >= self.min_profit_threshold:
-                self.logger.info(f"⚡ SPEED: Using original profit {original_profit:.4f}% (detected when profitable)")
-                net_profit_pct = original_profit  # Use original profitable calculation
-            else:
-                if net_profit_pct < self.min_profit_threshold:
-                    self.logger.error(f"❌ Profit dropped below threshold: {net_profit_pct:.4f}% < {self.min_profit_threshold}%")
-                    return False
-            
-            self.logger.info(f"✅ LIGHTNING VALIDATION PASSED: {net_profit_pct:.4f}% profit confirmed")
-            
-            # Update opportunity with fresh calculations
-            opportunity.initial_amount = start_amount
-            opportunity.final_amount = final_usdt
-            opportunity.profit_percentage = net_profit_pct
-            opportunity.profit_amount = start_amount * (net_profit_pct / 100)
-            
-            # Update steps with OPTIMIZED real prices and quantities
-            opportunity.steps = [
-                TradeStep(pair1, 'buy', start_amount, price1, amount_intermediate),
-                TradeStep(pair2_symbol, 'sell' if use_direct_pair2 else 'buy', amount_intermediate, price2, amount_quote),
-                TradeStep(pair3, 'sell', amount_quote, price3, final_usdt)
-            ]
-            
-            # SPEED: Pre-cache order parameters for faster execution
-            opportunity._cached_params = {
-                'step1_funds': start_amount,
-                'step2_quantity': amount_intermediate,
-                'step3_quantity': amount_quote,
-                'validation_time': time.time(),
-                'use_cached_prices': True
-            }
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ Validation error: {e}")
-            return False
-    
-    def _get_valid_currencies_for_exchange(self, exchange_name: str) -> set:
-        """Get valid currencies for specific exchange"""
-        if exchange_name == 'kucoin':
-            return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET',
-                'HBAR', 'ICP', 'APT', 'ARB', 'OP', 'MANA', 'SAND', 'CRV', 'AAVE', 'COMP',
-                'MKR', 'SNX', 'YFI', 'SUSHI', 'BAL', 'REN', 'KNC', 'ZRX', 'STORJ', 'GRT',
-                'LDO', 'TNSR', 'AKT', 'XLM', 'AR', 'ETC', 'BCH', 'EOS', 'XTZ', 'DASH',
-                'ZEC', 'QTUM', 'ONT', 'ICX', 'ZIL', 'BAT', 'ENJ', 'HOT', 'IOST', 'THETA',
-                'TFUEL', 'KAVA', 'BAND', 'CRO', 'OKB', 'HT', 'LEO', 'SHIB', 'PENDLE', 'RNDR',
-                'INJ', 'SEI', 'TIA', 'SUI', 'PEPE', 'FLOKI', 'WLD', 'KCS', 'LRC'
-            }
-        else:
-            return {
-                'USDT', 'BTC', 'ETH', 'USDC', 'BNB', 'ADA', 'SOL', 'DOT', 'LINK', 'MATIC', 'AVAX',
-                'DOGE', 'XRP', 'LTC', 'TRX', 'ATOM', 'FIL', 'UNI', 'NEAR', 'ALGO', 'VET'
-            }
-    
-    async def _execute_triangle_trade(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Execute the complete triangular arbitrage trade with enhanced error handling."""
+        """Execute triangular arbitrage with dynamic market analysis."""
         trade_id = f"trade_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
-        start_time = time.time()
         
         try:
-            exchange_name = getattr(opportunity, 'exchange', 'unknown')
+            # Get exchange instance
+            exchange_name = getattr(opportunity, 'exchange', 'kucoin')
             exchange = self.exchange_manager.get_exchange(exchange_name)
             
             if not exchange:
                 self.logger.error(f"❌ Exchange {exchange_name} not available")
                 return False
             
-            self.logger.info(f"⚡ LIGHTNING: {exchange_name} {opportunity.triangle_path}")
+            # Store exchange reference for dynamic analysis
+            self.exchange = exchange
+            
+            # Validate opportunity
+            if not self._validate_opportunity(opportunity):
+                return False
+            
+            # Check if another trade is running (sequential execution)
+            if self.active_trades:
+                self.logger.warning(f"🔄 SEQUENTIAL MODE: Trade {trade_id} waiting (another trade in progress)")
+                return False
+            
+            # Mark trade as active
+            self.active_trades[trade_id] = {
+                'opportunity': opportunity,
+                'start_time': time.time(),
+                'status': 'executing'
+            }
+            
+            self.logger.info(f"🔄 SEQUENTIAL MODE: Trade {trade_id} executing (no concurrent trades)")
             
             # Log trade attempt
             await self._log_trade_attempt(opportunity, trade_id)
             
-            # Execute triangle steps with enhanced error handling
-            return await self._execute_triangle_steps(opportunity, exchange, trade_id, start_time)
+            # Disable WebSocket during execution for maximum speed
+            if self.websocket_manager and hasattr(self.websocket_manager, 'running'):
+                self.logger.info("🚀 DYNAMIC MODE: Disabling WebSocket for maximum speed")
+                self.websocket_manager.running = False
+            
+            # Execute with dynamic strategy
+            success = await self._execute_dynamic_triangle_trade(opportunity, trade_id, exchange)
+            
+            # Re-enable WebSocket after execution
+            if self.websocket_manager and hasattr(self.websocket_manager, 'running'):
+                self.websocket_manager.running = True
+                self.logger.info("🔄 WebSocket re-enabled after trade execution")
+            
+            # Remove from active trades
+            if trade_id in self.active_trades:
+                del self.active_trades[trade_id]
+            
+            return success
             
         except Exception as e:
-            self.logger.error(f"❌ Critical error in triangle trade: {e}")
-            await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
+            self.logger.error(f"❌ Critical error in arbitrage execution: {e}")
+            
+            # Cleanup
+            if trade_id in self.active_trades:
+                del self.active_trades[trade_id]
+            
+            # Re-enable WebSocket on error
+            if self.websocket_manager and hasattr(self.websocket_manager, 'running'):
+                self.websocket_manager.running = True
+                self.logger.info("🔄 WebSocket re-enabled after error")
+            
             return False
     
-    async def _execute_triangle_steps(self, opportunity: ArbitrageOpportunity, exchange, trade_id: str, start_time: float) -> bool:
-        """Execute all three steps with ULTRA-FAST timing and CORRECT amounts."""
+    async def _execute_dynamic_triangle_trade(self, opportunity: ArbitrageOpportunity, trade_id: str, exchange) -> bool:
+        """Execute triangular arbitrage with dynamic 2-step strategy."""
         try:
-            # CRITICAL FIX: Use configured trade amount, not opportunity amount
-            configured_trade_amount = min(20.0, opportunity.initial_amount)  # ENFORCE $20 maximum
+            self.logger.info(f"⚡ DYNAMIC 2-STEP EXECUTION: {exchange.exchange_id} {opportunity.triangle_path}")
             
-            # INSTANT: Pre-sync time before execution
+            # Extract triangle components
+            triangle_path = self._parse_triangle_path(opportunity.triangle_path)
+            if len(triangle_path) < 3:
+                self.logger.error(f"❌ Invalid triangle path: {opportunity.triangle_path}")
+                return False
+            
+            base_currency = triangle_path[0]      # USDT
+            intermediate_currency = triangle_path[1]  # e.g., TWT
+            quote_currency = triangle_path[2]     # e.g., BTC
+            
+            # Validate USDT triangle
+            if base_currency != 'USDT':
+                self.logger.error(f"❌ Only USDT triangles supported: {triangle_path}")
+                return False
+            
+            self.logger.info(f"🔧 2-STEP EXECUTION: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
+            
+            # Get initial balance
+            initial_balance = await exchange.get_account_balance()
+            initial_usdt = initial_balance.get('USDT', 0)
+            
+            # Trade amounts
+            trade_amount = min(20.0, opportunity.initial_amount)  # Max $20 for safety
+            
+            # CRITICAL FIX: Validate and correct pair directions for KuCoin
+            step1_pair, step2_pair, step3_pair = await self._get_correct_pair_directions(
+                exchange, base_currency, intermediate_currency, quote_currency
+            )
+            
+            if not all([step1_pair, step2_pair, step3_pair]):
+                self.logger.error(f"❌ Cannot find valid trading pairs for triangle")
+                return False
+            
+            self.logger.info(f"✅ Validated pairs: {step1_pair}, {step2_pair}, {step3_pair}")
+            
+            step1_filled = 0.0
+            step2_received = 0.0
+            step2_cost = 0.0
+            # Step 1: USDT → Intermediate Currency (e.g., USDT → TWT)
+            self.logger.info(f"🔧 Step 1: Spending {trade_amount:.2f} USDT to buy {intermediate_currency}")
+            
+            step1_result = await exchange.place_market_order(
+                f"{intermediate_currency}/USDT", 'buy', trade_amount
+            )
+            
+            if not step1_result.get('success'):
+                self.logger.error(f"❌ Step 1 failed: {step1_result.get('error', 'Unknown error')}")
+                await self._log_failed_trade(opportunity, trade_id, 1, step1_result.get('error', 'Step 1 failed'))
+                return False
+            
+            step1_filled = float(step1_result.get('filled', 0))
+            pair1 = step1_pair
+            step1_duration = time.time() - self.active_trades[trade_id]['start_time']
+            
+            self.logger.info(f"✅ Step 1: Received {step1_filled:.8f} {intermediate_currency}")
+            self.logger.info(f"⚡ Step 1 completed in {step1_duration*1000:.0f}ms")
+            
+            if step1_filled <= 0:
+                self.logger.error(f"❌ Step 1: No {intermediate_currency} received")
+                await self._log_failed_trade(opportunity, trade_id, 1, "No intermediate currency received")
+                return False
+            
+            # Brief pause between steps
+            await asyncio.sleep(0.1)
+            
+            # Execute Step 2
+            step2_start = time.time()
+            amount_intermediate = step1_filled
+            pair2 = step2_pair
+            step2_side = await self._get_step2_side(exchange, step2_pair, intermediate_currency, quote_currency)
+            self.logger.info(f"🔧 Step 2: Selling {step1_filled:.8f} {intermediate_currency} for {quote_currency}")
+            self.logger.info(f"⚡ Step 2: {step2_side.upper()} {pair2}")
+            
+            step2_result = await exchange.place_market_order(step2_pair, step2_side, amount_intermediate)
+            
+            if not step2_result.get('success'):
+                self.logger.error(f"❌ Step 2 failed: {step2_result.get('error', 'Unknown error')}")
+                await self._log_failed_trade(opportunity, trade_id, 2, step2_result.get('error', 'Step 2 failed'))
+                return False
+            
+            # CRITICAL FIX: Use the ACTUAL amount received from Step 2
+            step2_received = float(step2_result.get('filled', 0))
+            step2_cost = float(step2_result.get('cost', 0))
+            
+            # CRITICAL FIX: For KuCoin, 'filled' returns the INPUT amount (LRC), 'cost' returns OUTPUT amount (BTC)
             if exchange.exchange_id == 'kucoin':
-                # INSTANT: Ensure time is synced before starting
-                await exchange._ensure_time_sync()
-                
-                # Use 1-second buffer for maximum speed
-                if hasattr(exchange.exchange, 'options'):
-                    exchange.exchange.options['timeDifference'] = 1000  # 1-second buffer
-            
-            # CRITICAL FIX: Track ACTUAL asset amounts (not USD values) through the triangle
-            actual_amounts = {}
-            
-            # Parse triangle path to get currencies
-            triangle_path = getattr(opportunity, 'triangle_path', '')
-            if isinstance(triangle_path, str):
-                import re
-                currencies = re.findall(r'([A-Z0-9]+)', triangle_path)
-                if len(currencies) >= 3:
-                    base_currency, intermediate_currency, quote_currency = currencies[0], currencies[1], currencies[2]
-                else:
-                    self.logger.error(f"❌ Invalid triangle path: {triangle_path}")
-                    return False
+                # KuCoin: 'cost' field contains the BTC amount we received
+                actual_quote_amount = step2_cost
+                self.logger.info(f"🔧 KuCoin Step 2 amounts: filled={step2_received:.8f} {intermediate_currency}, cost={step2_cost:.8f} {quote_currency}")
             else:
-                self.logger.error(f"❌ Triangle path is not string: {type(triangle_path)}")
+                # Other exchanges: use filled amount
+                actual_quote_amount = step2_received if step2_received > 0 else step2_cost
+            
+            step2_duration = time.time() - step2_start
+            
+            self.logger.info(f"✅ Step 2: Sold {step1_filled:.8f} {intermediate_currency}, received {actual_quote_amount:.8f} {quote_currency}")
+            self.logger.info(f"⚡ Step 2 completed in {step2_duration*1000:.0f}ms")
+            
+            if actual_quote_amount <= 0:
+                self.logger.error(f"❌ Step 2: No {quote_currency} received")
+                await self._log_failed_trade(opportunity, trade_id, 2, f"No {quote_currency} received")
                 return False
             
-            self.logger.info(f"🔧 FIXED EXECUTION: {base_currency} → {intermediate_currency} → {quote_currency} → {base_currency}")
+            # CRITICAL: Validate the BTC amount is realistic
+            if quote_currency == 'BTC' and actual_quote_amount > 0.01:
+                self.logger.error(f"❌ CRITICAL: Unrealistic BTC amount: {actual_quote_amount:.8f} BTC")
+                self.logger.error(f"   This would be worth ${actual_quote_amount * 115000:.2f} USD!")
+                self.logger.error(f"   Expected range: 0.0001-0.001 BTC for $20 trade")
+                await self._log_failed_trade(opportunity, trade_id, 2, f"Unrealistic {quote_currency} amount: {actual_quote_amount}")
+                return False
             
-            for step_num, step in enumerate(opportunity.steps, 1):
-                try:
-                    step_start = time.time()
+            # Dynamic Market Analysis for Step 3 timing
+            self.logger.info("🧠 DYNAMIC MONITORING: Analyzing market trend for adaptive waiting strategy")
+            
+            try:
+                # Get dynamic waiting parameters with null safety
+                waiting_params = await self._get_dynamic_waiting_params_safe(exchange, quote_currency, base_currency)
+                
+                if waiting_params:
+                    market_trend = waiting_params['trend']
+                    wait_time = waiting_params['wait_time']
+                    profit_target = waiting_params['profit_target']
+                    stop_loss = waiting_params['stop_loss']
                     
-                    # CRITICAL FIX: Use CORRECT asset amounts from previous steps
-                    if step_num == 1:
-                        # Step 1: Buy intermediate currency with USDT
-                        real_quantity = configured_trade_amount  # $20 USDT to spend
-                        self.logger.info(f"🔧 Step 1: Spending {real_quantity:.2f} USDT to buy {intermediate_currency}")
-                    elif step_num == 2:
-                        # Step 2: Use ACTUAL intermediate currency amount from step 1
-                        real_quantity = actual_amounts.get('step1_filled', 0)
-                        if real_quantity <= 0:
-                            self.logger.error(f"❌ No {intermediate_currency} received from step 1")
-                            return False
-                        self.logger.info(f"🔧 Step 2: Selling {real_quantity:.8f} {intermediate_currency} for {quote_currency}")
-                    elif step_num == 3:
-                        # Step 3: Use ACTUAL quote currency amount from step 2 (CRITICAL FIX)
-                        real_quantity = actual_amounts.get('step2_received', 0)
-                        if real_quantity <= 0:
-                            self.logger.error(f"❌ No {quote_currency} received from step 2")
-                            return False
-                        self.logger.info(f"🔧 Step 3: Selling {real_quantity:.8f} {quote_currency} for USDT")
+                    self.logger.info(f"🎯 DYNAMIC STRATEGY: {market_trend} market detected")
+                    self.logger.info(f"   Wait Time: {wait_time}s")
+                    self.logger.info(f"   Profit Target: +{profit_target:.2f}%")
+                    self.logger.info(f"   Stop Loss: {stop_loss:.2f}%")
+                    
+                    # Execute Step 3 with adaptive waiting
+                    step3_success = await self._execute_step3_with_adaptive_waiting(
+                        exchange, quote_currency, base_currency, actual_quote_amount, 
+                        waiting_params, trade_id
+                    )
+                    
+                    if step3_success:
+                        await self._log_successful_trade(opportunity, trade_id, trade_amount)
+                        return True
                     else:
-                        self.logger.error(f"❌ Invalid step number: {step_num}")
+                        await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
                         return False
+                else:
+                    # Fallback to immediate execution
+                    self.logger.warning("⚠️ Dynamic analysis failed, executing Step 3 immediately")
+                    return await self._execute_step3_immediate(
+                        exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
+                    )
                     
-                    if real_quantity <= 0:
-                        self.logger.error(f"❌ Invalid quantity for step {step_num}: {real_quantity}")
-                        return False
-                    
-                    # Execute the order with actual amount
-                    order_result = await self._execute_lightning_step(exchange, step.symbol, step.side, real_quantity, step_num)
-                    
-                    if not order_result or not order_result.get('success'):
-                        self.logger.error(f"❌ Step {step_num} failed: {order_result.get('error', 'Unknown error')}")
-                        return False
-                    
-                    # CRITICAL FIX: Store CORRECT asset amounts for next step
-                    filled_quantity = float(order_result.get('filled', 0))
-                    cost = float(order_result.get('cost', 0))
-                    
-                    # CRITICAL FIX: Store CORRECT amounts based on order type and what we received
-                    if step_num == 1:
-                        # Step 1: We bought intermediate currency with USDT
-                        # For BUY orders: 'filled' = amount of intermediate currency we received
-                        actual_amounts['step1_filled'] = filled_quantity  # TWT amount received
-                        self.logger.info(f"✅ Step 1: Received {filled_quantity:.8f} {intermediate_currency}")
-                    elif step_num == 2:
-                        # Step 2: We sold intermediate for quote currency
-                        # For SELL orders: 'filled' = amount we sold, 'cost' = amount we received
-                        # CRITICAL: Use 'cost' for what we received, not 'filled'
-                        if step.side == 'sell':
-                            actual_amounts['step2_received'] = cost  # BTC amount received (in quote currency)
-                            self.logger.info(f"✅ Step 2: Sold {filled_quantity:.8f} {intermediate_currency}, received {cost:.8f} {quote_currency}")
-                        else:
-                            actual_amounts['step2_received'] = filled_quantity  # For buy orders
-                            self.logger.info(f"✅ Step 2: Bought {filled_quantity:.8f} {quote_currency}")
-                    elif step_num == 3:
-                        # Step 3: We sold quote currency for USDT
-                        # For SELL orders: 'cost' = USDT amount received
-                        actual_amounts['step3_usdt'] = cost  # USDT amount received
-                        self.logger.info(f"✅ Step 3: Sold {filled_quantity:.8f} {quote_currency}, received {cost:.2f} USDT")
-                    
-                    step_time = (time.time() - step_start) * 1000
-                    self.logger.info(f"⚡ Step {step_num} completed in {step_time:.0f}ms")
-                    
+            except Exception as dynamic_error:
+                self.logger.error(f"❌ Dynamic analysis error: {dynamic_error}")
+                self.logger.info("🔄 Falling back to immediate Step 3 execution")
+                
+                return await self._execute_step3_immediate(
+                    exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
+                )
+                
+        except Exception as e:
+            self.logger.error(f"❌ Critical error in dynamic triangle trade: {e}")
+            await self._log_failed_trade(opportunity, trade_id, 0, str(e))
+            return False
+    
+    async def _get_correct_pair_directions(self, exchange, base: str, intermediate: str, quote: str) -> tuple:
+        """Get correct trading pair directions for the exchange"""
+        try:
+            # Get available trading pairs
+            trading_pairs = await exchange.get_trading_pairs()
+            
+            # Step 1: USDT → intermediate (always buy intermediate with USDT)
+            step1_options = [f"{intermediate}/USDT", f"USDT/{intermediate}"]
+            step1_pair = None
+            for option in step1_options:
+                if option in trading_pairs:
+                    step1_pair = option
+                    break
+            
+            # Step 2: intermediate → quote (can be either direction)
+            step2_options = [f"{intermediate}/{quote}", f"{quote}/{intermediate}"]
+            step2_pair = None
+            for option in step2_options:
+                if option in trading_pairs:
+                    step2_pair = option
+                    break
+            
+            # Step 3: quote → USDT (always sell quote for USDT)
+            step3_options = [f"{quote}/USDT", f"USDT/{quote}"]
+            step3_pair = None
+            for option in step3_options:
+                if option in trading_pairs:
+                    step3_pair = option
+                    break
+            
+            self.logger.info(f"🔍 Pair validation for {exchange.exchange_id}:")
+            self.logger.info(f"   Step 1: {step1_pair} (from {step1_options})")
+            self.logger.info(f"   Step 2: {step2_pair} (from {step2_options})")
+            self.logger.info(f"   Step 3: {step3_pair} (from {step3_options})")
+            
+            return step1_pair, step2_pair, step3_pair
+            
+        except Exception as e:
+            self.logger.error(f"Error getting correct pair directions: {e}")
+            return None, None, None
+    
+    async def _get_step2_side(self, exchange, pair: str, intermediate: str, quote: str) -> str:
+        """Determine the correct side (buy/sell) for Step 2"""
+        try:
+            if pair.startswith(intermediate):
+                # Direct pair like BTC/SCRT - sell BTC for SCRT
+                return 'sell'
+            elif pair.startswith(quote):
+                # Reverse pair like SCRT/BTC - buy SCRT with BTC
+                return 'buy'
+            else:
+                # Fallback
+                return 'sell'
+                
+        except Exception as e:
+            self.logger.error(f"Error determining step2 side: {e}")
+            return 'sell'
+    
+    async def _get_dynamic_waiting_params_safe(self, exchange, quote_currency: str, base_currency: str) -> Optional[Dict[str, Any]]:
+        """Safely get dynamic waiting parameters with null checking and fallback."""
+        try:
+            # Check if exchange exists
+            if not exchange:
+                self.logger.warning("⚠️ Exchange object is None, using fallback parameters")
+                return self._get_fallback_dynamic_params()
+            
+            # Check if exchange has the dynamic method
+            if hasattr(exchange, 'get_dynamic_waiting_params'):
+                try:
+                    return await exchange.get_dynamic_waiting_params(quote_currency, base_currency)
                 except Exception as e:
-                    self.logger.error(f"❌ Error in step {step_num}: {e}")
-                    return False
+                    self.logger.warning(f"⚠️ Exchange dynamic method failed: {e}")
+                    return self._get_fallback_dynamic_params()
+            else:
+                # Exchange doesn't have dynamic method, create our own analysis
+                return await self._create_dynamic_params_from_market_data(exchange, quote_currency, base_currency)
+                
+        except Exception as e:
+            self.logger.error(f"❌ Error getting dynamic waiting params: {e}")
+            return self._get_fallback_dynamic_params()
+    
+    def _get_fallback_dynamic_params(self) -> Dict[str, Any]:
+        """Get fallback dynamic parameters when analysis fails."""
+        return {
+            'trend': 'UNKNOWN',
+            'wait_time': 120.0,  # 2 minutes optimized wait
+            'profit_target': 0.12,  # +0.12% target (faster profit taking)
+            'stop_loss': -0.25,     # -0.25% tighter stop loss
+            'confidence': 0.5
+        }
+    
+    async def _create_dynamic_params_from_market_data(self, exchange, quote_currency: str, base_currency: str) -> Dict[str, Any]:
+        """Create dynamic parameters from current market data."""
+        try:
+            # Get pair-specific optimization
+            pair_symbol = f"{quote_currency}/{base_currency}"
+            is_stablecoin_pair = self._is_stablecoin_pair(pair_symbol)
             
-            # CRITICAL FIX: Use ACTUAL USDT received from step 3
-            final_balance = actual_amounts.get('step3_usdt', 0)
+            # Get current ticker for trend analysis
+            ticker = await exchange.get_ticker(pair_symbol)
             
-            if final_balance <= 0:
-                self.logger.error(f"❌ No USDT received from final step")
+            if ticker and ticker.get('last'):
+                current_price = float(ticker['last'])
+                
+                # Simple trend analysis based on bid/ask spread
+                bid = float(ticker.get('bid', 0))
+                ask = float(ticker.get('ask', 0))
+                
+                if bid > 0 and ask > 0:
+                    spread = (ask - bid) / bid * 100
+                    
+                    if spread < 0.05:  # Tight spread = bullish market
+                        if is_stablecoin_pair:
+                            # Stablecoin pairs: faster execution with smaller targets
+                            return {
+                                'trend': 'BULLISH_STABLE',
+                                'wait_time': 600.0,  # 10 minutes for stablecoins
+                                'profit_target': 0.15,  # +0.15% target (realistic for stablecoins)
+                                'stop_loss': -0.20,     # -0.20% stop loss
+                                'confidence': 0.9,
+                                'pair_type': 'stablecoin'
+                            }
+                        else:
+                            # Regular pairs: optimized bullish strategy
+                            return {
+                                'trend': 'BULLISH',
+                                'wait_time': 720.0,  # 12 minutes (reduced from 15)
+                                'profit_target': 0.20,  # +0.20% target (reduced from 0.30)
+                                'stop_loss': -0.25,     # -0.25% stop loss (tighter)
+                                'confidence': 0.85,
+                                'pair_type': 'volatile'
+                            }
+                    elif spread > 0.2:  # Wide spread = volatile/bearish market
+                        if is_stablecoin_pair:
+                            # Stablecoin pairs: quick exit in volatile conditions
+                            return {
+                                'trend': 'BEARISH_STABLE',
+                                'wait_time': 180.0,   # 3 minutes
+                                'profit_target': 0.08,  # +0.08% quick target
+                                'stop_loss': -0.15,     # -0.15% stop loss
+                                'confidence': 0.7,
+                                'pair_type': 'stablecoin'
+                            }
+                        else:
+                            # Regular pairs: quick execution in volatile markets
+                            return {
+                                'trend': 'BEARISH',
+                                'wait_time': 120.0,   # 2 minutes (reduced from 1)
+                                'profit_target': 0.12,  # +0.12% target (increased from 0.10)
+                                'stop_loss': -0.30,     # -0.30% stop loss
+                                'confidence': 0.75,
+                                'pair_type': 'volatile'
+                            }
+                    else:  # Medium spread = sideways market
+                        if is_stablecoin_pair:
+                            # Stablecoin pairs: moderate strategy
+                            return {
+                                'trend': 'SIDEWAYS_STABLE',
+                                'wait_time': 480.0,  # 8 minutes
+                                'profit_target': 0.12,  # +0.12% target
+                                'stop_loss': -0.18,     # -0.18% stop loss
+                                'confidence': 0.8,
+                                'pair_type': 'stablecoin'
+                            }
+                        else:
+                            # Regular pairs: balanced sideways strategy
+                            return {
+                                'trend': 'BULLISH',
+                                'wait_time': 600.0,  # 10 minutes (reduced from 5)
+                                'profit_target': 0.18,  # +0.18% target (reduced from 0.20)
+                                'stop_loss': -0.25,     # -0.25% stop loss (tighter)
+                                'confidence': 0.75,
+                                'pair_type': 'volatile'
+                        }
+            
+            # Fallback if no market data
+            return self._get_fallback_dynamic_params()
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error creating dynamic params from market data: {e}")
+            return self._get_fallback_dynamic_params()
+    
+    def _is_stablecoin_pair(self, pair_symbol: str) -> bool:
+        """Check if pair involves stablecoins for optimized handling."""
+        stablecoins = {'USDT', 'USDC', 'BUSD', 'TUSD', 'DAI', 'FDUSD', 'USDD'}
+        try:
+            base, quote = pair_symbol.split('/')
+            return base in stablecoins and quote in stablecoins
+        except:
+            return False
+    
+    async def _execute_step3_with_adaptive_waiting(self, exchange, quote_currency: str, base_currency: str, 
+                                                 quote_amount: float, waiting_params: Dict[str, Any], trade_id: str) -> bool:
+        """Execute Step 3 with adaptive waiting based on market conditions."""
+        try:
+            pair_symbol = f"{quote_currency}/{base_currency}"
+            trend = waiting_params['trend']
+            wait_time = waiting_params['wait_time']
+            profit_target = waiting_params['profit_target']
+            stop_loss = waiting_params['stop_loss']
+            pair_type = waiting_params.get('pair_type', 'volatile')
+            
+            self.logger.info(f"🎯 OPTIMIZED ADAPTIVE WAITING: {trend} strategy for {wait_time}s ({pair_type} pair)")
+            
+            # Get initial price for monitoring
+            initial_ticker = await exchange.get_ticker(pair_symbol)
+            if not initial_ticker or not initial_ticker.get('last'):
+                self.logger.warning("⚠️ Cannot get initial price, executing immediately")
+                return await self._execute_step3_immediate_with_amount(exchange, quote_currency, base_currency, quote_amount, trade_id)
+            
+            initial_price = float(initial_ticker['last'])
+            target_price = initial_price * (1 + profit_target / 100)
+            stop_price = initial_price * (1 + stop_loss / 100)
+            
+            # Implement trailing stop logic
+            trailing_stop_enabled = False
+            trailing_stop_price = stop_price
+            best_price_seen = initial_price
+            
+            self.logger.info(f"📊 Starting OPTIMIZED adaptive wait: Initial price {initial_price:.8f}")
+            self.logger.info(f"   Target price: {target_price:.8f} (+{profit_target:.2f}%)")
+            self.logger.info(f"   Stop price: {stop_price:.8f} ({stop_loss:.2f}%)")
+            self.logger.info(f"   Pair type: {pair_type}")
+            self.logger.info(f"   Trailing stop: Enabled after +0.10% move")
+            
+            # Adaptive waiting loop
+            wait_start = time.time()
+            check_interval = 3.0  # Check every 3 seconds (faster monitoring)
+            last_log_time = 0
+            
+            while time.time() - wait_start < wait_time:
+                try:
+                    # Get current price
+                    current_ticker = await exchange.get_ticker(pair_symbol)
+                    if current_ticker and current_ticker.get('last'):
+                        current_price = float(current_ticker['last'])
+                        
+                        # Update best price seen for trailing stop
+                        if current_price > best_price_seen:
+                            best_price_seen = current_price
+                            
+                            # Enable trailing stop after +0.10% move
+                            if not trailing_stop_enabled and current_price >= initial_price * 1.001:  # +0.10%
+                                trailing_stop_enabled = True
+                                trailing_stop_price = current_price * 0.9985  # Trail 0.15% below best price
+                                self.logger.info(f"🔒 TRAILING STOP ENABLED: {trailing_stop_price:.8f} (trailing {current_price:.8f})")
+                            
+                            # Update trailing stop (trail 0.15% below best price)
+                            elif trailing_stop_enabled:
+                                new_trailing_stop = current_price * 0.9985
+                                if new_trailing_stop > trailing_stop_price:
+                                    trailing_stop_price = new_trailing_stop
+                                    self.logger.info(f"🔒 TRAILING STOP UPDATED: {trailing_stop_price:.8f}")
+                        
+                        # Check profit target reached
+                        if current_price >= target_price:
+                            price_change = (current_price - initial_price) / initial_price * 100
+                            self.logger.info(f"🎯 PROFIT TARGET REACHED: {current_price:.8f} ≥ {target_price:.8f} (+{price_change:.3f}%)")
+                            break
+                        
+                        # Check trailing stop triggered (if enabled)
+                        if trailing_stop_enabled and current_price <= trailing_stop_price:
+                            price_change = (current_price - initial_price) / initial_price * 100
+                            self.logger.info(f"🔒 TRAILING STOP TRIGGERED: {current_price:.8f} ≤ {trailing_stop_price:.8f} (+{price_change:.3f}%)")
+                            break
+                        
+                        # Check regular stop loss triggered
+                        elif current_price <= stop_price:
+                            price_change = (current_price - initial_price) / initial_price * 100
+                            self.logger.warning(f"🛑 STOP LOSS TRIGGERED: {current_price:.8f} ≤ {stop_price:.8f} ({price_change:.3f}%)")
+                            break
+                        
+                        # Log progress every 60 seconds (reduced frequency)
+                        elapsed = time.time() - wait_start
+                        if elapsed - last_log_time >= 60:
+                            price_change = (current_price - initial_price) / initial_price * 100
+                            best_change = (best_price_seen - initial_price) / initial_price * 100
+                            self.logger.info(f"⏰ OPTIMIZED Wait... {elapsed:.0f}s | Price: {current_price:.8f} ({price_change:+.3f}%) | Best: {best_price_seen:.8f} (+{best_change:.3f}%)")
+                            if trailing_stop_enabled:
+                                self.logger.info(f"   🔒 Trailing stop: {trailing_stop_price:.8f}")
+                            last_log_time = elapsed
+                    
+                    await asyncio.sleep(check_interval)
+                    
+                except Exception as monitor_error:
+                    self.logger.warning(f"⚠️ Monitoring error: {monitor_error}")
+                    await asyncio.sleep(check_interval)
+            
+            elapsed_time = time.time() - wait_start
+            final_price_change = (best_price_seen - initial_price) / initial_price * 100 if best_price_seen > initial_price else 0
+            self.logger.info(f"⏰ OPTIMIZED adaptive waiting completed after {elapsed_time:.1f}s")
+            self.logger.info(f"   📊 Best price seen: {best_price_seen:.8f} (+{final_price_change:.3f}%)")
+            if trailing_stop_enabled:
+                self.logger.info(f"   🔒 Final trailing stop: {trailing_stop_price:.8f}")
+            
+            # Execute Step 3 with the CORRECT amount
+            return await self._execute_step3_immediate_with_amount(exchange, quote_currency, base_currency, quote_amount, trade_id)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in adaptive waiting: {e}")
+            return await self._execute_step3_immediate_with_amount(exchange, quote_currency, base_currency, quote_amount, trade_id)
+    
+    async def _execute_step3_immediate_with_amount(self, exchange, quote_currency: str, base_currency: str, 
+                                                 quote_amount: float, trade_id: str) -> bool:
+        """Execute Step 3 immediately with the correct amount."""
+        try:
+            pair_symbol = f"{quote_currency}/{base_currency}"
+            
+            # CRITICAL FIX: Use the ACTUAL quote amount received from Step 2
+            self.logger.info(f"⚡ OPTIMIZED Step 3: Selling {quote_amount:.8f} {quote_currency} for {base_currency}")
+            
+            # Validate amount is realistic
+            if quote_currency == 'BTC' and quote_amount > 0.01:
+                self.logger.error(f"❌ CRITICAL: Trying to sell unrealistic BTC amount: {quote_amount:.8f}")
+                self.logger.error(f"   This would be worth ${quote_amount * 115000:.2f} USD!")
                 return False
             
-            # Calculate ACTUAL profit using real amounts
-            actual_profit = final_balance - configured_trade_amount
-            actual_profit_pct = (actual_profit / configured_trade_amount) * 100
+            # Get current market price for better execution timing
+            current_ticker = await exchange.get_ticker(pair_symbol)
+            if current_ticker and current_ticker.get('bid'):
+                current_bid = float(current_ticker['bid'])
+                self.logger.info(f"📊 Current market bid: {current_bid:.8f} (executing at market)")
             
-            total_execution_time = (time.time() - start_time) * 1000
+            step3_result = await exchange.place_market_order(pair_symbol, 'sell', quote_amount)
             
-            self.logger.info(f"🎉 EXECUTION COMPLETE:")
-            self.logger.info(f"   Initial: {configured_trade_amount:.2f} USDT")
-            self.logger.info(f"   Final: {final_balance:.2f} USDT")
-            self.logger.info(f"   Actual Profit: ${actual_profit:.4f} ({actual_profit_pct:.4f}%)")
-            self.logger.info(f"   Duration: {total_execution_time:.0f}ms")
+            if not step3_result.get('success'):
+                self.logger.error(f"❌ Step 3 failed: {step3_result.get('error', 'Unknown error')}")
+                return False
             
-            # Log successful trade
-            await self._log_trade_success(opportunity, trade_id, final_balance, start_time)
+            final_usdt = float(step3_result.get('cost', 0))
+            self.logger.info(f"✅ OPTIMIZED Step 3: Received {final_usdt:.8f} {base_currency}")
+            
+            # Calculate actual profit
+            trade_amount = 20.0  # Original trade amount
+            actual_profit = final_usdt - trade_amount
+            actual_profit_pct = (actual_profit / trade_amount) * 100
+            
+            self.logger.info(f"💰 OPTIMIZED DYNAMIC TRADE RESULT:")
+            self.logger.info(f"   Initial: {trade_amount:.2f} USDT")
+            self.logger.info(f"   Final: {final_usdt:.2f} USDT")
+            self.logger.info(f"   Actual Profit: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%)")
+            
+            # Success criteria: Accept small losses due to market movement but aim for profits
+            success_threshold = -0.3  # Accept up to -0.3% loss (improved from -1.0%)
+            is_successful = actual_profit > success_threshold
+            
+            if is_successful:
+                if actual_profit > 0:
+                    self.logger.info(f"🎉 PROFITABLE TRADE: +{actual_profit:.6f} USDT (+{actual_profit_pct:.4f}%)")
+                else:
+                    self.logger.info(f"✅ ACCEPTABLE LOSS: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%) - within tolerance")
+            else:
+                self.logger.warning(f"⚠️ SIGNIFICANT LOSS: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%) - exceeds tolerance")
+            
+            return is_successful
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in Step 3 execution: {e}")
+            return False
+    
+    async def _execute_step3_immediate(self, exchange, quote_currency: str, base_currency: str, 
+                                     quote_amount: float, trade_id: str, opportunity: ArbitrageOpportunity) -> bool:
+        """Execute Step 3 immediately without adaptive waiting."""
+        return await self._execute_step3_immediate_with_amount(exchange, quote_currency, base_currency, quote_amount, trade_id)
+    
+    def _parse_triangle_path(self, triangle_path: str) -> List[str]:
+        """Parse triangle path string into currency list."""
+        try:
+            if isinstance(triangle_path, list):
+                return triangle_path[:3]
+            
+            if isinstance(triangle_path, str):
+                # Handle different arrow formats
+                if ' → ' in triangle_path:
+                    parts = triangle_path.split(' → ')
+                elif ' -> ' in triangle_path:
+                    parts = triangle_path.split(' -> ')
+                else:
+                    # Try to extract currencies from string
+                    parts = [part.strip() for part in triangle_path.split() if part.strip() not in ['→', '->']]
+                
+                # For 4-part paths (USDT → TWT → BTC → USDT), take first 3
+                if len(parts) >= 3:
+                    if len(parts) == 4 and parts[0] == parts[3]:
+                        return parts[:3]  # [USDT, TWT, BTC]
+                    else:
+                        return parts[:3]
+                else:
+                    return parts
+            
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"Error parsing triangle path: {e}")
+            return []
+    
+    def _validate_opportunity(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Validate arbitrage opportunity before execution."""
+        try:
+            # Check profit threshold
+            profit_pct = getattr(opportunity, 'profit_percentage', 0)
+            if profit_pct < self.min_profit_threshold:
+                self.logger.warning(f"⚠️ Opportunity below threshold: {profit_pct:.4f}% < {self.min_profit_threshold}%")
+                return False
+            
+            # Check trade amount
+            trade_amount = getattr(opportunity, 'initial_amount', 0)
+            if trade_amount <= 0 or trade_amount > 20:
+                self.logger.warning(f"⚠️ Invalid trade amount: ${trade_amount}")
+                return False
+            
+            # Check triangle path
+            triangle_path = getattr(opportunity, 'triangle_path', '')
+            if not triangle_path:
+                self.logger.warning("⚠️ No triangle path specified")
+                return False
             
             return True
             
         except Exception as e:
-            self.logger.error(f"❌ Error in triangle steps execution: {e}")
-            await self._log_trade_failure(opportunity, trade_id, str(e), start_time)
+            self.logger.error(f"Error validating opportunity: {e}")
             return False
     
-    async def _execute_lightning_step(self, exchange, symbol: str, side: str, 
-                                    quantity: float, step_num: int) -> Dict[str, Any]:
-        """Execute single step with INSTANT timing - zero overhead."""
+    async def _log_trade_attempt(self, opportunity: ArbitrageOpportunity, trade_id: str):
+        """Log trade attempt details."""
         try:
-            # INSTANT: Pre-sync time for KuCoin before order
-            if exchange.exchange_id == 'kucoin':
-                # Ensure timestamp is fresh
-                current_timestamp = int(time.time() * 1000) + 500  # 0.5-second buffer
-                
-                # Apply timestamp to exchange options
-                if hasattr(exchange.exchange, 'options'):
-                    exchange.exchange.options['timeDifference'] = 500
+            trade_data = {
+                'triangle_path': getattr(opportunity, 'triangle_path', 'Unknown'),
+                'pairs': [getattr(step, 'symbol', 'Unknown') for step in getattr(opportunity, 'steps', [])],
+                'initial_amount': getattr(opportunity, 'initial_amount', 0),
+                'final_amount': getattr(opportunity, 'final_amount', 0),
+                'profit_percentage': round(getattr(opportunity, 'profit_percentage', 0), 6),
+                'profit_amount': round(getattr(opportunity, 'profit_amount', 0), 6),
+                'net_profit': round(getattr(opportunity, 'net_profit', 0), 6),
+                'estimated_fees': round(getattr(opportunity, 'estimated_fees', 0), 6),
+                'estimated_slippage': round(getattr(opportunity, 'estimated_slippage', 0), 6),
+                'steps': [step.to_dict() for step in getattr(opportunity, 'steps', [])],
+                'detected_at': getattr(opportunity, 'detected_at', datetime.now()).isoformat(),
+                'status': 'executing',
+                'execution_time': 0.0,
+                'execution_mode': 'DYNAMIC_2-STEP'
+            }
             
-            # INSTANT: Execute order immediately
-            order_result = await exchange.place_market_order(symbol, side, quantity)
-            
-            if not order_result:
-                return {'success': False, 'error': 'No response from exchange'}
-            
-            if not order_result.get('success'):
-                return order_result
-            
-            # INSTANT: Return immediately
-            return order_result
+            self.logger.info(f"TRADE_ATTEMPT (AUTO): {trade_data}")
             
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            self.logger.error(f"Error logging trade attempt: {e}")
     
-    async def _log_trade_attempt(self, opportunity: ArbitrageOpportunity, trade_id: str):
-        """Log trade attempt."""
-        if self.trade_logger:
-            try:
-                trade_data = {
-                    'triangle_path': opportunity.triangle_path,
-                    'pairs': [step.symbol for step in opportunity.steps],
-                    'initial_amount': opportunity.initial_amount,
-                    'final_amount': opportunity.final_amount,
-                    'profit_percentage': round(opportunity.profit_percentage, 6),
-                    'profit_amount': round(opportunity.profit_amount, 6),
-                    'net_profit': round(opportunity.net_profit, 6),
-                    'estimated_fees': round(opportunity.estimated_fees, 6),
-                    'estimated_slippage': round(opportunity.estimated_slippage, 6),
-                    'steps': [step.to_dict() for step in opportunity.steps],
-                    'detected_at': opportunity.detected_at.isoformat(),
-                    'status': 'executing',
-                    'execution_time': 0.0
-                }
-                
-                self.trade_logger.logger.info(f"TRADE_ATTEMPT ({'AUTO' if self.auto_trading else 'MANUAL'}): {trade_data}")
-            except Exception as e:
-                self.logger.error(f"Error logging trade attempt: {e}")
-    
-    async def _log_trade_success(self, opportunity: ArbitrageOpportunity, trade_id: str, 
-                               final_amount: float, start_time: float):
+    async def _log_successful_trade(self, opportunity: ArbitrageOpportunity, trade_id: str, final_amount: float):
         """Log successful trade completion."""
-        if self.trade_logger:
-            try:
-                execution_time = (time.time() - start_time) * 1000
-                actual_profit = final_amount - opportunity.initial_amount
-                actual_profit_pct = (actual_profit / opportunity.initial_amount) * 100
-                
+        try:
+            if self.trade_logger:
                 # Create detailed trade log
                 trade_log = TradeLog(
                     trade_id=trade_id,
                     timestamp=datetime.now(),
-                    exchange=getattr(opportunity, 'exchange', 'unknown'),
-                    triangle_path=opportunity.triangle_path.split(' → ')[:3],
+                    exchange=getattr(opportunity, 'exchange', 'kucoin'),
+                    triangle_path=self._parse_triangle_path(getattr(opportunity, 'triangle_path', '')),
                     status=TradeStatus.SUCCESS,
-                    initial_amount=opportunity.initial_amount,
+                    initial_amount=getattr(opportunity, 'initial_amount', 0),
                     final_amount=final_amount,
-                    base_currency=opportunity.base_currency,
-                    expected_profit_amount=opportunity.profit_amount,
-                    expected_profit_percentage=opportunity.profit_percentage,
-                    actual_profit_amount=actual_profit,
-                    actual_profit_percentage=actual_profit_pct,
-                    total_fees_paid=opportunity.estimated_fees,
-                    total_slippage=opportunity.estimated_slippage,
-                    net_pnl=actual_profit - opportunity.estimated_fees,
-                    total_duration_ms=execution_time
+                    base_currency='USDT',
+                    expected_profit_amount=getattr(opportunity, 'profit_amount', 0),
+                    expected_profit_percentage=getattr(opportunity, 'profit_percentage', 0),
+                    actual_profit_amount=final_amount - getattr(opportunity, 'initial_amount', 0),
+                    actual_profit_percentage=((final_amount - getattr(opportunity, 'initial_amount', 0)) / getattr(opportunity, 'initial_amount', 1)) * 100,
+                    total_fees_paid=getattr(opportunity, 'estimated_fees', 0),
+                    total_slippage=getattr(opportunity, 'estimated_slippage', 0),
+                    net_pnl=final_amount - getattr(opportunity, 'initial_amount', 0) - getattr(opportunity, 'estimated_fees', 0),
+                    total_duration_ms=(time.time() - self.active_trades[trade_id]['start_time']) * 1000,
+                    steps=[]
                 )
                 
                 await self.trade_logger.log_trade(trade_log)
-                
-            except Exception as e:
-                self.logger.error(f"Error logging trade success: {e}")
+            
+        except Exception as e:
+            self.logger.error(f"Error logging successful trade: {e}")
     
-    async def _log_trade_failure(self, opportunity: ArbitrageOpportunity, trade_id: str, 
-                               error_message: str, start_time: float):
-        """Log failed trade."""
-        if self.trade_logger:
-            try:
-                execution_time = (time.time() - start_time) * 1000
-                
-                trade_data = {
-                    'triangle_path': opportunity.triangle_path,
-                    'pairs': [step.symbol for step in opportunity.steps],
-                    'initial_amount': opportunity.initial_amount,
-                    'final_amount': opportunity.final_amount,
-                    'profit_percentage': round(opportunity.profit_percentage, 6),
-                    'profit_amount': round(opportunity.profit_amount, 6),
-                    'net_profit': round(opportunity.net_profit, 6),
-                    'estimated_fees': round(opportunity.estimated_fees, 6),
-                    'estimated_slippage': round(opportunity.estimated_slippage, 6),
-                    'steps': [step.to_dict() for step in opportunity.steps],
-                    'detected_at': opportunity.detected_at.isoformat(),
-                    'status': 'failed',
-                    'execution_time': execution_time
-                }
-                
-                self.trade_logger.logger.error(f"TRADE_FAILED ({'🔴 LIVE USDT TRIANGLE/AUTO' if self.auto_trading else 'MANUAL'}): {trade_data} | Error: {error_message}")
-                
-                # Create detailed failure log
+    async def _log_failed_trade(self, opportunity: ArbitrageOpportunity, trade_id: str, failed_step: int, error_message: str):
+        """Log failed trade with detailed information."""
+        try:
+            if self.trade_logger:
+                # Create detailed trade log for failure
                 trade_log = TradeLog(
                     trade_id=trade_id,
                     timestamp=datetime.now(),
-                    exchange=getattr(opportunity, 'exchange', 'unknown'),
-                    triangle_path=opportunity.triangle_path.split(' → ')[:3],
+                    exchange=getattr(opportunity, 'exchange', 'kucoin'),
+                    triangle_path=self._parse_triangle_path(getattr(opportunity, 'triangle_path', '')),
                     status=TradeStatus.FAILED,
-                    initial_amount=opportunity.initial_amount,
-                    final_amount=opportunity.initial_amount,  # No change on failure
-                    base_currency=opportunity.base_currency,
-                    expected_profit_amount=opportunity.profit_amount,
-                    expected_profit_percentage=opportunity.profit_percentage,
-                    actual_profit_amount=0,
-                    actual_profit_percentage=0,
-                    total_fees_paid=opportunity.estimated_fees * 0.1,  # Partial fees
-                    total_slippage=0,
-                    net_pnl=0,
-                    total_duration_ms=execution_time,
-                    error_message=error_message
+                    initial_amount=getattr(opportunity, 'initial_amount', 0),
+                    final_amount=0.0,
+                    base_currency='USDT',
+                    expected_profit_amount=getattr(opportunity, 'profit_amount', 0),
+                    expected_profit_percentage=getattr(opportunity, 'profit_percentage', 0),
+                    actual_profit_amount=0.0,
+                    actual_profit_percentage=0.0,
+                    total_fees_paid=getattr(opportunity, 'estimated_fees', 0),
+                    total_slippage=0.0,
+                    net_pnl=-getattr(opportunity, 'estimated_fees', 0),
+                    total_duration_ms=(time.time() - self.active_trades[trade_id]['start_time']) * 1000,
+                    steps=[],
+                    error_message=error_message,
+                    failed_at_step=failed_step
                 )
                 
                 await self.trade_logger.log_trade(trade_log)
-                
-            except Exception as e:
-                self.logger.error(f"Error logging trade failure: {e}")
-    
-    async def _get_manual_confirmation(self, opportunity: ArbitrageOpportunity) -> bool:
-        """Get manual confirmation for trade execution."""
-        try:
-            print("\n" + "="*60)
-            print("🔴 LIVE TRADE CONFIRMATION")
-            print("="*60)
-            print(f"Exchange: {getattr(opportunity, 'exchange', 'Unknown')}")
-            print(f"Triangle: {opportunity.triangle_path}")
-            print(f"Trade Amount: ${opportunity.initial_amount:.2f}")
-            print(f"Expected Profit: {opportunity.profit_percentage:.4f}% (${opportunity.profit_amount:.2f})")
-            print("⚠️ WARNING: This will execute REAL trades with REAL money!")
-            print("="*60)
             
-            # In a real GUI, this would be a dialog box
-            # For now, we'll auto-approve if auto_trading is enabled
-            if self.auto_trading:
-                return True
+            # Also log to main logger
+            trade_data = {
+                'triangle_path': getattr(opportunity, 'triangle_path', 'Unknown'),
+                'pairs': [getattr(step, 'symbol', 'Unknown') for step in getattr(opportunity, 'steps', [])],
+                'initial_amount': getattr(opportunity, 'initial_amount', 0),
+                'final_amount': getattr(opportunity, 'final_amount', 0),
+                'profit_percentage': round(getattr(opportunity, 'profit_percentage', 0), 6),
+                'profit_amount': round(getattr(opportunity, 'profit_amount', 0), 6),
+                'net_profit': round(getattr(opportunity, 'net_profit', 0), 6),
+                'estimated_fees': round(getattr(opportunity, 'estimated_fees', 0), 6),
+                'estimated_slippage': round(getattr(opportunity, 'estimated_slippage', 0), 6),
+                'steps': [step.to_dict() for step in getattr(opportunity, 'steps', [])],
+                'detected_at': getattr(opportunity, 'detected_at', datetime.now()).isoformat(),
+                'status': 'failed',
+                'execution_time': (time.time() - self.active_trades[trade_id]['start_time']) * 1000,
+                'execution_mode': 'DYNAMIC_2-STEP'
+            }
             
-            # For manual mode, require explicit confirmation
-            return False  # Would be replaced with actual user input in GUI
+            self.logger.error(f"TRADE_FAILED (🔴 LIVE USDT TRIANGLE/AUTO): {trade_data} | Error: {error_message}")
             
         except Exception as e:
-            self.logger.error(f"Error getting manual confirmation: {e}")
+            self.logger.error(f"Error logging failed trade: {e}")
+    
+    async def execute_standard_arbitrage(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Execute standard 3-step arbitrage (fallback method)."""
+        try:
+            exchange_name = getattr(opportunity, 'exchange', 'kucoin')
+            exchange = self.exchange_manager.get_exchange(exchange_name)
+            
+            if not exchange:
+                self.logger.error(f"❌ Exchange {exchange_name} not available")
+                return False
+            
+            self.logger.info(f"🔧 STANDARD EXECUTION: {opportunity.triangle_path}")
+            
+            # Execute all 3 steps sequentially
+            for i, step in enumerate(opportunity.steps, 1):
+                self.logger.info(f"🔧 Step {i}: {step.side.upper()} {step.quantity:.8f} {step.symbol}")
+                
+                result = await exchange.place_market_order(step.symbol, step.side, step.quantity)
+                
+                if not result.get('success'):
+                    self.logger.error(f"❌ Step {i} failed: {result.get('error', 'Unknown error')}")
+                    return False
+                
+                self.logger.info(f"✅ Step {i} completed")
+                
+                # Brief pause between steps
+                if i < len(opportunity.steps):
+                    await asyncio.sleep(0.5)
+            
+            self.logger.info("🎉 STANDARD ARBITRAGE COMPLETED")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Error in standard arbitrage execution: {e}")
             return False
+    
+    async def execute_paper_trade(self, opportunity: ArbitrageOpportunity) -> bool:
+        """Execute paper trade simulation."""
+        try:
+            self.logger.info(f"📝 PAPER TRADE: {opportunity.triangle_path}")
+            self.logger.info(f"   Expected Profit: {opportunity.profit_percentage:.4f}% (${opportunity.profit_amount:.2f})")
+            
+            # Simulate execution time
+            await asyncio.sleep(2)
+            
+            # Simulate success/failure (95% success rate)
+            import random
+            success = random.random() < 0.95
+            
+            if success:
+                self.logger.info("✅ PAPER TRADE SUCCESSFUL (simulated)")
+                return True
+            else:
+                self.logger.warning("❌ PAPER TRADE FAILED (simulated)")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Error in paper trade: {e}")
+            return False
+    
+    def get_active_trades(self) -> Dict[str, Any]:
+        """Get currently active trades."""
+        return self.active_trades.copy()
+    
+    def get_trade_history(self) -> List[Dict[str, Any]]:
+        """Get trade execution history."""
+        return self.trade_history.copy()
+    
+    async def cancel_all_trades(self) -> bool:
+        """Cancel all active trades (emergency stop)."""
+        try:
+            self.logger.warning("🛑 EMERGENCY STOP: Cancelling all active trades")
+            
+            for trade_id in list(self.active_trades.keys()):
+                try:
+                    # Mark trade as cancelled
+                    self.active_trades[trade_id]['status'] = 'cancelled'
+                    self.logger.info(f"🛑 Cancelled trade {trade_id}")
+                except Exception as e:
+                    self.logger.error(f"Error cancelling trade {trade_id}: {e}")
+            
+            # Clear active trades
+            self.active_trades.clear()
+            
+            self.logger.info("✅ All trades cancelled")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error cancelling trades: {e}")
+            return False
+    
+    def update_config(self, new_config: Dict[str, Any]):
+        """Update executor configuration."""
+        try:
+            self.config.update(new_config)
+            
+            # Update key settings
+            self.auto_trading = self.config.get('auto_trading', self.auto_trading)
+            self.paper_trading = self.config.get('paper_trading', self.paper_trading)
+            self.min_profit_threshold = self.config.get('min_profit_threshold', self.min_profit_threshold)
+            
+            self.logger.info(f"✅ Configuration updated: {new_config}")
+            
+        except Exception as e:
+            self.logger.error(f"Error updating config: {e}")
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get executor statistics."""
+        try:
+            total_trades = len(self.trade_history)
+            successful_trades = len([t for t in self.trade_history if t.get('success', False)])
+            
+            return {
+                'total_trades': total_trades,
+                'successful_trades': successful_trades,
+                'success_rate': (successful_trades / total_trades * 100) if total_trades > 0 else 0,
+                'active_trades': len(self.active_trades),
+                'auto_trading': self.auto_trading,
+                'paper_trading': self.paper_trading,
+                'min_profit_threshold': self.min_profit_threshold
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error getting statistics: {e}")
+            return {}
