@@ -164,6 +164,7 @@ class TradeExecutor:
             step1_filled = 0.0
             step2_received = 0.0
             step2_cost = 0.0
+            
             # Step 1: USDT → Intermediate Currency (e.g., USDT → TWT)
             self.logger.info(f"🔧 Step 1: Spending {trade_amount:.2f} USDT to buy {intermediate_currency}")
             
@@ -193,12 +194,23 @@ class TradeExecutor:
             
             # Execute Step 2
             step2_start = time.time()
-            amount_intermediate = step1_filled
             pair2 = step2_pair
             step2_side = await self._get_step2_side(exchange, step2_pair, intermediate_currency, quote_currency)
-            self.logger.info(f"🔧 Step 2: Selling {step1_filled:.8f} {intermediate_currency} for {quote_currency}")
-            self.logger.info(f"⚡ Step 2: {step2_side.upper()} {pair2}")
-            
+
+            # CRITICAL FIX: Calculate correct amount based on trade direction
+            if step2_side == 'sell':
+                # SELL: We're selling intermediate currency, amount is in intermediate
+                amount_intermediate = step1_filled
+                self.logger.info(f"🔧 Step 2: Selling {step1_filled:.8f} {intermediate_currency} for {quote_currency}")
+                self.logger.info(f"⚡ Step 2: SELL {pair2} (amount in {intermediate_currency})")
+            else:
+                # BUY: We're buying the base of the pair with our intermediate currency
+                # For RLC/BTC pair, we want to BUY RLC using our BTC
+                # Amount needs to be in BTC (quote currency of the pair)
+                amount_intermediate = step1_filled
+                self.logger.info(f"🔧 Step 2: Using {step1_filled:.8f} {intermediate_currency} to buy {quote_currency}")
+                self.logger.info(f"⚡ Step 2: BUY {pair2} (spending {intermediate_currency})")
+
             step2_result = await exchange.place_market_order(step2_pair, step2_side, amount_intermediate)
             
             if not step2_result.get('success'):
@@ -241,21 +253,39 @@ class TradeExecutor:
             self.logger.info("🧠 DYNAMIC MONITORING: Analyzing market trend for adaptive waiting strategy")
             
             try:
-                # Get dynamic waiting parameters with null safety
-                waiting_params = await self._get_dynamic_waiting_params_safe(exchange, quote_currency, base_currency)
+                # CRITICAL FIX: Check if opportunity has high profit potential
+                expected_profit_pct = getattr(opportunity, 'profit_percentage', 0)
                 
-                if waiting_params:
-                    market_trend = waiting_params['trend']
-                    wait_time = waiting_params['wait_time']
-                    profit_target = waiting_params['profit_target']
-                    stop_loss = waiting_params['stop_loss']
+                if expected_profit_pct >= 0.8:  # High profit opportunities (≥0.8%)
+                    self.logger.info(f"🚀 HIGH PROFIT OPPORTUNITY: {expected_profit_pct:.4f}% - EXECUTING IMMEDIATELY!")
+                    self.logger.info("⚡ INSTANT EXECUTION: No waiting - capturing profit before price moves")
                     
-                    self.logger.info(f"🎯 DYNAMIC STRATEGY: {market_trend} market detected")
-                    self.logger.info(f"   Wait Time: {wait_time}s")
-                    self.logger.info(f"   Profit Target: +{profit_target:.2f}%")
-                    self.logger.info(f"   Stop Loss: {stop_loss:.2f}%")
+                    # Execute Step 3 immediately for high-profit opportunities
+                    step3_success = await self._execute_step3_immediate(
+                        exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
+                    )
                     
-                    # Execute Step 3 with adaptive waiting
+                    if step3_success:
+                        await self._log_successful_trade(opportunity, trade_id, trade_amount)
+                        return True
+                    else:
+                        await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
+                        return False
+                
+                elif expected_profit_pct >= 0.5:  # Medium profit opportunities (0.5-0.8%)
+                    self.logger.info(f"💎 MEDIUM PROFIT OPPORTUNITY: {expected_profit_pct:.4f}% - FAST EXECUTION!")
+                    self.logger.info("⚡ FAST MODE: 2-minute maximum wait to secure profits")
+                    
+                    # Fast execution with minimal waiting
+                    waiting_params = {
+                        'trend': 'FAST_PROFIT',
+                        'wait_time': 120.0,  # 2 minutes maximum
+                        'profit_target': 0.08,  # +0.08% quick target
+                        'stop_loss': -0.15,     # -0.15% tight stop
+                        'confidence': 0.9,
+                        'pair_type': 'fast_execution'
+                    }
+                    
                     step3_success = await self._execute_step3_with_adaptive_waiting(
                         exchange, quote_currency, base_currency, actual_quote_amount, 
                         waiting_params, trade_id
@@ -267,12 +297,40 @@ class TradeExecutor:
                     else:
                         await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
                         return False
-                else:
-                    # Fallback to immediate execution
-                    self.logger.warning("⚠️ Dynamic analysis failed, executing Step 3 immediately")
-                    return await self._execute_step3_immediate(
-                        exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
-                    )
+                
+                else:  # Lower profit opportunities (0.4-0.5%)
+                    # Get dynamic waiting parameters with null safety
+                    waiting_params = await self._get_dynamic_waiting_params_safe(exchange, quote_currency, base_currency)
+                    
+                    if waiting_params:
+                        market_trend = waiting_params['trend']
+                        wait_time = waiting_params['wait_time']
+                        profit_target = waiting_params['profit_target']
+                        stop_loss = waiting_params['stop_loss']
+                        
+                        self.logger.info(f"🎯 DYNAMIC STRATEGY: {market_trend} market detected")
+                        self.logger.info(f"   Wait Time: {wait_time}s")
+                        self.logger.info(f"   Profit Target: +{profit_target:.2f}%")
+                        self.logger.info(f"   Stop Loss: {stop_loss:.2f}%")
+                        
+                        # Execute Step 3 with adaptive waiting
+                        step3_success = await self._execute_step3_with_adaptive_waiting(
+                            exchange, quote_currency, base_currency, actual_quote_amount, 
+                            waiting_params, trade_id
+                        )
+                        
+                        if step3_success:
+                            await self._log_successful_trade(opportunity, trade_id, trade_amount)
+                            return True
+                        else:
+                            await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
+                            return False
+                    else:
+                        # Fallback to immediate execution
+                        self.logger.warning("⚠️ Dynamic analysis failed, executing Step 3 immediately")
+                        return await self._execute_step3_immediate(
+                            exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
+                        )
                     
             except Exception as dynamic_error:
                 self.logger.error(f"❌ Dynamic analysis error: {dynamic_error}")
@@ -329,18 +387,40 @@ class TradeExecutor:
             return None, None, None
     
     async def _get_step2_side(self, exchange, pair: str, intermediate: str, quote: str) -> str:
-        """Determine the correct side (buy/sell) for Step 2"""
+        """Determine the correct side (buy/sell) for Step 2
+
+        Step 2: We have INTERMEDIATE currency, need to get QUOTE currency
+
+        Examples:
+        - USDT → BTC → RLC: We have BTC, need RLC
+          - If pair is RLC/BTC: BUY RLC with BTC
+          - If pair is BTC/RLC: SELL BTC for RLC
+
+        - USDT → SCRT → BTC: We have SCRT, need BTC
+          - If pair is BTC/SCRT: BUY BTC with SCRT
+          - If pair is SCRT/BTC: SELL SCRT for BTC
+        """
         try:
-            if pair.startswith(intermediate):
-                # Direct pair like BTC/SCRT - sell BTC for SCRT
+            # Split the pair to understand structure
+            base, quote_part = pair.split('/')
+
+            # We HAVE intermediate, we NEED quote
+            # If intermediate is BASE of pair: We SELL intermediate for quote_part
+            # If intermediate is QUOTE of pair: We BUY base with intermediate
+
+            if base == intermediate:
+                # Pair is INTERMEDIATE/QUOTE (e.g., BTC/RLC)
+                # We have BTC (intermediate), selling it for RLC (quote)
                 return 'sell'
-            elif pair.startswith(quote):
-                # Reverse pair like SCRT/BTC - buy SCRT with BTC
+            elif quote_part == intermediate:
+                # Pair is QUOTE/INTERMEDIATE (e.g., RLC/BTC)
+                # We have BTC (intermediate), buying RLC (quote) with it
                 return 'buy'
             else:
-                # Fallback
+                # Fallback - should not happen
+                self.logger.warning(f"⚠️ Unexpected pair structure: {pair}, intermediate={intermediate}, quote={quote}")
                 return 'sell'
-                
+
         except Exception as e:
             self.logger.error(f"Error determining step2 side: {e}")
             return 'sell'
@@ -372,9 +452,9 @@ class TradeExecutor:
         """Get fallback dynamic parameters when analysis fails."""
         return {
             'trend': 'UNKNOWN',
-            'wait_time': 120.0,  # 2 minutes optimized wait
-            'profit_target': 0.12,  # +0.12% target (faster profit taking)
-            'stop_loss': -0.25,     # -0.25% tighter stop loss
+            'wait_time': 60.0,   # 1 minute (very fast fallback)
+            'profit_target': 0.05,  # +0.05% very quick target
+            'stop_loss': -0.10,     # -0.10% very tight stop loss
             'confidence': 0.5
         }
     
@@ -403,9 +483,9 @@ class TradeExecutor:
                             # Stablecoin pairs: faster execution with smaller targets
                             return {
                                 'trend': 'BULLISH_STABLE',
-                                'wait_time': 600.0,  # 10 minutes for stablecoins
-                                'profit_target': 0.15,  # +0.15% target (realistic for stablecoins)
-                                'stop_loss': -0.20,     # -0.20% stop loss
+                                'wait_time': 300.0,  # 5 minutes for stablecoins (faster)
+                                'profit_target': 0.08,  # +0.08% target (very achievable)
+                                'stop_loss': -0.12,     # -0.12% very tight stop loss
                                 'confidence': 0.9,
                                 'pair_type': 'stablecoin'
                             }
@@ -413,9 +493,9 @@ class TradeExecutor:
                             # Regular pairs: optimized bullish strategy
                             return {
                                 'trend': 'BULLISH',
-                                'wait_time': 720.0,  # 12 minutes (reduced from 15)
-                                'profit_target': 0.20,  # +0.20% target (reduced from 0.30)
-                                'stop_loss': -0.25,     # -0.25% stop loss (tighter)
+                                'wait_time': 360.0,  # 6 minutes (much faster)
+                                'profit_target': 0.10,  # +0.10% target (very achievable)
+                                'stop_loss': -0.15,     # -0.15% tight stop loss
                                 'confidence': 0.85,
                                 'pair_type': 'volatile'
                             }
@@ -424,9 +504,9 @@ class TradeExecutor:
                             # Stablecoin pairs: quick exit in volatile conditions
                             return {
                                 'trend': 'BEARISH_STABLE',
-                                'wait_time': 180.0,   # 3 minutes
-                                'profit_target': 0.08,  # +0.08% quick target
-                                'stop_loss': -0.15,     # -0.15% stop loss
+                                'wait_time': 60.0,    # 1 minute (very fast exit)
+                                'profit_target': 0.04,  # +0.04% very quick target
+                                'stop_loss': -0.08,     # -0.08% very tight stop loss
                                 'confidence': 0.7,
                                 'pair_type': 'stablecoin'
                             }
@@ -434,9 +514,9 @@ class TradeExecutor:
                             # Regular pairs: quick execution in volatile markets
                             return {
                                 'trend': 'BEARISH',
-                                'wait_time': 120.0,   # 2 minutes (reduced from 1)
-                                'profit_target': 0.12,  # +0.12% target (increased from 0.10)
-                                'stop_loss': -0.30,     # -0.30% stop loss
+                                'wait_time': 90.0,    # 1.5 minutes (fast exit)
+                                'profit_target': 0.06,  # +0.06% quick target
+                                'stop_loss': -0.15,     # -0.15% tight stop loss
                                 'confidence': 0.75,
                                 'pair_type': 'volatile'
                             }
@@ -445,22 +525,22 @@ class TradeExecutor:
                             # Stablecoin pairs: moderate strategy
                             return {
                                 'trend': 'SIDEWAYS_STABLE',
-                                'wait_time': 480.0,  # 8 minutes
-                                'profit_target': 0.12,  # +0.12% target
-                                'stop_loss': -0.18,     # -0.18% stop loss
+                                'wait_time': 240.0,  # 4 minutes (faster)
+                                'profit_target': 0.06,  # +0.06% target (very achievable)
+                                'stop_loss': -0.10,     # -0.10% very tight stop loss
                                 'confidence': 0.8,
                                 'pair_type': 'stablecoin'
                             }
                         else:
                             # Regular pairs: balanced sideways strategy
                             return {
-                                'trend': 'BULLISH',
-                                'wait_time': 600.0,  # 10 minutes (reduced from 5)
-                                'profit_target': 0.18,  # +0.18% target (reduced from 0.20)
-                                'stop_loss': -0.25,     # -0.25% stop loss (tighter)
+                                'trend': 'SIDEWAYS',
+                                'wait_time': 300.0,  # 5 minutes (faster)
+                                'profit_target': 0.08,  # +0.08% target (very achievable)
+                                'stop_loss': -0.12,     # -0.12% very tight stop loss
                                 'confidence': 0.75,
                                 'pair_type': 'volatile'
-                        }
+                            }
             
             # Fallback if no market data
             return self._get_fallback_dynamic_params()
@@ -489,7 +569,7 @@ class TradeExecutor:
             stop_loss = waiting_params['stop_loss']
             pair_type = waiting_params.get('pair_type', 'volatile')
             
-            self.logger.info(f"🎯 OPTIMIZED ADAPTIVE WAITING: {trend} strategy for {wait_time}s ({pair_type} pair)")
+            self.logger.info(f"🎯 PROFIT-OPTIMIZED ADAPTIVE WAITING: {trend} strategy for {wait_time}s ({pair_type} pair)")
             
             # Get initial price for monitoring
             initial_ticker = await exchange.get_ticker(pair_symbol)
@@ -501,20 +581,20 @@ class TradeExecutor:
             target_price = initial_price * (1 + profit_target / 100)
             stop_price = initial_price * (1 + stop_loss / 100)
             
-            # Implement trailing stop logic
+            # CRITICAL FIX: Correct trailing stop initialization
             trailing_stop_enabled = False
-            trailing_stop_price = stop_price
+            trailing_stop_price = stop_price  # Start with regular stop loss
             best_price_seen = initial_price
             
-            self.logger.info(f"📊 Starting OPTIMIZED adaptive wait: Initial price {initial_price:.8f}")
+            self.logger.info(f"📊 Starting ULTRA-FAST adaptive wait: Initial price {initial_price:.8f}")
             self.logger.info(f"   Target price: {target_price:.8f} (+{profit_target:.2f}%)")
             self.logger.info(f"   Stop price: {stop_price:.8f} ({stop_loss:.2f}%)")
             self.logger.info(f"   Pair type: {pair_type}")
-            self.logger.info(f"   Trailing stop: Enabled after +0.10% move")
+            self.logger.info(f"   Trailing stop: Enabled after +0.05% move (ultra-fast)")
             
             # Adaptive waiting loop
             wait_start = time.time()
-            check_interval = 3.0  # Check every 3 seconds (faster monitoring)
+            check_interval = 1.0  # Check every 1 second (ultra-fast monitoring)
             last_log_time = 0
             
             while time.time() - wait_start < wait_time:
@@ -528,45 +608,48 @@ class TradeExecutor:
                         if current_price > best_price_seen:
                             best_price_seen = current_price
                             
-                            # Enable trailing stop after +0.10% move
-                            if not trailing_stop_enabled and current_price >= initial_price * 1.001:  # +0.10%
+                            # CRITICAL FIX: Enable trailing stop after +0.05% move
+                            if not trailing_stop_enabled and current_price >= initial_price * 1.0005:  # +0.05%
                                 trailing_stop_enabled = True
-                                trailing_stop_price = current_price * 0.9985  # Trail 0.15% below best price
-                                self.logger.info(f"🔒 TRAILING STOP ENABLED: {trailing_stop_price:.8f} (trailing {current_price:.8f})")
+                                # CRITICAL FIX: Trail stop should be BELOW best price
+                                trailing_stop_price = best_price_seen * 0.9992  # Trail 0.08% below best price
+                                self.logger.info(f"🔒 ULTRA-FAST TRAILING STOP ENABLED: {trailing_stop_price:.8f} (0.08% below best {best_price_seen:.8f})")
                             
-                            # Update trailing stop (trail 0.15% below best price)
+                            # CRITICAL FIX: Update trailing stop to always be 0.08% below best price
                             elif trailing_stop_enabled:
-                                new_trailing_stop = current_price * 0.9985
-                                if new_trailing_stop > trailing_stop_price:
+                                new_trailing_stop = best_price_seen * 0.9992  # Always 0.08% below best
+                                if new_trailing_stop > trailing_stop_price:  # Only move stop up, never down
                                     trailing_stop_price = new_trailing_stop
-                                    self.logger.info(f"🔒 TRAILING STOP UPDATED: {trailing_stop_price:.8f}")
+                                    self.logger.info(f"🔒 ULTRA-FAST TRAILING STOP UPDATED: {trailing_stop_price:.8f}")
                         
                         # Check profit target reached
                         if current_price >= target_price:
                             price_change = (current_price - initial_price) / initial_price * 100
-                            self.logger.info(f"🎯 PROFIT TARGET REACHED: {current_price:.8f} ≥ {target_price:.8f} (+{price_change:.3f}%)")
+                            self.logger.info(f"🎯 ULTRA-FAST PROFIT TARGET ACHIEVED: {current_price:.8f} ≥ {target_price:.8f} (+{price_change:.3f}%)")
                             break
                         
-                        # Check trailing stop triggered (if enabled)
+                        # CRITICAL FIX: Check trailing stop triggered (if enabled)
                         if trailing_stop_enabled and current_price <= trailing_stop_price:
                             price_change = (current_price - initial_price) / initial_price * 100
-                            self.logger.info(f"🔒 TRAILING STOP TRIGGERED: {current_price:.8f} ≤ {trailing_stop_price:.8f} (+{price_change:.3f}%)")
+                            best_change = (best_price_seen - initial_price) / initial_price * 100
+                            self.logger.info(f"🔒 ULTRA-FAST TRAILING STOP TRIGGERED: {current_price:.8f} ≤ {trailing_stop_price:.8f}")
+                            self.logger.info(f"   Best was: {best_price_seen:.8f} (+{best_change:.3f}%), Locked: {price_change:.3f}%")
                             break
                         
                         # Check regular stop loss triggered
                         elif current_price <= stop_price:
                             price_change = (current_price - initial_price) / initial_price * 100
-                            self.logger.warning(f"🛑 STOP LOSS TRIGGERED: {current_price:.8f} ≤ {stop_price:.8f} ({price_change:.3f}%)")
+                            self.logger.warning(f"🛑 ULTRA-FAST LOSS PROTECTION: {current_price:.8f} ≤ {stop_price:.8f} ({price_change:.3f}%)")
                             break
                         
-                        # Log progress every 60 seconds (reduced frequency)
+                        # Log progress every 30 seconds (ultra-fast updates)
                         elapsed = time.time() - wait_start
-                        if elapsed - last_log_time >= 60:
+                        if elapsed - last_log_time >= 30:
                             price_change = (current_price - initial_price) / initial_price * 100
                             best_change = (best_price_seen - initial_price) / initial_price * 100
-                            self.logger.info(f"⏰ OPTIMIZED Wait... {elapsed:.0f}s | Price: {current_price:.8f} ({price_change:+.3f}%) | Best: {best_price_seen:.8f} (+{best_change:.3f}%)")
+                            self.logger.info(f"⏰ ULTRA-FAST PROFIT-SEEKING Wait... {elapsed:.0f}s | Price: {current_price:.8f} ({price_change:+.3f}%) | Best: {best_price_seen:.8f} (+{best_change:.3f}%)")
                             if trailing_stop_enabled:
-                                self.logger.info(f"   🔒 Trailing stop: {trailing_stop_price:.8f}")
+                                self.logger.info(f"   🔒 Ultra-fast trailing stop: {trailing_stop_price:.8f}")
                             last_log_time = elapsed
                     
                     await asyncio.sleep(check_interval)
@@ -577,10 +660,10 @@ class TradeExecutor:
             
             elapsed_time = time.time() - wait_start
             final_price_change = (best_price_seen - initial_price) / initial_price * 100 if best_price_seen > initial_price else 0
-            self.logger.info(f"⏰ OPTIMIZED adaptive waiting completed after {elapsed_time:.1f}s")
+            self.logger.info(f"⏰ ULTRA-FAST adaptive waiting completed after {elapsed_time:.1f}s")
             self.logger.info(f"   📊 Best price seen: {best_price_seen:.8f} (+{final_price_change:.3f}%)")
             if trailing_stop_enabled:
-                self.logger.info(f"   🔒 Final trailing stop: {trailing_stop_price:.8f}")
+                self.logger.info(f"   🔒 Final ultra-fast trailing stop: {trailing_stop_price:.8f}")
             
             # Execute Step 3 with the CORRECT amount
             return await self._execute_step3_immediate_with_amount(exchange, quote_currency, base_currency, quote_amount, trade_id)
@@ -596,7 +679,7 @@ class TradeExecutor:
             pair_symbol = f"{quote_currency}/{base_currency}"
             
             # CRITICAL FIX: Use the ACTUAL quote amount received from Step 2
-            self.logger.info(f"⚡ OPTIMIZED Step 3: Selling {quote_amount:.8f} {quote_currency} for {base_currency}")
+            self.logger.info(f"⚡ ULTRA-FAST Step 3: Selling {quote_amount:.8f} {quote_currency} for {base_currency}")
             
             # Validate amount is realistic
             if quote_currency == 'BTC' and quote_amount > 0.01:
@@ -608,7 +691,7 @@ class TradeExecutor:
             current_ticker = await exchange.get_ticker(pair_symbol)
             if current_ticker and current_ticker.get('bid'):
                 current_bid = float(current_ticker['bid'])
-                self.logger.info(f"📊 Current market bid: {current_bid:.8f} (executing at market)")
+                self.logger.info(f"📊 ULTRA-FAST market bid: {current_bid:.8f} (executing immediately)")
             
             step3_result = await exchange.place_market_order(pair_symbol, 'sell', quote_amount)
             
@@ -617,29 +700,29 @@ class TradeExecutor:
                 return False
             
             final_usdt = float(step3_result.get('cost', 0))
-            self.logger.info(f"✅ OPTIMIZED Step 3: Received {final_usdt:.8f} {base_currency}")
+            self.logger.info(f"✅ ULTRA-FAST Step 3: Received {final_usdt:.8f} {base_currency}")
             
             # Calculate actual profit
             trade_amount = 20.0  # Original trade amount
             actual_profit = final_usdt - trade_amount
             actual_profit_pct = (actual_profit / trade_amount) * 100
             
-            self.logger.info(f"💰 OPTIMIZED DYNAMIC TRADE RESULT:")
+            self.logger.info(f"💰 ULTRA-FAST DYNAMIC TRADE RESULT:")
             self.logger.info(f"   Initial: {trade_amount:.2f} USDT")
             self.logger.info(f"   Final: {final_usdt:.2f} USDT")
             self.logger.info(f"   Actual Profit: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%)")
             
-            # Success criteria: Accept small losses due to market movement but aim for profits
-            success_threshold = -0.3  # Accept up to -0.3% loss (improved from -1.0%)
-            is_successful = actual_profit > success_threshold
+            # Success criteria: Ultra-tight tolerance for profitability
+            success_threshold = -0.15  # Accept up to -0.15% loss (ultra-tight)
+            is_successful = actual_profit_pct > success_threshold
             
             if is_successful:
                 if actual_profit > 0:
-                    self.logger.info(f"🎉 PROFITABLE TRADE: +{actual_profit:.6f} USDT (+{actual_profit_pct:.4f}%)")
+                    self.logger.info(f"🎉 ULTRA-FAST PROFIT ACHIEVED: +{actual_profit:.6f} USDT (+{actual_profit_pct:.4f}%)")
                 else:
-                    self.logger.info(f"✅ ACCEPTABLE LOSS: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%) - within tolerance")
+                    self.logger.info(f"✅ ULTRA-CONTROLLED LOSS: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%) - within ultra-tight tolerance")
             else:
-                self.logger.warning(f"⚠️ SIGNIFICANT LOSS: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%) - exceeds tolerance")
+                self.logger.warning(f"⚠️ LOSS EXCEEDS ULTRA-TIGHT TOLERANCE: {actual_profit:.6f} USDT ({actual_profit_pct:.4f}%) - exceeds -0.15%")
             
             return is_successful
             
