@@ -327,7 +327,19 @@ class UnifiedExchange(BaseExchange):
             # CRITICAL FIX: Round quantity to proper decimal precision for KuCoin
             if self.exchange_id == 'kucoin':
                 qty = await self._round_to_kucoin_precision(symbol, qty)
-                
+
+                # CRITICAL: Check if trade was blocked due to impossible requirements
+                if qty < 0:
+                    self.logger.error(f"❌ Trade blocked: {symbol} requirements cannot be met")
+                    return {
+                        'success': False,
+                        'status': 'failed',
+                        'error': f'Trade blocked: insufficient quantity for {symbol} minimum requirements',
+                        'symbol': symbol,
+                        'side': side,
+                        'amount': qty
+                    }
+
                 # CRITICAL: Additional validation for step 3 stablecoin pairs
                 if 'USDC/USDT' in symbol or 'USDT/USDC' in symbol:
                     # Ensure USDC/USDT orders meet KuCoin requirements
@@ -712,16 +724,17 @@ class UnifiedExchange(BaseExchange):
             
             min_qty = min_quantities.get(symbol, min_quantities['default'])
             
-            # CRITICAL FIX: Ensure minimum quantity and validate trade viability
+            # CRITICAL FIX: Validate trade viability - NEVER override with minimum we don't have!
             if rounded_qty < min_qty:
                 # Check if this is a BTC cross-pair that would fail
                 if '/BTC' in symbol and min_qty >= 0.01:
-                    self.logger.error(f"❌ CRITICAL: {symbol} quantity {quantity:.8f} below minimum {min_qty}")
-                    self.logger.error(f"   This trade would fail - need at least {min_qty} {symbol.split('/')[0]}")
-                    self.logger.error(f"   Consider using larger trade amounts or different pairs")
-                    # Return the minimum to prevent the trade from being attempted
-                    return min_qty
+                    self.logger.error(f"❌ TRADE IMPOSSIBLE: {symbol} needs {min_qty} {symbol.split('/')[0]} minimum")
+                    self.logger.error(f"   We only have: {quantity:.8f} {symbol.split('/')[1]}")
+                    self.logger.error(f"   This trade CANNOT execute - BLOCKING!")
+                    # Return -1 to signal this trade should be blocked
+                    return -1.0
                 else:
+                    # For non-BTC pairs, use minimum
                     rounded_qty = min_qty
                     self.logger.warning(f"⚠️ Quantity below minimum for {symbol}: {quantity:.8f} → {rounded_qty:.8f}")
             

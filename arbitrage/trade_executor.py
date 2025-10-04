@@ -160,7 +160,18 @@ class TradeExecutor:
                 return False
             
             self.logger.info(f"✅ Validated pairs: {step1_pair}, {step2_pair}, {step3_pair}")
-            
+
+            # CRITICAL PRE-TRADE VALIDATION: Check if Step 2 will be possible
+            # For $20 trades, we get ~0.000165 BTC. BTC cross-pairs need 0.01 minimum of BASE currency.
+            # This means TWT/BTC, VRA/BTC, RLC/BTC etc. are IMPOSSIBLE with $20 trades!
+            if '/BTC' in step2_pair and not step2_pair.startswith('BTC/'):
+                self.logger.error(f"❌ PRE-TRADE VALIDATION FAILED: {step2_pair} requires 0.01 {step2_pair.split('/')[0]} minimum")
+                self.logger.error(f"   With ${trade_amount} USDT, we'll get ~0.000165 BTC")
+                self.logger.error(f"   Cannot buy 0.01 {step2_pair.split('/')[0]} with 0.000165 BTC")
+                self.logger.error(f"   ⚠️ BLOCKING THIS TRIANGLE - IT WILL ALWAYS FAIL!")
+                await self._log_failed_trade(opportunity, trade_id, 0, f"Impossible triangle: {step2_pair} minimum requirements cannot be met with ${trade_amount} trade")
+                return False
+
             step1_filled = 0.0
             step2_received = 0.0
             step2_cost = 0.0
@@ -189,9 +200,9 @@ class TradeExecutor:
                 await self._log_failed_trade(opportunity, trade_id, 1, "No intermediate currency received")
                 return False
             
-            # Brief pause between steps
-            await asyncio.sleep(0.1)
-            
+            # CRITICAL: Wait for exchange balance update after Step 1
+            await asyncio.sleep(0.5)  # 500ms for balance to update
+
             # Execute Step 2
             step2_start = time.time()
             pair2 = step2_pair
@@ -211,8 +222,16 @@ class TradeExecutor:
                 self.logger.info(f"🔧 Step 2: Using {step1_filled:.8f} {intermediate_currency} to buy {quote_currency}")
                 self.logger.info(f"⚡ Step 2: BUY {pair2} (spending {intermediate_currency})")
 
+            # CRITICAL: Retry Step 2 if balance insufficient (balance update delay)
             step2_result = await exchange.place_market_order(step2_pair, step2_side, amount_intermediate)
-            
+
+            # If balance insufficient, wait and retry once
+            if not step2_result.get('success') and 'Balance insufficient' in str(step2_result.get('error', '')):
+                self.logger.warning("⚠️ Balance insufficient - waiting 1s for exchange balance update...")
+                await asyncio.sleep(1.0)  # Wait for balance to update
+                self.logger.info("🔄 Retrying Step 2 after balance update...")
+                step2_result = await exchange.place_market_order(step2_pair, step2_side, amount_intermediate)
+
             if not step2_result.get('success'):
                 self.logger.error(f"❌ Step 2 failed: {step2_result.get('error', 'Unknown error')}")
                 await self._log_failed_trade(opportunity, trade_id, 2, step2_result.get('error', 'Step 2 failed'))
@@ -249,96 +268,29 @@ class TradeExecutor:
                 await self._log_failed_trade(opportunity, trade_id, 2, f"Unrealistic {quote_currency} amount: {actual_quote_amount}")
                 return False
             
-            # Dynamic Market Analysis for Step 3 timing
-            self.logger.info("🧠 DYNAMIC MONITORING: Analyzing market trend for adaptive waiting strategy")
-            
+            # 🚀 INSTANT EXECUTION STRATEGY: NO WAITING - CAPTURE PROFITS IMMEDIATELY!
+            self.logger.info("⚡ INSTANT EXECUTION MODE: Executing Step 3 immediately to capture profits!")
+
+            expected_profit_pct = getattr(opportunity, 'profit_percentage', 0)
+            self.logger.info(f"💰 Expected Profit: {expected_profit_pct:.4f}% - EXECUTING NOW!")
+
             try:
-                # CRITICAL FIX: Check if opportunity has high profit potential
-                expected_profit_pct = getattr(opportunity, 'profit_percentage', 0)
-                
-                if expected_profit_pct >= 0.8:  # High profit opportunities (≥0.8%)
-                    self.logger.info(f"🚀 HIGH PROFIT OPPORTUNITY: {expected_profit_pct:.4f}% - EXECUTING IMMEDIATELY!")
-                    self.logger.info("⚡ INSTANT EXECUTION: No waiting - capturing profit before price moves")
-                    
-                    # Execute Step 3 immediately for high-profit opportunities
-                    step3_success = await self._execute_step3_immediate(
-                        exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
-                    )
-                    
-                    if step3_success:
-                        await self._log_successful_trade(opportunity, trade_id, trade_amount)
-                        return True
-                    else:
-                        await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
-                        return False
-                
-                elif expected_profit_pct >= 0.5:  # Medium profit opportunities (0.5-0.8%)
-                    self.logger.info(f"💎 MEDIUM PROFIT OPPORTUNITY: {expected_profit_pct:.4f}% - FAST EXECUTION!")
-                    self.logger.info("⚡ FAST MODE: 2-minute maximum wait to secure profits")
-                    
-                    # Fast execution with minimal waiting
-                    waiting_params = {
-                        'trend': 'FAST_PROFIT',
-                        'wait_time': 120.0,  # 2 minutes maximum
-                        'profit_target': 0.08,  # +0.08% quick target
-                        'stop_loss': -0.15,     # -0.15% tight stop
-                        'confidence': 0.9,
-                        'pair_type': 'fast_execution'
-                    }
-                    
-                    step3_success = await self._execute_step3_with_adaptive_waiting(
-                        exchange, quote_currency, base_currency, actual_quote_amount, 
-                        waiting_params, trade_id
-                    )
-                    
-                    if step3_success:
-                        await self._log_successful_trade(opportunity, trade_id, trade_amount)
-                        return True
-                    else:
-                        await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
-                        return False
-                
-                else:  # Lower profit opportunities (0.4-0.5%)
-                    # Get dynamic waiting parameters with null safety
-                    waiting_params = await self._get_dynamic_waiting_params_safe(exchange, quote_currency, base_currency)
-                    
-                    if waiting_params:
-                        market_trend = waiting_params['trend']
-                        wait_time = waiting_params['wait_time']
-                        profit_target = waiting_params['profit_target']
-                        stop_loss = waiting_params['stop_loss']
-                        
-                        self.logger.info(f"🎯 DYNAMIC STRATEGY: {market_trend} market detected")
-                        self.logger.info(f"   Wait Time: {wait_time}s")
-                        self.logger.info(f"   Profit Target: +{profit_target:.2f}%")
-                        self.logger.info(f"   Stop Loss: {stop_loss:.2f}%")
-                        
-                        # Execute Step 3 with adaptive waiting
-                        step3_success = await self._execute_step3_with_adaptive_waiting(
-                            exchange, quote_currency, base_currency, actual_quote_amount, 
-                            waiting_params, trade_id
-                        )
-                        
-                        if step3_success:
-                            await self._log_successful_trade(opportunity, trade_id, trade_amount)
-                            return True
-                        else:
-                            await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
-                            return False
-                    else:
-                        # Fallback to immediate execution
-                        self.logger.warning("⚠️ Dynamic analysis failed, executing Step 3 immediately")
-                        return await self._execute_step3_immediate(
-                            exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
-                        )
-                    
-            except Exception as dynamic_error:
-                self.logger.error(f"❌ Dynamic analysis error: {dynamic_error}")
-                self.logger.info("🔄 Falling back to immediate Step 3 execution")
-                
-                return await self._execute_step3_immediate(
+                # Execute Step 3 immediately - NO WAITING!
+                step3_success = await self._execute_step3_immediate(
                     exchange, quote_currency, base_currency, actual_quote_amount, trade_id, opportunity
                 )
+
+                if step3_success:
+                    await self._log_successful_trade(opportunity, trade_id, trade_amount)
+                    return True
+                else:
+                    await self._log_failed_trade(opportunity, trade_id, 3, "Step 3 execution failed")
+                    return False
+
+            except Exception as execution_error:
+                self.logger.error(f"❌ Step 3 execution error: {execution_error}")
+                await self._log_failed_trade(opportunity, trade_id, 3, str(execution_error))
+                return False
                 
         except Exception as e:
             self.logger.error(f"❌ Critical error in dynamic triangle trade: {e}")
