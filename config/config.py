@@ -31,9 +31,10 @@ class Config:
             'enabled': bool(api_key and api_secret)
         }
 
-    # Core Trading Parameters
-    MIN_PROFIT_PERCENTAGE: float = 0.4    # Fixed to 0.4% as requested
-    MIN_PROFIT_THRESHOLD: float = 0.4      # Fixed at 0.4% as requested
+    # Core Trading Parameters - Optimized for KCS fee discount (0.08% per trade)
+    # Total costs: Fees 0.24% + Slippage ~0.3% = 0.54% minimum needed
+    MIN_PROFIT_PERCENTAGE: float = 0.6    # 0.6% profit - 0.54% costs = 0.06% net profit
+    MIN_PROFIT_THRESHOLD: float = 0.6      # Minimum 0.6% to beat fees + slippage
     MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (optimized for multi-exchange)
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
     # Triangle generation limits

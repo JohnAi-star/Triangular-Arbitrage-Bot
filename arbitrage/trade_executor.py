@@ -241,11 +241,16 @@ class TradeExecutor:
             step2_received = float(step2_result.get('filled', 0))
             step2_cost = float(step2_result.get('cost', 0))
             
-            # CRITICAL FIX: For KuCoin, 'filled' returns the INPUT amount (LRC), 'cost' returns OUTPUT amount (BTC)
+            # CRITICAL FIX: Handle BUY vs SELL for KuCoin
             if exchange.exchange_id == 'kucoin':
-                # KuCoin: 'cost' field contains the BTC amount we received
-                actual_quote_amount = step2_cost
-                self.logger.info(f"🔧 KuCoin Step 2 amounts: filled={step2_received:.8f} {intermediate_currency}, cost={step2_cost:.8f} {quote_currency}")
+                if step2_side == 'buy':
+                    # BUY: 'filled' = what we RECEIVED (quote currency), 'cost' = what we SPENT (intermediate)
+                    actual_quote_amount = step2_received
+                    self.logger.info(f"🔧 KuCoin Step 2 BUY: spent {step2_cost:.8f} {intermediate_currency}, received {step2_received:.8f} {quote_currency}")
+                else:
+                    # SELL: 'filled' = what we SOLD (intermediate), 'cost' = what we RECEIVED (quote currency)
+                    actual_quote_amount = step2_cost
+                    self.logger.info(f"🔧 KuCoin Step 2 SELL: sold {step2_received:.8f} {intermediate_currency}, received {step2_cost:.8f} {quote_currency}")
             else:
                 # Other exchanges: use filled amount
                 actual_quote_amount = step2_received if step2_received > 0 else step2_cost
