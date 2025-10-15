@@ -327,36 +327,7 @@ class UnifiedExchange(BaseExchange):
             # CRITICAL FIX: Round quantity to proper decimal precision for KuCoin
             if self.exchange_id == 'kucoin':
                 qty = await self._round_to_kucoin_precision(symbol, qty)
-
-                # CRITICAL: Check if trade was blocked due to impossible requirements
-                if qty < 0:
-                    self.logger.error(f"❌ Trade blocked: {symbol} requirements cannot be met")
-                    return {
-                        'success': False,
-                        'status': 'failed',
-                        'error': f'Trade blocked: insufficient quantity for {symbol} minimum requirements',
-                        'symbol': symbol,
-                        'side': side,
-                        'amount': qty
-                    }
-
-                # CRITICAL: Additional validation for step 3 stablecoin pairs
-                if 'USDC/USDT' in symbol or 'USDT/USDC' in symbol:
-                    # Ensure USDC/USDT orders meet KuCoin requirements
-                    if qty < 0.01:
-                        self.logger.error(f"❌ USDC/USDT order too small: {qty:.8f} < 0.01 minimum")
-                        return {
-                            'success': False,
-                            'status': 'failed',
-                            'error': f'Order size {qty:.8f} below minimum 0.01 for {symbol}',
-                            'symbol': symbol,
-                            'side': side,
-                            'amount': qty
-                        }
-                    
-                    # Round to exactly 2 decimal places for USDC/USDT
-                    qty = round(qty, 2)
-                    self.logger.info(f"🔧 USDC/USDT precision fix: {qty:.2f}")
+                # Silent precision for speed
             
             # Silent order for maximum speed
             
@@ -387,21 +358,8 @@ class UnifiedExchange(BaseExchange):
             elif self.exchange_id == 'kucoin':
                 # INSTANT: Use current time with minimal buffer
                 current_timestamp = int(time.time() * 1000) + 500  # 0.5-second buffer for speed
-
+                
                 if side.lower() == 'buy':
-                    # CRITICAL FIX: Determine funds precision based on quote currency
-                    if 'USDT' in symbol or 'USDC' in symbol:
-                        # Stablecoin quote: 2 decimal places
-                        funds_formatted = f"{qty:.2f}"
-                    elif 'BTC' in symbol and symbol.endswith('/BTC'):
-                        # BTC quote: 8 decimal places
-                        funds_formatted = f"{qty:.8f}"
-                    else:
-                        # Default: 8 decimal places
-                        funds_formatted = f"{qty:.8f}"
-
-                    self.logger.info(f"🔧 KuCoin BUY order: {symbol} funds={funds_formatted}")
-
                     # INSTANT: Direct KuCoin buy order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
@@ -410,20 +368,11 @@ class UnifiedExchange(BaseExchange):
                         amount=None,  # Don't specify amount for market buy
                         price=None,
                         params={
-                            'funds': funds_formatted,  # CRITICAL FIX: Use 'funds' for quote currency amount to spend
+                            'funds': f"{qty:.2f}",  # CRITICAL FIX: Use 'funds' for USDT amount to spend
                             'timestamp': current_timestamp
                         }
                     )
                 else:
-                    # CRITICAL FIX: Handle USDC/USDT sell orders with proper precision
-                    if symbol in ['USDC/USDT', 'USDT/USDC']:
-                        # For stablecoin pairs, use exactly 2 decimal places
-                        formatted_qty = f"{qty:.2f}"
-                        self.logger.info(f"🔧 Stablecoin sell order: {symbol} quantity={formatted_qty}")
-                    else:
-                        # For other pairs, use 8 decimal places
-                        formatted_qty = f"{qty:.8f}"
-                    
                     # INSTANT: Direct KuCoin sell order format
                     order = await self.exchange.create_order(
                         symbol=symbol,
@@ -432,7 +381,7 @@ class UnifiedExchange(BaseExchange):
                         amount=qty,
                         price=None,
                         params={
-                            'size': formatted_qty,  # CRITICAL FIX: Use proper precision formatting
+                            'size': f"{qty:.8f}",  # CRITICAL FIX: Proper formatting for sell quantity
                             'timestamp': current_timestamp
                         }
                     )
@@ -537,14 +486,6 @@ class UnifiedExchange(BaseExchange):
                     current_timestamp = int(time.time() * 1000) + 1000  # 1-second buffer
                     
                     if side.lower() == 'buy':
-                        # Determine funds precision for retry
-                        if 'USDT' in symbol or 'USDC' in symbol:
-                            funds_fmt = f"{qty:.2f}"
-                        elif 'BTC' in symbol and symbol.endswith('/BTC'):
-                            funds_fmt = f"{qty:.8f}"
-                        else:
-                            funds_fmt = f"{qty:.8f}"
-
                         retry_order = await self.exchange.create_order(
                             symbol=symbol,
                             type='market',
@@ -552,7 +493,7 @@ class UnifiedExchange(BaseExchange):
                             amount=None,
                             price=None,
                             params={
-                                'funds': funds_fmt,
+                                'funds': f"{qty:.2f}",
                                 'timestamp': current_timestamp
                             }
                         )
@@ -655,34 +596,14 @@ class UnifiedExchange(BaseExchange):
                 'DOT/USDT': 4, 'ADA/USDT': 4, 'SOL/USDT': 4,
                 'KCS/USDT': 4, 'MATIC/USDT': 4, 'AVAX/USDT': 4,
                 
-                # CRITICAL: USDC/USDT precision (step 3 failures)
-                'USDC/USDT': 2,  # USDC/USDT requires 2 decimal places only
-                'USDT/USDC': 2,  # Reverse pair
-                'BUSD/USDT': 2,  # Other stablecoin pairs
-                'USDT/BUSD': 2,
-                'TUSD/USDT': 2,
-                'USDT/TUSD': 2,
-                
-                # Cross pairs - CRITICAL: Higher minimum quantities for BTC pairs
+                # Cross pairs - 6 decimal places
                 'DOT/KCS': 6, 'ETH/BTC': 6, 'BNB/BTC': 6,
                 'ADA/BTC': 6, 'SOL/BTC': 6, 'DOT/BTC': 6,
                 'KCS/BTC': 6, 'AR/BTC': 6, 'INJ/BTC': 6,
-                'SCRT/BTC': 6, 'VRA/BTC': 6, 'TWT/BTC': 6,
-                'LRC/BTC': 6, 'ANKR/BTC': 6, 'RLC/BTC': 6,
-                'SNX/BTC': 6, 'CTSI/BTC': 6, 'LUNA/BTC': 6,
-                'STORJ/BTC': 6, 'ZRX/BTC': 6, 'TFUEL/BTC': 6,
-                'COTI/BTC': 6, 'COTI/USDT': 4,
                 
                 # Small value pairs - 2-4 decimal places
                 'AR/USDT': 4, 'INJ/USDT': 4, 'TFUEL/USDT': 4,
                 'TRX/USDT': 4, 'DOGE/USDT': 4, 'XRP/USDT': 4,
-                'VRA/USDT': 4, 'SCRT/USDT': 4, 'TWT/USDT': 4,
-                'LRC/USDT': 4, 'ANKR/USDT': 4, 'RLC/USDT': 4,
-                'SNX/USDT': 4, 'CTSI/USDT': 4, 'LUNA/USDT': 4,
-                
-                # Cross stablecoin pairs - special precision
-                'VRA/USDC': 6, 'SCRT/USDC': 6, 'TWT/USDC': 6,
-                'LRC/USDC': 6, 'ANKR/USDC': 6, 'RLC/USDC': 6,
                 
                 # Default precision
                 'default': 6
@@ -694,62 +615,17 @@ class UnifiedExchange(BaseExchange):
             # Round to the required precision
             rounded_qty = round(quantity, precision)
             
-            # CRITICAL FIX: Apply symbol-specific minimum quantities with BTC pair handling
-            min_quantities = {
-                'USDC/USDT': 0.01,    # USDC/USDT minimum 0.01 USDC
-                'USDT/USDC': 0.01,    # Reverse pair
-                'BUSD/USDT': 0.01,    # Other stablecoin minimums
-                'BTC/USDT': 0.00000001,  # BTC minimum
-                'ETH/USDT': 0.000001,    # ETH minimum
-                
-                # CRITICAL: BTC cross-pair minimums (these were causing failures)
-                'SNX/BTC': 0.01,      # SNX/BTC minimum 0.01 SNX
-                'CTSI/BTC': 0.01,     # CTSI/BTC minimum 0.01 CTSI
-                'SCRT/BTC': 0.01,     # SCRT/BTC minimum 0.01 SCRT
-                'STORJ/BTC': 0.01,    # STORJ/BTC minimum 0.01 STORJ
-                'ZRX/BTC': 0.01,      # ZRX/BTC minimum 0.01 ZRX
-                'LRC/BTC': 0.01,      # LRC/BTC minimum 0.01 LRC
-                'TFUEL/BTC': 0.01,    # TFUEL/BTC minimum 0.01 TFUEL
-                'VRA/BTC': 0.01,      # VRA/BTC minimum 0.01 VRA
-                'ANKR/BTC': 0.01,     # ANKR/BTC minimum 0.01 ANKR
-                'RLC/BTC': 0.01,      # RLC/BTC minimum 0.01 RLC
-                'TWT/BTC': 0.01,      # TWT/BTC minimum 0.01 TWT
-                'AR/BTC': 0.01,       # AR/BTC minimum 0.01 AR
-                'INJ/BTC': 0.01,      # INJ/BTC minimum 0.01 INJ
-                'LUNA/BTC': 0.01,     # LUNA/BTC minimum 0.01 LUNA
-                'COTI/BTC': 0.01,     # COTI/BTC minimum 0.01 COTI
-                
-                'default': 0.0001       # Default minimum
-            }
-            
-            min_qty = min_quantities.get(symbol, min_quantities['default'])
-            
-            # CRITICAL FIX: Validate trade viability - NEVER override with minimum we don't have!
-            if rounded_qty < min_qty:
-                # Check if this is a BTC cross-pair that would fail
-                if '/BTC' in symbol and min_qty >= 0.01:
-                    self.logger.error(f"❌ TRADE IMPOSSIBLE: {symbol} needs {min_qty} {symbol.split('/')[0]} minimum")
-                    self.logger.error(f"   We only have: {quantity:.8f} {symbol.split('/')[1]}")
-                    self.logger.error(f"   This trade CANNOT execute - BLOCKING!")
-                    # Return -1 to signal this trade should be blocked
-                    return -1.0
-                else:
-                    # For non-BTC pairs, use minimum
-                    rounded_qty = min_qty
-                    self.logger.warning(f"⚠️ Quantity below minimum for {symbol}: {quantity:.8f} → {rounded_qty:.8f}")
+            # Ensure minimum quantity (KuCoin minimum is usually 0.0001)
+            if rounded_qty < 0.0001:
+                rounded_qty = 0.0001
             
             self.logger.info(f"🔧 KuCoin precision: {symbol} {quantity:.8f} → {rounded_qty:.8f} ({precision} decimals)")
             return rounded_qty
             
         except Exception as e:
             self.logger.error(f"Error rounding quantity for {symbol}: {e}")
-            # Fallback: round to appropriate precision based on symbol type
-            if 'USDC' in symbol and 'USDT' in symbol:
-                return round(quantity, 2)  # Stablecoin pairs need 2 decimals
-            elif 'BTC' in symbol:
-                return round(quantity, 8)  # BTC pairs need 8 decimals
-            else:
-                return round(quantity, 6)  # Default 6 decimals
+            # Fallback: round to 6 decimal places
+            return round(quantity, 6)
 
     async def _wait_for_order_completion(self, order_id: str, symbol: str, timeout_seconds: int = 30) -> Optional[Dict[str, Any]]:
         """Standard order completion monitoring (fallback)"""

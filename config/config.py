@@ -10,6 +10,7 @@ class Config:
 
     # Multi-Exchange Configuration
     EXCHANGE_CREDENTIALS = {}
+    EXCHANGES = {}  # Alias for compatibility
 
     for exchange_id in SUPPORTED_EXCHANGES.keys():
         # Handle Gate.io special case
@@ -19,24 +20,38 @@ class Config:
         else:
             api_key = os.getenv(f'{exchange_id.upper()}_API_KEY', '')
             api_secret = os.getenv(f'{exchange_id.upper()}_API_SECRET', '')
-        
-        passphrase = os.getenv(f'{exchange_id.upper()}_PASSPHRASE', '')  # For KuCoin
-        sandbox = os.getenv(f'{exchange_id.upper()}_SANDBOX', 'false').lower() == 'true'
 
-        EXCHANGE_CREDENTIALS[exchange_id] = {
+        passphrase = os.getenv(f'{exchange_id.upper()}_PASSPHRASE', '')  # For KuCoin
+        api_passphrase = passphrase  # Alias
+        sandbox = os.getenv(f'{exchange_id.upper()}_SANDBOX', 'false').lower() == 'true'
+        is_sandbox = sandbox  # Alias
+
+        creds = {
             'api_key': api_key,
             'api_secret': api_secret,
             'passphrase': passphrase,
+            'api_passphrase': api_passphrase,
             'sandbox': sandbox,
+            'is_sandbox': is_sandbox,
             'enabled': bool(api_key and api_secret)
         }
 
-    # Core Trading Parameters - Optimized for KCS fee discount (0.08% per trade)
-    # Total costs: Fees 0.24% + Slippage ~0.3% = 0.54% minimum needed
-    MIN_PROFIT_PERCENTAGE: float = 0.6    # 0.6% profit - 0.54% costs = 0.06% net profit
-    MIN_PROFIT_THRESHOLD: float = 0.6      # Minimum 0.6% to beat fees + slippage
-    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade (optimized for multi-exchange)
+        EXCHANGE_CREDENTIALS[exchange_id] = creds
+        EXCHANGES[exchange_id] = creds  # Alias for compatibility
+
+    # Core Trading Parameters
+    MIN_PROFIT_PERCENTAGE: float = 0.4    # Fixed to 0.4% as requested
+    MIN_PROFIT_THRESHOLD: float = 0.4      # Fixed at 0.4% as requested
+    MAX_TRADE_AMOUNT: float = float(os.getenv('MAX_TRADE_AMOUNT', '20'))               # $20 USDT per trade
+    TRADE_AMOUNT: float = float(os.getenv('TRADE_AMOUNT', '20'))  # Default trade amount
     MAX_POSITION_SIZE_USD: float = float(os.getenv('MAX_POSITION_SIZE_USD', '1000'))
+
+    # Spot-Futures Arbitrage Parameters
+    SPOT_FUTURES_MIN_SPREAD: float = float(os.getenv('SPOT_FUTURES_MIN_SPREAD', '0.5'))  # 0.5% minimum spread
+    SPOT_FUTURES_CLOSE_SPREAD: float = float(os.getenv('SPOT_FUTURES_CLOSE_SPREAD', '0.1'))  # Close when spread < 0.1%
+    MAX_CONCURRENT_TRADES: int = int(os.getenv('MAX_CONCURRENT_TRADES', '3'))  # Max open positions
+    SCAN_INTERVAL: float = float(os.getenv('SCAN_INTERVAL', '1.0'))  # Scan every 1 second
+    AUTO_TRADE_ENABLED: bool = os.getenv('AUTO_TRADE_ENABLED', 'false').lower() == 'true'
     # Triangle generation limits
     REQUIRE_USDT_ANCHOR: bool = True
     MAX_TRIANGLES: int = int(os.getenv('MAX_TRIANGLES', '300'))  # Reduced for better performance

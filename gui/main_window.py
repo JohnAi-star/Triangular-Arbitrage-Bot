@@ -116,7 +116,7 @@ class ArbitrageBotGUI:
         
         # Main window
         self.root = ctk.CTk()
-        self.root.title("Triangular Arbitrage Bot - Multi-Exchange")
+        self.root.title("Spot-Futures Arbitrage Bot - KuCoin")
         self.root.geometry("1400x900")
         
         # Create main frames
@@ -220,21 +220,21 @@ class ArbitrageBotGUI:
         
         ctk.CTkLabel(opportunities_frame, text="Arbitrage Opportunities", font=("Arial", 16, "bold")).pack(pady=5)
         
-        # Create treeview for opportunities
-        columns = ("Exchange", "Triangle", "Profit %", "Profit Amount", "Volume", "Action")
+        # Create treeview for spot-futures opportunities
+        columns = ("Symbol", "Direction", "Spot Price", "Futures Price", "Spread %", "Action")
         self.opportunities_tree = ttk.Treeview(opportunities_frame, columns=columns, show="headings", height=15)
-        
+
         # Configure columns
         for col in columns:
             self.opportunities_tree.heading(col, text=col)
-        
+
         # Set specific column widths and alignments
-        self.opportunities_tree.column("Exchange", width=80, anchor="center")
-        self.opportunities_tree.column("Triangle", width=250, anchor="w")  # Wider for paths
-        self.opportunities_tree.column("Profit %", width=80, anchor="e")
-        self.opportunities_tree.column("Profit Amount", width=100, anchor="e")
-        self.opportunities_tree.column("Volume", width=80, anchor="e")
-        self.opportunities_tree.column("Action", width=80, anchor="center")
+        self.opportunities_tree.column("Symbol", width=120, anchor="center")
+        self.opportunities_tree.column("Direction", width=180, anchor="w")
+        self.opportunities_tree.column("Spot Price", width=120, anchor="e")
+        self.opportunities_tree.column("Futures Price", width=120, anchor="e")
+        self.opportunities_tree.column("Spread %", width=100, anchor="e")
+        self.opportunities_tree.column("Action", width=100, anchor="center")
         
         # Scrollbar for treeview
         scrollbar = ttk.Scrollbar(opportunities_frame, orient="vertical", command=self.opportunities_tree.yview)
@@ -661,64 +661,48 @@ class ArbitrageBotGUI:
             return False
     
     def update_opportunities_display(self):
-        """Update the opportunities treeview with proper triangle path formatting."""
+        """Update the opportunities treeview for spot-futures opportunities."""
         try:
             # Clear existing items
             for item in self.opportunities_tree.get_children():
                 self.opportunities_tree.delete(item)
-            
-            # Add current opportunities
+
+            # Add current spot-futures opportunities
             for i, opportunity in enumerate(self.opportunities[:Config.MAX_OPPORTUNITIES_DISPLAY]):
-                # Handle both ArbitrageOpportunity and ArbitrageResult objects
-                if hasattr(opportunity, 'exchange'):
-                    exchange = opportunity.exchange
-                elif hasattr(opportunity, 'name'):
-                    exchange = opportunity.name
-                else:
-                    exchange = 'Unknown'
-                
-                # Format the triangle path properly
-                if hasattr(opportunity, 'triangle_path'):
-                    if isinstance(opportunity.triangle_path, list):
-                        # For USDT-based triangles: Always show as 4-step cycle
-                        if len(opportunity.triangle_path) >= 3:
-                            # 3 currencies: USDT, Currency1, Currency2 → show as USDT → Currency1 → Currency2 → USDT
-                            path = f"{opportunity.triangle_path[0]} → {opportunity.triangle_path[1]} → {opportunity.triangle_path[2]} → {opportunity.triangle_path[0]}"
-                        else:
-                            path = ' → '.join(opportunity.triangle_path)
+                # Extract spot-futures opportunity data
+                symbol = getattr(opportunity, 'symbol', 'Unknown')
+                spot_price = getattr(opportunity, 'spot_price', 0)
+                futures_price = getattr(opportunity, 'futures_price', 0)
+                spread_pct = getattr(opportunity, 'spread_percentage', 0)
+                direction = getattr(opportunity, 'direction', None)
+
+                # Format direction text
+                if direction:
+                    if hasattr(direction, 'value'):
+                        direction_text = direction.value.replace('_', ' ').title()
                     else:
-                        path = str(opportunity.triangle_path)
+                        direction_text = str(direction).replace('_', ' ').title()
                 else:
-                    path = 'Unknown Path'
-                
-                profit_pct = getattr(opportunity, 'profit_percentage', 0)
-                profit_amt = getattr(opportunity, 'profit_amount', 0)
-                initial_amt = getattr(opportunity, 'initial_amount', 0)
-                
-                # Check if profitable
-                is_profitable = False
-                if hasattr(opportunity, 'is_profitable'):
-                    is_profitable = opportunity.is_profitable
-                elif hasattr(opportunity, 'net_profit_percent'):
-                    is_profitable = opportunity.net_profit_percent >= 0.4
-                else:
-                    is_profitable = profit_pct >= 0.4
-                
+                    direction_text = 'Unknown'
+
+                # Check if tradeable
+                is_tradeable = getattr(opportunity, 'is_tradeable', False)
+
                 values = (
-                    exchange,
-                    path,
-                    f"{'+' if profit_pct >= 0 else ''}{profit_pct:.4f}%",
-                    f"${'+' if profit_amt >= 0 else ''}{profit_amt:.4f}",
-                    f"${initial_amt:.2f}",
-                    "Execute"
+                    symbol,
+                    direction_text,
+                    f"${spot_price:.2f}",
+                    f"${futures_price:.2f}",
+                    f"{'+' if spread_pct >= 0 else ''}{spread_pct:.4f}%",
+                    "Execute" if is_tradeable else "Monitor"
                 )
-                
-                # Color code by profitability with 3 levels
-                if profit_pct >= 0.4:
-                    tags = ("green",)  # Green for ≥0.4%
+
+                # Color code by spread
+                if abs(spread_pct) >= 0.5:
+                    tags = ("green",)  # Green for ≥0.5% spread
                 else:
-                    tags = ("red",)  # Red for 0-0.4%
-                
+                    tags = ("red",)  # Red for <0.5% spread
+
                 self.opportunities_tree.insert("", "end", values=values, tags=tags)
             
             # Configure tags with 2-color system
