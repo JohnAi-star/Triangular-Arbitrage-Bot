@@ -9,11 +9,10 @@ class SpotFuturesDetector:
         self.futures_exchange = futures_exchange
         self.logger = logging.getLogger(__name__)
         
-        # Major crypto pairs for spot-futures arbitrage
+        # Major crypto pairs for spot-futures arbitrage (removed EOS - not available)
         self.symbols = [
-            'BTC-USDT', 'ETH-USDT', 'ADA-USDT', 'DOT-USDT', 
-            'LINK-USDT', 'LTC-USDT', 'BCH-USDT', 'XRP-USDT',
-            'EOS-USDT', 'TRX-USDT'
+            'BTC-USDT', 'ETH-USDT', 'ADA-USDT', 'DOT-USDT',
+            'LINK-USDT', 'LTC-USDT', 'BCH-USDT', 'XRP-USDT', 'TRX-USDT'
         ]
         
     async def get_spot_price(self, symbol: str) -> Optional[float]:

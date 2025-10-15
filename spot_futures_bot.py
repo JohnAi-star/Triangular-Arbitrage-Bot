@@ -9,6 +9,10 @@ import sys
 import os
 from datetime import datetime
 from typing import Dict, List
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

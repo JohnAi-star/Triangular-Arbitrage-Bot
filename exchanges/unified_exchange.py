@@ -58,9 +58,10 @@ class UnifiedExchange(BaseExchange):
 
     async def connect(self) -> bool:
         try:
-            if not await self._check_internet_connectivity():
-                self.logger.error(f"No internet connection for {self.exchange_id}")
-                return False
+            # Skip internet connectivity check - often gives false negatives
+            # The actual API call will verify connectivity
+            # if not await self._check_internet_connectivity():
+            #     self.logger.warning(f"Internet connectivity check failed for {self.exchange_id}, but continuing...")
 
             # Handle Gate.io special case
             if self.exchange_id == 'gate':
