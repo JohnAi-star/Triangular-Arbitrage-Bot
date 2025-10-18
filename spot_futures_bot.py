@@ -234,10 +234,10 @@ CONFIG = {
     'futures_api_key': os.getenv('KUCOIN_API_KEY', ''),
     'futures_api_secret': os.getenv('KUCOIN_API_SECRET', ''),
     'futures_api_passphrase': os.getenv('KUCOIN_PASSPHRASE', ''),
-    'min_profit_threshold': 0.5,
+    'min_profit_threshold': 0.3,
     'trade_amount': 20.0,
     'check_interval': 1.0,
-    'auto_trade': False,
+    'auto_trade': True,
     'sandbox': False
 }
 

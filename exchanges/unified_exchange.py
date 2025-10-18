@@ -102,8 +102,7 @@ class UnifiedExchange(BaseExchange):
             if self.exchange_id == 'kucoin':
                 exchange_config['options'].update({
                     'adjustForTimeDifference': True,
-                    'recvWindow': 60000,  # 60 second window for reliability
-                    'timeDifference': 5000   # 5-second buffer for safety
+                    'recvWindow': 10000  # 10 second window for reliability
                 })
                 self.logger.info("🕒 KuCoin timestamp synchronization enabled")
 
@@ -162,25 +161,50 @@ class UnifiedExchange(BaseExchange):
     async def _synchronize_kucoin_time(self):
         """Synchronize time with KuCoin server to prevent timestamp errors"""
         try:
-            # INSTANT: Use system time with minimal buffer for maximum speed
-            current_time = int(time.time() * 1000)
-            self.server_time_offset = 1000  # 1-second buffer for safety
+            # Perform multiple time sync attempts for accuracy
+            offsets = []
+            for i in range(3):
+                request_start = time.time() * 1000
+                server_time_response = await self.exchange.publicGetTimestamp()
+                request_end = time.time() * 1000
+
+                round_trip = request_end - request_start
+                server_time = int(server_time_response['data'])
+                local_time = int((request_start + request_end) / 2)
+                offset = server_time - local_time
+                offsets.append(offset)
+
+                if i < 2:
+                    await asyncio.sleep(0.1)
+
+            # Use median offset for reliability
+            offsets.sort()
+            self.server_time_offset = offsets[1]
             self.last_time_sync = time.time()
-            
-            # Apply minimal buffer to exchange
+
+            self.logger.info(f"🕒 KuCoin time sync: offset={self.server_time_offset}ms (3 samples: {offsets})")
+
+            # Apply to CCXT with nonce adjustment
             if hasattr(self.exchange, 'options'):
-                self.exchange.options['timeDifference'] = 1000  # 1-second buffer
+                self.exchange.options['timeDifference'] = self.server_time_offset
                 self.exchange.options['adjustForTimeDifference'] = True
-            
+
+            # Also override nonce generation to use synchronized time
+            original_nonce = self.exchange.nonce
+            def synchronized_nonce():
+                return int(time.time() * 1000) + self.server_time_offset
+            self.exchange.nonce = synchronized_nonce
+
+            self.logger.info(f"✅ KuCoin time synchronized with {self.server_time_offset}ms offset")
+
         except Exception as e:
-            # Use minimal buffer as fallback
-            self.server_time_offset = 1000  # 1-second buffer for speed
+            self.server_time_offset = 0
             self.last_time_sync = time.time()
-            
-            # Apply minimal buffer
+            self.logger.warning(f"⚠️ Could not sync KuCoin time: {e}")
+
             if hasattr(self.exchange, 'options'):
-                self.exchange.options['timeDifference'] = 1000  # 1-second buffer
                 self.exchange.options['adjustForTimeDifference'] = True
+                self.exchange.options['recvWindow'] = 60000
 
     async def _ensure_time_sync(self):
         """Ensure time is synchronized before critical operations"""
@@ -357,9 +381,7 @@ class UnifiedExchange(BaseExchange):
                     # For market SELL orders, use standard format
                     order = await self.exchange.create_market_order(symbol, side, qty)
             elif self.exchange_id == 'kucoin':
-                # INSTANT: Use current time with minimal buffer
-                current_timestamp = int(time.time() * 1000) + 500  # 0.5-second buffer for speed
-                
+                # CCXT will automatically handle timestamp with adjustForTimeDifference
                 if side.lower() == 'buy':
                     # INSTANT: Direct KuCoin buy order format
                     order = await self.exchange.create_order(
@@ -369,8 +391,7 @@ class UnifiedExchange(BaseExchange):
                         amount=None,  # Don't specify amount for market buy
                         price=None,
                         params={
-                            'funds': f"{qty:.2f}",  # CRITICAL FIX: Use 'funds' for USDT amount to spend
-                            'timestamp': current_timestamp
+                            'funds': f"{qty:.2f}"  # Use 'funds' for USDT amount to spend
                         }
                     )
                 else:
@@ -382,8 +403,7 @@ class UnifiedExchange(BaseExchange):
                         amount=qty,
                         price=None,
                         params={
-                            'size': f"{qty:.8f}",  # CRITICAL FIX: Proper formatting for sell quantity
-                            'timestamp': current_timestamp
+                            'size': f"{qty:.8f}"  # Proper formatting for sell quantity
                         }
                     )
             else:
@@ -483,9 +503,10 @@ class UnifiedExchange(BaseExchange):
             # If timestamp error, try to re-sync and retry once
             if self.exchange_id == 'kucoin' and 'KC-API-TIMESTAMP' in str(e):
                 try:
-                    # INSTANT RETRY: Use minimal buffer for speed
-                    current_timestamp = int(time.time() * 1000) + 1000  # 1-second buffer
-                    
+                    self.logger.warning("⚠️ Timestamp error - re-syncing time and retrying...")
+                    # Re-sync time and retry
+                    await self._synchronize_kucoin_time()
+
                     if side.lower() == 'buy':
                         retry_order = await self.exchange.create_order(
                             symbol=symbol,
@@ -494,8 +515,7 @@ class UnifiedExchange(BaseExchange):
                             amount=None,
                             price=None,
                             params={
-                                'funds': f"{qty:.2f}",
-                                'timestamp': current_timestamp
+                                'funds': f"{qty:.2f}"
                             }
                         )
                     else:
@@ -506,17 +526,16 @@ class UnifiedExchange(BaseExchange):
                             amount=qty,
                             price=None,
                             params={
-                                'size': f"{qty:.8f}",
-                                'timestamp': current_timestamp
+                                'size': f"{qty:.8f}"
                             }
                         )
-                    
+
                     if retry_order and retry_order.get('id'):
-                        # INSTANT: Silent retry success
-                        
+                        self.logger.info("✅ Retry succeeded after time sync")
+
                         # Wait for completion
                         final_order = await self._wait_for_order_completion_instant(retry_order['id'], symbol, timeout_seconds=8)
-                        
+
                         if final_order:
                             return {
                                 'success': True,
@@ -531,9 +550,9 @@ class UnifiedExchange(BaseExchange):
                                 'amount': qty,
                                 'retry_success': True
                             }
-                        
+
                 except Exception as retry_error:
-                    pass  # Silent retry failure for speed
+                    self.logger.error(f"❌ Retry failed: {retry_error}")
             
             return {
                 'success': False,
@@ -689,14 +708,20 @@ class UnifiedExchange(BaseExchange):
         try:
             self.logger.info(f"💰 Fetching REAL account balance from {self.exchange_id}...")
             balance = await self.exchange.fetch_balance()
-            
+
             # Log the full balance object for debugging
             self.logger.debug(f"📊 Raw balance response keys: {list(balance.keys())}")
-            
+
+            # For KuCoin, check if we need spot vs trading account
+            if self.exchange_id == 'kucoin' and 'info' in balance:
+                self.logger.debug(f"📊 KuCoin balance info type: {type(balance.get('info'))}")
+                if isinstance(balance.get('info'), dict):
+                    self.logger.debug(f"📊 KuCoin balance info keys: {list(balance['info'].keys())}")
+
             # Handle both dict and direct value formats
             result = {}
             for currency, info in balance.items():
-                if currency in ['info', 'timestamp', 'datetime']:
+                if currency in ['info', 'timestamp', 'datetime', 'free', 'used', 'total']:
                     continue
                 if isinstance(info, dict):
                     free_balance = float(info.get('free', 0.0))
@@ -708,24 +733,26 @@ class UnifiedExchange(BaseExchange):
                 elif isinstance(info, (int, float)) and float(info) > 0:
                     result[currency] = float(info)
                     self.logger.debug(f"💰 REAL BALANCE - {currency}: {float(info):.8f}")
-            
+
             # Get current prices for USD conversion
             total_usd_estimate = await self._calculate_usd_value(result)
-            
+
             self.logger.info(f"💵 REAL Account balance for {self.exchange_id}: {len(result)} currencies")
             self.logger.info(f"💵 REAL Estimated Total: ~${total_usd_estimate:.2f} USD")
-            
+
             if result:
                 self.logger.info("💰 REAL BALANCES DETECTED:")
                 for curr, bal in sorted(result.items(), key=lambda x: x[1], reverse=True):
                     if bal > 0.001:  # Only show significant balances in main log
                         self.logger.info(f"   {curr}: {bal:.8f}")
             else:
-                self.logger.warning("⚠️ No balances found - check API permissions")
-            
+                self.logger.warning("⚠️ No balances found - check API key has 'General' or 'Trade' permissions enabled on KuCoin")
+
             return result
         except Exception as e:
             self.logger.error(f"Error fetching balance from {self.exchange_id}: {e}")
+            import traceback
+            self.logger.debug(f"Balance fetch traceback: {traceback.format_exc()}")
             return {}
     
     async def fetch_complete_balance(self) -> Dict[str, Any]:
