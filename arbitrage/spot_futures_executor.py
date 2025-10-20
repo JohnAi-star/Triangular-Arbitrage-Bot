@@ -82,11 +82,32 @@ class SpotFuturesExecutor:
         """Execute when futures price is higher than spot - Buy Spot + Sell Futures"""
         symbol = opportunity.symbol
         base_currency = symbol.split('-')[0]
-        
+
         self.logger.info("📈 FUTURES PREMIUM STRATEGY: Buy Spot + Sell Futures")
         self.logger.info(f"  Buy {amount} {base_currency} on Spot | Sell {amount} {base_currency} on Futures")
-        
+
         try:
+            # Check balances before trading
+            spot_balance_usdt = await self.spot_exchange.get_balance('USDT')
+            futures_balance_usdt = await self.futures_exchange.get_futures_balance('USDT')
+
+            # Calculate required amounts (approximate with current prices)
+            required_spot_usdt = amount * opportunity.spot_price
+            required_futures_margin = amount * opportunity.futures_price * 0.1  # 10% margin for 1x leverage
+
+            self.logger.info(f"💰 Balance Check:")
+            self.logger.info(f"   Spot USDT: ${spot_balance_usdt:.2f} (need ${required_spot_usdt:.2f})")
+            self.logger.info(f"   Futures Margin: ${futures_balance_usdt:.2f} (need ${required_futures_margin:.2f})")
+
+            if spot_balance_usdt < required_spot_usdt:
+                self.logger.error(f"❌ Insufficient SPOT balance: have ${spot_balance_usdt:.2f}, need ${required_spot_usdt:.2f}")
+                self.logger.error(f"   Transfer funds to your SPOT (Trading) account on KuCoin")
+                return {'error': 'insufficient_spot_balance', 'required': required_spot_usdt, 'available': spot_balance_usdt}
+
+            if futures_balance_usdt < required_futures_margin:
+                self.logger.error(f"❌ Insufficient FUTURES margin: have ${futures_balance_usdt:.2f}, need ${required_futures_margin:.2f}")
+                self.logger.error(f"   Transfer funds to your FUTURES account on KuCoin")
+                return {'error': 'insufficient_futures_margin', 'required': required_futures_margin, 'available': futures_balance_usdt}
             # Execute trades concurrently for speed
             spot_task = self.spot_exchange.create_order(
                 symbol=f"{base_currency}/USDT",
@@ -164,11 +185,25 @@ class SpotFuturesExecutor:
         self.logger.info(f"  Sell {amount} {base_currency} on Spot | Buy {amount} {base_currency} on Futures")
         
         try:
-            # Check if we have the asset to sell
-            balance = await self.spot_exchange.get_balance(base_currency)
-            if balance < amount:
-                self.logger.warning(f"Insufficient {base_currency} balance. Have: {balance}, Need: {amount}")
-                return {'error': 'insufficient_balance'}
+            # Check balances before trading
+            spot_balance_asset = await self.spot_exchange.get_balance(base_currency)
+            futures_balance_usdt = await self.futures_exchange.get_futures_balance('USDT')
+
+            # Calculate required amounts
+            required_futures_margin = amount * opportunity.futures_price * 0.1  # 10% margin for 1x leverage
+
+            self.logger.info(f"💰 Balance Check:")
+            self.logger.info(f"   Spot {base_currency}: {spot_balance_asset:.6f} (need {amount:.6f})")
+            self.logger.info(f"   Futures Margin: ${futures_balance_usdt:.2f} (need ${required_futures_margin:.2f})")
+
+            if spot_balance_asset < amount:
+                self.logger.error(f"❌ Insufficient {base_currency} to sell on spot: have {spot_balance_asset:.6f}, need {amount:.6f}")
+                return {'error': 'insufficient_spot_balance'}
+
+            if futures_balance_usdt < required_futures_margin:
+                self.logger.error(f"❌ Insufficient FUTURES margin: have ${futures_balance_usdt:.2f}, need ${required_futures_margin:.2f}")
+                self.logger.error(f"   Transfer funds to your FUTURES account on KuCoin")
+                return {'error': 'insufficient_futures_margin', 'required': required_futures_margin, 'available': futures_balance_usdt}
         
             # Execute trades concurrently
             spot_task = self.spot_exchange.create_order(
