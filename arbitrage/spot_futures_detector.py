@@ -9,10 +9,18 @@ class SpotFuturesDetector:
         self.futures_exchange = futures_exchange
         self.logger = logging.getLogger(__name__)
         
-        # Major crypto pairs for spot-futures arbitrage (removed EOS - not available)
+        # Expanded list of crypto pairs for spot-futures arbitrage
         self.symbols = [
             'BTC-USDT', 'ETH-USDT', 'ADA-USDT', 'DOT-USDT',
-            'LINK-USDT', 'LTC-USDT', 'BCH-USDT', 'XRP-USDT', 'TRX-USDT'
+            'LINK-USDT', 'LTC-USDT', 'BCH-USDT', 'XRP-USDT', 'TRX-USDT',
+            'SOL-USDT', 'AVAX-USDT', 'MATIC-USDT', 'ATOM-USDT', 'NEAR-USDT',
+            'UNI-USDT', 'DOGE-USDT', 'SHIB-USDT', 'FIL-USDT', 'APT-USDT',
+            'ARB-USDT', 'OP-USDT', 'INJ-USDT', 'SEI-USDT', 'TIA-USDT',
+            'SUI-USDT', 'WLD-USDT', 'PEPE-USDT', 'FLOKI-USDT', 'BONK-USDT',
+            'AR-USDT', 'FTM-USDT', 'ALGO-USDT', 'VET-USDT', 'SAND-USDT',
+            'MANA-USDT', 'AXS-USDT', 'THETA-USDT', 'ICP-USDT', 'ETC-USDT',
+            'XLM-USDT', 'EOS-USDT', 'AAVE-USDT', 'GRT-USDT', 'CRV-USDT',
+            'LDO-USDT', 'MKR-USDT', 'SNX-USDT', 'COMP-USDT', 'SUSHI-USDT'
         ]
         
     async def get_spot_price(self, symbol: str) -> Optional[float]:
@@ -92,11 +100,10 @@ class SpotFuturesDetector:
                 self.logger.error(f"Error scanning {symbol}: {e}")
                 continue
         
-        # Filter and sort opportunities
-        tradeable_opportunities = [opp for opp in opportunities if opp.is_tradeable]
-        tradeable_opportunities.sort(key=lambda x: abs(x.spread_percentage), reverse=True)
-        
-        return tradeable_opportunities
+        # Sort ALL opportunities by spread (show both tradeable and non-tradeable)
+        opportunities.sort(key=lambda x: abs(x.spread_percentage), reverse=True)
+
+        return opportunities
     
     async def continuous_scan(self, callback, interval: float = 1.0, min_profit_threshold: float = 0.5):
         """Continuously scan for opportunities and call callback when found"""
