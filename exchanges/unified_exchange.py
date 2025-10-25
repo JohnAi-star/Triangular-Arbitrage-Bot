@@ -344,6 +344,12 @@ class UnifiedExchange(BaseExchange):
                 self.is_connected = False
                 await asyncio.sleep(5)
 
+    async def create_order(self, symbol: str, side: str, order_type: str, quantity: float) -> Dict[str, Any]:
+        """Create order (for executor compatibility) - only supports market orders"""
+        if order_type.lower() != 'market':
+            return {'error': f'Only market orders supported, got: {order_type}'}
+        return await self.place_market_order(symbol, side, quantity)
+
     async def place_market_order(self, symbol: str, side: str, qty: float) -> Dict[str, Any]:
         """Execute REAL market order on exchange that will appear in your account."""
         try:
@@ -701,6 +707,11 @@ class UnifiedExchange(BaseExchange):
         except Exception as e:
             self.logger.error(f"❌ Error waiting for order completion: {e}")
             return None
+
+    async def get_balance(self, currency: str = 'USDT') -> float:
+        """Get balance for a specific currency (for executor compatibility)"""
+        balances = await self.get_account_balance()
+        return balances.get(currency, 0.0)
 
     async def get_account_balance(self) -> Dict[str, float]:
         if not self.is_connected:

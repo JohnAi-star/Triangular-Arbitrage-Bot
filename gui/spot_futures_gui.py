@@ -270,6 +270,10 @@ class SpotFuturesGUI:
 
     async def _bot_main_loop(self):
         scan_count = 0
+
+        # Check balances at startup
+        await self.check_balances_async()
+
         while self.running:
             try:
                 opportunities = await self.detector.scan_opportunities(self.min_profit_var.get())
@@ -287,20 +291,38 @@ class SpotFuturesGUI:
                     for opportunity in opportunities[:1]:
                         if opportunity.is_tradeable:
                             try:
+                                self.logger.info(f"🎯 Auto-trading enabled - Attempting to execute: {opportunity.symbol}")
                                 result = await self.executor.execute_arbitrage(
                                     opportunity,
                                     self.trade_amount_var.get()
                                 )
 
                                 if 'position_id' in result:
-                                    self.add_to_trading_history(f"Auto-trade executed: {opportunity.symbol} - {result['position_id']}")
+                                    msg = f"✅ Auto-trade executed: {opportunity.symbol} - {result['position_id']}"
+                                    self.add_to_trading_history(msg)
                                     self.logger.info(f"Trade success: {result}")
+                                elif 'error' in result:
+                                    error_type = result['error']
+                                    error_msg = f"❌ Trade failed: {opportunity.symbol} - {error_type}"
+
+                                    # Detailed error messages
+                                    if error_type == 'insufficient_spot_balance':
+                                        error_msg += f" (Need ${result.get('required', 0):.2f}, have ${result.get('available', 0):.2f})"
+                                    elif error_type == 'insufficient_futures_margin':
+                                        error_msg += f" (Need ${result.get('required', 0):.2f}, have ${result.get('available', 0):.2f})"
+                                    elif error_type == 'cooldown_active':
+                                        error_msg += " (30s cooldown between trades)"
+                                    elif error_type == 'max_positions_reached':
+                                        error_msg += " (Max 3 positions open)"
+
+                                    self.add_to_trading_history(error_msg)
+                                    self.logger.warning(error_msg)
                                 else:
-                                    self.add_to_trading_history(f"Trade failed: {opportunity.symbol}")
+                                    self.add_to_trading_history(f"❓ Trade status unknown: {opportunity.symbol}")
 
                             except Exception as e:
-                                self.logger.error(f"Trade execution error: {e}")
-                                self.add_to_trading_history(f"Error: {str(e)}")
+                                self.logger.error(f"Trade execution error: {e}", exc_info=True)
+                                self.add_to_trading_history(f"❌ Error: {str(e)}")
 
                 await asyncio.sleep(1.0)
 
@@ -382,6 +404,25 @@ class SpotFuturesGUI:
 
         except Exception as e:
             self.logger.error(f"Error updating statistics: {e}")
+
+    async def check_balances_async(self):
+        """Check and log current balances"""
+        try:
+            spot_usdt = await self.spot_exchange.get_balance('USDT')
+            futures_usdt = await self.futures_exchange.get_futures_balance('USDT')
+
+            self.logger.info(f"💰 Current Balances:")
+            self.logger.info(f"   Spot USDT: ${spot_usdt:.2f}")
+            self.logger.info(f"   Futures USDT: ${futures_usdt:.2f}")
+            self.logger.info(f"   Total: ${spot_usdt + futures_usdt:.2f}")
+
+            if spot_usdt < 20:
+                self.logger.warning(f"⚠️ Low spot balance (${spot_usdt:.2f}) - trades may fail")
+            if futures_usdt < 5:
+                self.logger.warning(f"⚠️ Low futures margin (${futures_usdt:.2f}) - trades may fail")
+
+        except Exception as e:
+            self.logger.error(f"Error checking balances: {e}")
 
     def toggle_auto_trading(self):
         self.auto_trading = self.auto_trading_var.get()
