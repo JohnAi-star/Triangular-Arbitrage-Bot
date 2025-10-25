@@ -28,8 +28,8 @@ class SpotFuturesOpportunity:
     
     @property
     def estimated_fees(self) -> float:
-        # Spot fees (0.08%) + Futures fees (0.04%)
-        return 0.0012
+        # KuCoin Spot fees (0.1%) + Futures fees (0.06%) = 0.16%
+        return 0.16
     
     def to_dict(self):
         return {

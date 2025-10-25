@@ -277,6 +277,12 @@ class SpotFuturesGUI:
                 self.opportunities = opportunities
                 scan_count += 1
 
+                # Log for debugging
+                if scan_count == 1 or scan_count % 10 == 0:
+                    self.logger.info(f"Scans: {scan_count} | Opportunities found: {len(opportunities)}")
+                    if opportunities:
+                        self.logger.info(f"Top 3 spreads: {[f'{o.symbol}:{o.spread_percentage:.4f}%' for o in opportunities[:3]]}")
+
                 if opportunities and self.auto_trading_var.get():
                     for opportunity in opportunities[:1]:
                         if opportunity.is_tradeable:
@@ -295,9 +301,6 @@ class SpotFuturesGUI:
                             except Exception as e:
                                 self.logger.error(f"Trade execution error: {e}")
                                 self.add_to_trading_history(f"Error: {str(e)}")
-
-                if scan_count % 10 == 0:
-                    self.logger.info(f"Scans: {scan_count} | Opportunities: {len(opportunities)}")
 
                 await asyncio.sleep(1.0)
 
@@ -336,9 +339,15 @@ class SpotFuturesGUI:
 
     def update_opportunities_display(self):
         try:
+            # Clear existing items
             for item in self.opportunities_tree.get_children():
                 self.opportunities_tree.delete(item)
 
+            # Debug: log opportunity count
+            if len(self.opportunities) > 0:
+                self.logger.debug(f"Displaying {len(self.opportunities)} opportunities")
+
+            # Display opportunities
             for opportunity in self.opportunities[:50]:
                 symbol = opportunity.symbol
                 direction = opportunity.direction.value.replace('_', ' ').title()
@@ -361,7 +370,7 @@ class SpotFuturesGUI:
             self.opportunities_tree.tag_configure("red", background="lightcoral", foreground="darkred")
 
         except Exception as e:
-            self.logger.error(f"Error updating opportunities display: {e}")
+            self.logger.error(f"Error updating opportunities display: {e}", exc_info=True)
 
     def update_statistics(self):
         try:
