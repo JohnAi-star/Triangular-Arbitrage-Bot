@@ -78,22 +78,30 @@ class SpotFuturesExecutor:
             self.logger.error(f"Error executing arbitrage: {e}")
             raise
     
-    async def _execute_futures_premium(self, opportunity: SpotFuturesOpportunity, amount: float) -> Dict:
-        """Execute when futures price is higher than spot - Buy Spot + Sell Futures"""
+    async def _execute_futures_premium(self, opportunity: SpotFuturesOpportunity, amount_usdt: float) -> Dict:
+        """Execute when futures price is higher than spot - Buy Spot + Sell Futures
+
+        Args:
+            amount_usdt: Amount in USDT to trade (e.g., $20)
+        """
         symbol = opportunity.symbol
         base_currency = symbol.split('-')[0]
 
+        # Convert USDT amount to coin quantity
+        coin_quantity = amount_usdt / opportunity.spot_price
+
         self.logger.info("📈 FUTURES PREMIUM STRATEGY: Buy Spot + Sell Futures")
-        self.logger.info(f"  Buy {amount} {base_currency} on Spot | Sell {amount} {base_currency} on Futures")
+        self.logger.info(f"  Trade Amount: ${amount_usdt:.2f} USDT = {coin_quantity:.6f} {base_currency}")
+        self.logger.info(f"  Spot Price: ${opportunity.spot_price:.2f} | Futures Price: ${opportunity.futures_price:.2f}")
 
         try:
             # Check balances before trading
             spot_balance_usdt = await self.spot_exchange.get_balance('USDT')
             futures_balance_usdt = await self.futures_exchange.get_futures_balance('USDT')
 
-            # Calculate required amounts (approximate with current prices)
-            required_spot_usdt = amount * opportunity.spot_price
-            required_futures_margin = amount * opportunity.futures_price * 0.1  # 10% margin for 1x leverage
+            # Calculate required amounts
+            required_spot_usdt = amount_usdt
+            required_futures_margin = amount_usdt * 0.1  # 10% margin for 1x leverage
 
             self.logger.info(f"💰 Balance Check:")
             self.logger.info(f"   Spot USDT: ${spot_balance_usdt:.2f} (need ${required_spot_usdt:.2f})")
@@ -108,19 +116,22 @@ class SpotFuturesExecutor:
                 self.logger.error(f"❌ Insufficient FUTURES margin: have ${futures_balance_usdt:.2f}, need ${required_futures_margin:.2f}")
                 self.logger.error(f"   Transfer funds to your FUTURES account on KuCoin")
                 return {'error': 'insufficient_futures_margin', 'required': required_futures_margin, 'available': futures_balance_usdt}
+
             # Execute trades concurrently for speed
+            self.logger.info(f"🚀 Executing trade: {coin_quantity:.6f} {base_currency}")
+
             spot_task = self.spot_exchange.create_order(
                 symbol=f"{base_currency}/USDT",
                 side="buy",
                 order_type="market",
-                quantity=amount
+                quantity=coin_quantity
             )
-            
+
             futures_task = self.futures_exchange.create_futures_order(
                 symbol=symbol,
                 side="sell",
                 order_type="market",
-                size=amount,
+                size=coin_quantity,
                 leverage=1
             )
             
@@ -140,8 +151,8 @@ class SpotFuturesExecutor:
                 direction='futures_premium',
                 spot_order_id=spot_result.get('orderId'),
                 futures_order_id=futures_result.get('data', {}).get('orderId'),
-                spot_quantity=amount,
-                futures_quantity=amount,
+                spot_quantity=coin_quantity,
+                futures_quantity=coin_quantity,
                 entry_spread=opportunity.spread_percentage,
                 entry_time=asyncio.get_event_loop().time()
             )
@@ -154,7 +165,8 @@ class SpotFuturesExecutor:
                     'position_id': position_id,
                     'symbol': symbol,
                     'direction': 'futures_premium',
-                    'amount': amount,
+                    'amount_usdt': amount_usdt,
+                    'coin_quantity': coin_quantity,
                     'entry_spread': opportunity.spread_percentage,
                     'spot_order': spot_result,
                     'futures_order': futures_result,
@@ -169,55 +181,66 @@ class SpotFuturesExecutor:
                 'futures_result': futures_result,
                 'entry_spread': opportunity.spread_percentage,
                 'strategy': 'futures_premium',
-                'amount': amount
+                'amount_usdt': amount_usdt,
+                'coin_quantity': coin_quantity
             }
             
         except Exception as e:
             self.logger.error(f"Error in futures premium execution: {e}")
             return {'error': str(e)}
     
-    async def _execute_spot_premium(self, opportunity: SpotFuturesOpportunity, amount: float) -> Dict:
-        """Execute when spot price is higher than futures - Sell Spot + Buy Futures"""
+    async def _execute_spot_premium(self, opportunity: SpotFuturesOpportunity, amount_usdt: float) -> Dict:
+        """Execute when spot price is higher than futures - Sell Spot + Buy Futures
+
+        Args:
+            amount_usdt: Amount in USDT to trade (e.g., $20)
+        """
         symbol = opportunity.symbol
         base_currency = symbol.split('-')[0]
-        
+
+        # Convert USDT amount to coin quantity
+        coin_quantity = amount_usdt / opportunity.spot_price
+
         self.logger.info("📉 SPOT PREMIUM STRATEGY: Sell Spot + Buy Futures")
-        self.logger.info(f"  Sell {amount} {base_currency} on Spot | Buy {amount} {base_currency} on Futures")
-        
+        self.logger.info(f"  Trade Amount: ${amount_usdt:.2f} USDT = {coin_quantity:.6f} {base_currency}")
+        self.logger.info(f"  Spot Price: ${opportunity.spot_price:.2f} | Futures Price: ${opportunity.futures_price:.2f}")
+
         try:
             # Check balances before trading
             spot_balance_asset = await self.spot_exchange.get_balance(base_currency)
             futures_balance_usdt = await self.futures_exchange.get_futures_balance('USDT')
 
             # Calculate required amounts
-            required_futures_margin = amount * opportunity.futures_price * 0.1  # 10% margin for 1x leverage
+            required_futures_margin = amount_usdt * 0.1  # 10% margin for 1x leverage
 
             self.logger.info(f"💰 Balance Check:")
-            self.logger.info(f"   Spot {base_currency}: {spot_balance_asset:.6f} (need {amount:.6f})")
+            self.logger.info(f"   Spot {base_currency}: {spot_balance_asset:.6f} (need {coin_quantity:.6f})")
             self.logger.info(f"   Futures Margin: ${futures_balance_usdt:.2f} (need ${required_futures_margin:.2f})")
 
-            if spot_balance_asset < amount:
-                self.logger.error(f"❌ Insufficient {base_currency} to sell on spot: have {spot_balance_asset:.6f}, need {amount:.6f}")
+            if spot_balance_asset < coin_quantity:
+                self.logger.error(f"❌ Insufficient {base_currency} to sell on spot: have {spot_balance_asset:.6f}, need {coin_quantity:.6f}")
                 return {'error': 'insufficient_spot_balance'}
 
             if futures_balance_usdt < required_futures_margin:
                 self.logger.error(f"❌ Insufficient FUTURES margin: have ${futures_balance_usdt:.2f}, need ${required_futures_margin:.2f}")
                 self.logger.error(f"   Transfer funds to your FUTURES account on KuCoin")
                 return {'error': 'insufficient_futures_margin', 'required': required_futures_margin, 'available': futures_balance_usdt}
-        
+
             # Execute trades concurrently
+            self.logger.info(f"🚀 Executing trade: {coin_quantity:.6f} {base_currency}")
+
             spot_task = self.spot_exchange.create_order(
                 symbol=f"{base_currency}/USDT",
                 side="sell",
                 order_type="market",
-                quantity=amount
+                quantity=coin_quantity
             )
-            
+
             futures_task = self.futures_exchange.create_futures_order(
                 symbol=symbol,
                 side="buy",
                 order_type="market",
-                size=amount,
+                size=coin_quantity,
                 leverage=1
             )
             
@@ -237,8 +260,8 @@ class SpotFuturesExecutor:
                 direction='spot_premium',
                 spot_order_id=spot_result.get('orderId'),
                 futures_order_id=futures_result.get('data', {}).get('orderId'),
-                spot_quantity=amount,
-                futures_quantity=amount,
+                spot_quantity=coin_quantity,
+                futures_quantity=coin_quantity,
                 entry_spread=opportunity.spread_percentage,
                 entry_time=asyncio.get_event_loop().time()
             )
@@ -251,7 +274,8 @@ class SpotFuturesExecutor:
                     'position_id': position_id,
                     'symbol': symbol,
                     'direction': 'spot_premium',
-                    'amount': amount,
+                    'amount_usdt': amount_usdt,
+                    'coin_quantity': coin_quantity,
                     'entry_spread': opportunity.spread_percentage,
                     'spot_order': spot_result,
                     'futures_order': futures_result,
@@ -266,7 +290,8 @@ class SpotFuturesExecutor:
                 'futures_result': futures_result,
                 'entry_spread': opportunity.spread_percentage,
                 'strategy': 'spot_premium',
-                'amount': amount
+                'amount_usdt': amount_usdt,
+                'coin_quantity': coin_quantity
             }
             
         except Exception as e:
