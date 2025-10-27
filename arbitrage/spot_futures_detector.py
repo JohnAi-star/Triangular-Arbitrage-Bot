@@ -9,18 +9,19 @@ class SpotFuturesDetector:
         self.futures_exchange = futures_exchange
         self.logger = logging.getLogger(__name__)
         
-        # Expanded list of crypto pairs for spot-futures arbitrage
+        # Only include pairs that exist on BOTH KuCoin spot AND futures
+        # Removed: MATIC, BONK, FTM, EOS, MKR (not available on KuCoin futures)
         self.symbols = [
             'BTC-USDT', 'ETH-USDT', 'ADA-USDT', 'DOT-USDT',
             'LINK-USDT', 'LTC-USDT', 'BCH-USDT', 'XRP-USDT', 'TRX-USDT',
-            'SOL-USDT', 'AVAX-USDT', 'MATIC-USDT', 'ATOM-USDT', 'NEAR-USDT',
+            'SOL-USDT', 'AVAX-USDT', 'ATOM-USDT', 'NEAR-USDT',
             'UNI-USDT', 'DOGE-USDT', 'SHIB-USDT', 'FIL-USDT', 'APT-USDT',
             'ARB-USDT', 'OP-USDT', 'INJ-USDT', 'SEI-USDT', 'TIA-USDT',
-            'SUI-USDT', 'WLD-USDT', 'PEPE-USDT', 'FLOKI-USDT', 'BONK-USDT',
-            'AR-USDT', 'FTM-USDT', 'ALGO-USDT', 'VET-USDT', 'SAND-USDT',
+            'SUI-USDT', 'WLD-USDT', 'PEPE-USDT', 'FLOKI-USDT',
+            'AR-USDT', 'ALGO-USDT', 'VET-USDT', 'SAND-USDT',
             'MANA-USDT', 'AXS-USDT', 'THETA-USDT', 'ICP-USDT', 'ETC-USDT',
-            'XLM-USDT', 'EOS-USDT', 'AAVE-USDT', 'GRT-USDT', 'CRV-USDT',
-            'LDO-USDT', 'MKR-USDT', 'SNX-USDT', 'COMP-USDT', 'SUSHI-USDT'
+            'XLM-USDT', 'AAVE-USDT', 'GRT-USDT', 'CRV-USDT',
+            'LDO-USDT', 'SNX-USDT', 'COMP-USDT', 'SUSHI-USDT'
         ]
         
     async def get_spot_price(self, symbol: str) -> Optional[float]:
