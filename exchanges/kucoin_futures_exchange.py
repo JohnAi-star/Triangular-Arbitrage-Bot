@@ -186,10 +186,13 @@ class KuCoinFuturesExchange(BaseExchange):
         """Create futures order"""
         await self._ensure_session()
 
+        import uuid
+
         kucoin_symbol = self._convert_symbol_to_kucoin_futures(symbol)
         endpoint = "/api/v1/orders"
 
         body = {
+            "clientOid": str(uuid.uuid4()),  # REQUIRED: Unique client order ID
             "symbol": kucoin_symbol,
             "side": side,
             "type": order_type,
@@ -201,7 +204,7 @@ class KuCoinFuturesExchange(BaseExchange):
 
         body_str = json.dumps(body)
         headers = self._generate_signature("POST", endpoint, body_str)
-        
+
         url = f"{self.base_url}{endpoint}"
         async with self.session.post(url, headers=headers, data=body_str) as response:
             return await response.json()

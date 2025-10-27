@@ -98,30 +98,35 @@ class TradeLogger:
     async def log_spot_futures_trade(self, trade_data: dict):
         """Log spot-futures arbitrage trade opening"""
         try:
+            # Support both old 'amount' and new 'amount_usdt'/'coin_quantity' format
+            amount_usdt = trade_data.get('amount_usdt', trade_data.get('amount', 0))
+            coin_quantity = trade_data.get('coin_quantity', 0)
+
             log_entry = {
                 'type': 'spot_futures_open',
                 'position_id': trade_data['position_id'],
                 'symbol': trade_data['symbol'],
                 'direction': trade_data['direction'],
-                'amount': trade_data['amount'],
+                'amount_usdt': amount_usdt,
+                'coin_quantity': coin_quantity,
                 'entry_spread': trade_data['entry_spread'],
                 'timestamp': trade_data.get('timestamp', datetime.now().isoformat()),
                 'spot_order': trade_data.get('spot_order'),
                 'futures_order': trade_data.get('futures_order'),
                 'status': 'open'
             }
-            
+
             self.logger.info(f"📊 SPOT-FUTURES OPEN: {trade_data['position_id']} | "
                            f"{trade_data['symbol']} | {trade_data['direction']} | "
                            f"Spread: {trade_data['entry_spread']:.4f}% | "
-                           f"Amount: ${trade_data['amount']:.2f}")
-            
+                           f"Amount: ${amount_usdt:.2f} ({coin_quantity:.4f} coins)")
+
             # Save to detailed trades
             await self._save_spot_futures_log(log_entry)
-            
+
             # Broadcast via WebSocket
             await self._broadcast_spot_futures_update('position_opened', log_entry)
-                
+
         except Exception as e:
             self.logger.error(f"Error logging spot-futures trade: {e}")
 
