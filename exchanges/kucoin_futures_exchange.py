@@ -191,12 +191,14 @@ class KuCoinFuturesExchange(BaseExchange):
         kucoin_symbol = self._convert_symbol_to_kucoin_futures(symbol)
         endpoint = "/api/v1/orders"
 
+        # KuCoin Futures requires 'qty' (quantity in underlying currency)
+        # For example: 0.53 COMP tokens
         body = {
             "clientOid": str(uuid.uuid4()),  # REQUIRED: Unique client order ID
             "symbol": kucoin_symbol,
             "side": side,
             "type": order_type,
-            "size": size,
+            "qty": size,  # Use 'qty' instead of 'size'
             "leverage": leverage
         }
         if price:

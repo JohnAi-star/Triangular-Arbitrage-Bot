@@ -47,33 +47,36 @@ class SpotFuturesExecutor:
             if not self._can_trade_symbol(opportunity.symbol):
                 self.logger.warning(f"⏳ Cooldown active for {opportunity.symbol}, skipping trade")
                 return {'error': 'cooldown_active'}
-            
+
             if len(self.active_positions) >= self.max_open_positions:
                 self.logger.warning(f"📊 Max positions reached ({self.max_open_positions}), skipping trade")
                 return {'error': 'max_positions_reached'}
-            
+
             if amount > self.max_position_size:
                 self.logger.warning(f"💰 Amount ${amount} exceeds max ${self.max_position_size}, adjusting")
                 amount = self.max_position_size
-            
+
+            # CRITICAL: Only trade FUTURES_PREMIUM strategy (buy spot + sell futures)
+            # Skip SPOT_PREMIUM (sell spot + buy futures) because we don't have coins to sell
+            if opportunity.direction != ArbitrageDirection.FUTURES_PREMIUM:
+                self.logger.info(f"⏭️ Skipping {opportunity.symbol}: SPOT_PREMIUM strategy requires holding coins")
+                return {'error': 'spot_premium_not_supported', 'reason': 'Only FUTURES_PREMIUM (buy spot + sell futures) is supported'}
+
             self.logger.info(f"🚀 Executing arbitrage: {opportunity.symbol} "
                            f"({opportunity.direction.value}) - Spread: {opportunity.spread_percentage:.4f}%")
-            
+
             # Set leverage for futures (1x for safety)
             await self.futures_exchange.set_leverage(opportunity.symbol, leverage=1)
-            
-            # Execute based on direction
-            if opportunity.direction == ArbitrageDirection.FUTURES_PREMIUM:
-                result = await self._execute_futures_premium(opportunity, amount)
-            else:
-                result = await self._execute_spot_premium(opportunity, amount)
-            
+
+            # Execute FUTURES_PREMIUM strategy (buy spot + sell futures)
+            result = await self._execute_futures_premium(opportunity, amount)
+
             # Record trade for cooldown
             if 'position_id' in result:
                 self._record_trade(opportunity.symbol)
-                
+
             return result
-                
+
         except Exception as e:
             self.logger.error(f"Error executing arbitrage: {e}")
             raise
